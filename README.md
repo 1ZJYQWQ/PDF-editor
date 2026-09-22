@@ -16,3 +16,7 @@ GPL-3.0。
 
 ## tips
 如果你发现打不开，秒级超时，请换端口，终端调用 ``` python server.py --port xxxxx``` 换个端口
+
+> 名字叫 PDF Viewer，但它真正会做的事是**从 PDF 内容流里删掉文字**——
+> 不是盖黑框、不是加注释、不是叠图层，是真的删。Ctrl+A 复制不出来、
+> `pdftotext` 提取不到、`strings` 搜不到。顺手也做了个 PDF 阅读器。

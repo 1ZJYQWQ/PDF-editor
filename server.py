@@ -15,13 +15,14 @@ PDF Viewer - 本地服务端
   POST /api/edits              写入某文档的编辑数据
   GET  /api/pdfinfo?path=...   返回 PDF 的页数与各页尺寸（供编辑模式用）
   POST /api/export             应用编辑，产出一份新的 PDF 供下载
-POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
+  POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
   GET  /static/...             静态资源
 
 用法：
   python server.py                 # 默认扫描 项目文档目录 与 用户文档目录
   python server.py --dir D:\\PDFs   # 指定要扫描的 PDF 目录（可多次）
-  python server.py --port 8080     # 指定端口
+  python server.py --port 8080     # 指定端口（默认 8000）
+                                   # 端口被占用时向后顺延 8081、8082… 并在终端提示
 """
 
 import argparse

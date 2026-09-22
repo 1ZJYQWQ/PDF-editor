@@ -13,3 +13,6 @@
 ## 许可
 
 GPL-3.0。
+
+## tips
+如果你发现打不开，秒级超时，请换端口，终端调用 ``` python server.py --port xxxxx``` 换个端口

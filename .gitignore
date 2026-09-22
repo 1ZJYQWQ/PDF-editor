@@ -1,0 +1,34 @@
+# Python 字节码
+__pycache__/
+*.pyc
+
+# 导出产物：每次导出都会重新生成，属于输出而非源
+# （原始 PDF、标注、编辑数据都不在这里，见下方说明）
+exports/
+
+# 临时/探测脚本与它们的输出
+_*.py
+_*.out
+_*.txt
+_*/
+*.bak
+*.bak-*
+
+# 字体下载包（90MB，只用于开发期转换，产物在 assets/fonts/）
+*.zip
+
+# ★ 测试的临时目录：所有测试的写入都落在这里，不进版本库。
+#   这条是刻意的 —— 测试**绝不能**往用户的 documents/ exports/
+#   edits/ annotations/ 里写东西（见 testscratch.py）。
+_scratch/
+
+# 字体转换用的 venv / pip 缓存都不在项目里（见 makefont.py），
+# 但 assets/fonts/*.ttf 是**要提交的资产**（锁定的中文字体）。
+
+# 测试运行时在 documents/ 下重建的临时夹具（有下划线前缀）。
+# 不进版本库：它们是每次跑测试都会重新生成的中间产物。
+documents/_*.pdf
+
+# 编辑器/系统杂项
+.DS_Store
+Thumbs.db

@@ -1,0 +1,5 @@
+{
+  "//": "只为让 node 把 static/*.js 当 ES Module 读（webtest.mjs 要用）。浏览器侧走 <script type=module>，不受这个文件影响。",
+  "private": true,
+  "type": "module"
+}

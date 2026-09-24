@@ -129,6 +129,118 @@ def scan_pdfs(dirs):
 
 
 # --------------------------------------------------------------------------
+# 目录浏览（供前端「选择目录」模态框用）
+#
+# 与 scan_pdfs 的区别：这里是**给人看的目录导航**，不是找 PDF。
+# 所以不做任何过滤 —— 把 .git、node_modules 藏起来只会让人找不到目标，
+# 那是扫描器该操心的事，不该带到浏览器里来。
+# --------------------------------------------------------------------------
+
+BROWSE_MAX = 1000        # 单次最多返回的子目录数
+
+
+def list_drives():
+    """
+    列出可用的盘符 / 挂载点。
+
+    三级降级，优先用标准库：
+      1. os.listdrives()  —— Python 3.12+ 才有，最干净
+      2. ctypes GetLogicalDrives() —— 一次拿到位掩码，比逐字母 isdir 快，
+         也不会卡在空光驱上（isdir 探测会触发介质检查）
+      3. 逐字母 isdir —— 最后的兜底
+    """
+    if sys.platform != "win32":
+        return [{"name": "/", "path": "/"}]
+
+    names = getattr(os, "listdrives", None)
+    if names is not None:
+        try:
+            # listdrives() 返回 'C:\\' 这种带分隔符的形式，显示时去掉尾部
+            return [{"name": n.rstrip("\\/") or n, "path": n} for n in names()]
+        except OSError:
+            pass
+
+    try:
+        import ctypes
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        out = []
+        for i in range(26):
+            if mask & (1 << i):
+                d = chr(ord("A") + i) + ":\\"
+                out.append({"name": d[:2], "path": d})
+        if out:
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+
+    return [{"name": f"{c}:", "path": f"{c}:\\"}
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if os.path.isdir(f"{c}:\\")]
+
+
+def common_places():
+    """常用位置：主目录 + 桌面 / 文档 / 下载。只保留真实存在的。"""
+    home = os.path.expanduser("~")
+    cands = [
+        ("主目录", home),
+        ("桌面", os.path.join(home, "Desktop")),
+        ("文档", os.path.join(home, "Documents")),
+        ("下载", os.path.join(home, "Downloads")),
+    ]
+    out = []
+    seen = set()
+    for name, p in cands:
+        if not os.path.isdir(p):
+            continue
+        key = norm(p)
+        if key in seen:          # 某些系统上 Desktop 会指向别处，去重
+            continue
+        seen.add(key)
+        out.append({"name": name, "path": p})
+    return out
+
+
+def browse_dirs(path):
+    """
+    列出 path 的直接子目录。
+
+    只列一层，不递归 —— 递归会一次拖出整棵目录树，既拖慢响应，
+    也没法用一份响应表达层级。前端逐级点选即可。
+
+    返回 (规范化路径, 父路径, 子目录列表, 是否被截断)。
+    路径本身的问题（不存在 / 是文件 / 没权限）以异常抛出，
+    由调用方按类型映射成对应的 HTTP 状态码 —— 这里不掺 HTTP 的事。
+    """
+    real = os.path.realpath(path)
+    if not os.path.exists(real):
+        raise FileNotFoundError(real)
+    if not os.path.isdir(real):
+        raise NotADirectoryError(real)
+
+    dirs = []
+    with os.scandir(real) as it:
+        for entry in it:
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                # 断链的符号链接、权限不够的子项：跳过这一个，
+                # 而不是让整个目录列表失败
+                continue
+            dirs.append({"name": entry.name, "path": entry.path})
+
+    dirs.sort(key=lambda d: d["name"].casefold())
+    truncated = len(dirs) > BROWSE_MAX
+    if truncated:
+        dirs = dirs[:BROWSE_MAX]
+
+    parent = os.path.dirname(real)
+    if not parent or parent == real:      # 已在盘根 / "/"
+        parent = None
+    return real, parent, dirs, truncated
+
+
+# --------------------------------------------------------------------------
 # 文档指纹与标注存储
 # --------------------------------------------------------------------------
 
@@ -596,6 +708,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_get_edits(query)
             if route == "/api/pdfinfo":
                 return self.api_pdfinfo(query)
+            if route == "/api/browse":
+                return self.api_browse(query)
             if route.startswith("/static/"):
                 rel = urllib.parse.unquote(route[len("/static/"):])
                 target = os.path.join(STATIC_DIR, rel.replace("/", os.sep))
@@ -996,6 +1110,59 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             return self.send_error_json(500, f"解析失败: {exc}")
         self.send_json(info)
+
+    # ---- API: 浏览目录（供「选择目录」模态框用） ----
+    def api_browse(self, query):
+        """
+        列出服务端某个目录下的子目录，供前端点选。
+
+        ★ 这个端点**故意不受 SCAN_DIRS 限制** —— 它的用途就是让用户
+        挑一个还没被扫描的目录，套上白名单等于让它失去意义。
+        代价是它成了全项目唯一能读取任意路径的端点，所以补偿三条：
+          1. 只允许本机来源（下面的 client_address 校验）；
+          2. 只返回目录名，不读文件内容、不返回文件列表；
+          3. 单层列举 + 条数上限，防止一次把整棵目录树拖出去。
+
+        注意 query 里的 path 不需要再 unquote —— parse_qs 已经解过一次
+        百分号编码了。其他端点里多解一次是历史写法，对含 `%` 的真实
+        路径名会解坏，这里不跟。
+        """
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return self.send_error_json(403, "仅允许本机访问")
+
+        target = (query.get("path") or [""])[0].strip()
+        roots = list_drives()
+        common = common_places()
+
+        # 空路径 = 根状态：左栏给盘符与常用位置，右栏留空
+        if not target:
+            return self.send_json({
+                "ok": True, "path": "", "parent": None,
+                "dirs": [], "roots": roots, "common": common,
+                "count": 0, "truncated": False,
+            })
+
+        try:
+            real, parent, dirs, truncated = browse_dirs(target)
+        except FileNotFoundError:
+            return self.send_error_json(404, "目录不存在")
+        except NotADirectoryError:
+            return self.send_error_json(400, "该路径是文件，请选择文件夹")
+        except PermissionError:
+            return self.send_error_json(403, "没有权限访问该目录")
+        except OSError as exc:  # noqa: BLE001
+            return self.send_error_json(500, f"无法读取该目录: {exc}")
+
+        self.send_json({
+            "ok": True,
+            "path": real,
+            "parent": parent,
+            "dirs": dirs,
+            "roots": roots,
+            "common": common,
+            "count": len(dirs),
+            "truncated": truncated,
+        })
 
     # ---- API: 交给系统默认程序打开 ----
     def api_open(self, query):

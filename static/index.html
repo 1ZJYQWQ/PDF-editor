@@ -321,6 +321,34 @@
       </div>
     </div>
 
+    <!-- 目录选择（「添加目录」按钮打开） -->
+    <div class="confirm-mask" id="dirPicker" hidden>
+      <div class="confirm-box dir-picker-box">
+        <div class="cb-head">选择要扫描的目录</div>
+
+        <div class="dp-body">
+          <div class="dp-side">
+            <div class="dp-group-title">驱动器 / 常用位置</div>
+            <div class="dp-roots" id="dpRoots"></div>
+            <div class="dp-group-title">已添加的目录</div>
+            <div class="dp-saved" id="dpSaved"></div>
+          </div>
+
+          <div class="dp-main">
+            <div class="dp-crumbs" id="dpCrumbs"></div>
+            <div class="dp-list" id="dpList"></div>
+          </div>
+        </div>
+
+        <div class="cb-foot dp-foot">
+          <input class="dp-path" id="dpPath" placeholder="或直接输入完整路径，回车进入"
+                 autocomplete="off" spellcheck="false">
+          <button class="ep-btn" id="dpCancel">取消</button>
+          <button class="ep-btn primary" id="dpOk">添加</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 划词浮动菜单 -->
     <div class="sel-menu" id="selMenu" hidden>
       <button class="sm-btn" data-act="highlight" data-color="#fbbf24" title="高亮（黄）">

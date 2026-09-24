@@ -29,6 +29,7 @@ import { dragDeltaToPdf, movedPosition } from '/static/geom.js';
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
+const LS_DIRS = LS_PREFIX + 'dirs';       // 用户添加过的扫描目录
 
 /* --------------------------------------------------------------------------
    工具
@@ -128,7 +129,29 @@ function updateBookmarkBtn() {
    文档加载
    -------------------------------------------------------------------------- */
 
-async function loadPdfFromPath(path, name, docId) {
+/* 从 pdf.js 的错误里取出 HTTP 状态码。
+
+   pdf.js 的 UnexpectedResponseException 带 status 属性（vendor 里
+   constructor(t,e){super(t,"UnexpectedResponseException");this.status=e}），
+   但万一被上层包装过就丢了，所以再从 message 里的 "(403)" 兜底捞一次。 */
+function httpStatusOf(err) {
+  if (err && typeof err.status === 'number') return err.status;
+  const m = String(err?.message || err || '').match(/\((\d{3})\)/);
+  return m ? Number(m[1]) : 0;
+}
+
+function openErrorMessage(err) {
+  const status = httpStatusOf(err);
+  if (status === 403) {
+    return '无权访问：该文件所在目录未授权，请点「重新扫描」';
+  }
+  if (status === 404) {
+    return '文件不存在：可能已被移动或删除，请点「重新扫描」';
+  }
+  return '打开失败：' + (err?.message || err);
+}
+
+async function loadPdfFromPath(path, name, docId, retried) {
   showLoading('正在打开文档…');
   try {
     const url = '/api/file?path=' + encodeURIComponent(path);
@@ -145,7 +168,13 @@ async function loadPdfFromPath(path, name, docId) {
     if (String(err).includes('password') || err?.name === 'PasswordException') {
       return handlePassword(path, name, docId);
     }
-    toast('打开失败：' + (err?.message || err));
+    // 403 多半是服务端重启过、内存里的目录列表空了。重新推一次再试一遍 ——
+    // 能自愈就不该拿错误去打扰用户。
+    if (httpStatusOf(err) === 403 && !retried) {
+      await pushDirs();
+      return loadPdfFromPath(path, name, docId, true);
+    }
+    toast(openErrorMessage(err), 3000);
   }
 }
 
@@ -1757,6 +1786,13 @@ function onBoxDown(e) {
    欢迎页 / 文件选择
    -------------------------------------------------------------------------- */
 let serverFiles = [];
+// 用户添加过、需要记住的目录。浏览器是唯一真相源：服务端只在内存里
+// 记一份（POST /api/dirs），重启就没了，靠页面加载时重新推送自愈。
+let savedDirs = loadSavedDirs();
+let browsePath = '';      // 目录选择器当前浏览到哪，'' 表示根状态
+let pickedDir = null;     // 目录选择器里当前选中的目录
+let loadSeq = 0;          // 列表请求序号，只认最后一次的结果
+let lastIgnoredKey = '';  // 上次提示过的"失效目录"组合，避免反复弹同样的提示
 
 async function renderWelcome() {
   const container = els.pages;
@@ -1810,16 +1846,44 @@ function bindWelcome() {
 
   $('fileSearch').addEventListener('input', debounce(() => paintFileList(), 120));
   $('btnRescan').addEventListener('click', () => loadServerFiles());
-  $('btnPickDir').addEventListener('click', pickServerDir);
+  $('btnPickDir').addEventListener('click', openDirPicker);
+}
+
+/* 把浏览器记住的目录推给服务端。
+
+   服务端只把它记在内存里（重启即清空），所以每次拉列表前都推一遍 ——
+   服务端重启后这一推就自愈了，用户不需要做任何事。
+   返回服务端认为无效、已忽略的目录列表。 */
+async function pushDirs() {
+  try {
+    const r = await fetch('/api/dirs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dirs: savedDirs }),
+    });
+    const d = await r.json();
+    return d && d.ok ? (d.ignored || []) : [];
+  } catch (e) {
+    // 服务端没起来时不该阻塞页面渲染，后面的列表请求自己会报错
+    return [];
+  }
 }
 
 async function loadServerFiles() {
   const list = $('fileList');
   if (!list) return;
+  const seq = ++loadSeq;          // 连点「重新扫描」时只认最后一次
   try {
+    // 先推目录再拉列表：服务端按推送结果决定允许扫描和读取哪些目录。
+    // 顺序不能反 —— 反了就会「列得出来、点开 403」。
+    const ignored = await pushDirs();
+    if (seq !== loadSeq) return;
+
     const r = await fetch('/api/files');
     const data = await r.json();
+    if (seq !== loadSeq) return;
     if (!data.ok) throw new Error(data.error || '扫描失败');
+
     serverFiles = data.files || [];
     paintFileList();
     const info = $('scanInfo');
@@ -1827,7 +1891,17 @@ async function loadServerFiles() {
       info.textContent = `共 ${data.count} 个文档 · ${(data.dirs || []).length} 个扫描目录`;
       info.title = (data.dirs || []).join('\n');
     }
+
+    // 目录被删掉/改了名：只提示，不替用户从 localStorage 里删掉 ——
+    // 可能只是 U 盘没插或换了盘符，擅自清理是越权。
+    // 用 key 去重，否则每次刷新都弹一遍同样的提示。
+    const key = ignored.join('|');
+    if (key && key !== lastIgnoredKey) {
+      toast(`${ignored.length} 个已添加的目录不存在，已忽略`, 2600);
+    }
+    lastIgnoredKey = key;
   } catch (err) {
+    if (seq !== loadSeq) return;
     list.innerHTML = `<div class="empty-tip">扫描失败：${escapeHtml(err.message)}<br>
       请确认服务已启动，或点击「重新扫描」</div>`;
   }
@@ -1878,25 +1952,223 @@ function paintFileList() {
   });
 }
 
-async function pickServerDir() {
-  // 浏览器拿不到真实路径，让用户手输；服务端会校验存在性
-  const dir = prompt('请输入要扫描的文件夹完整路径：\n例如 D:\\我的PDF', '');
-  if (!dir) return;
-  showLoading('正在扫描目录…');
+/* --------------------------------------------------------------------------
+   目录选择器
+   --------------------------------------------------------------------------
+   为什么是自己画一个，而不是调系统的文件夹对话框：
+     - 浏览器的 showDirectoryPicker() 只给一个句柄，**拿不到真实路径**，
+       而服务端扫描必须要路径字符串；
+     - 让服务端弹原生框（tkinter）也不行：请求跑在子线程，tkinter 要求
+       主线程，而且服务端本来就该是无界面的。
+   所以路径只能由服务端列、前端画。这里做两件事：把 /api/browse 的结果
+   渲染出来，把用户选中的目录记进 localStorage。
+   -------------------------------------------------------------------------- */
+
+function loadSavedDirs() {
   try {
-    const r = await fetch('/api/files?dir=' + encodeURIComponent(dir));
+    const arr = JSON.parse(localStorage.getItem(LS_DIRS) || '[]');
+    return Array.isArray(arr) ? arr.filter(d => typeof d === 'string' && d) : [];
+  } catch (e) {
+    return [];                 // 隐私模式下 localStorage 会抛，静默降级
+  }
+}
+
+function saveSavedDirs() {
+  try {
+    localStorage.setItem(LS_DIRS, JSON.stringify(savedDirs));
+  } catch (e) {
+    // 存不下就只在本次会话有效。不值得为此打断用户。
+  }
+}
+
+/* 路径比较：Windows 不区分大小写，尾部斜杠也不该算差异 */
+function samePath(a, b) {
+  if (!a || !b) return !a && !b;
+  const f = (s) => {
+    let t = String(s).replace(/[\\/]+$/, '').toLowerCase();
+    // Windows 下 / 和 \ 等价（用户手输路径时经常写成 /），
+    // POSIX 下 \ 是合法的文件名字符，不能动
+    if (/^[a-z]:/.test(t)) t = t.replace(/\//g, '\\');
+    return t;
+  };
+  return f(a) === f(b);
+}
+
+function folderSvg() {
+  return '<svg class="dp-ico" viewBox="0 0 24 24">' +
+    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>' +
+    '</svg>';
+}
+
+function openDirPicker() {
+  if (!els.dirPicker) return;
+  browsePath = '';
+  pickedDir = null;
+  if (els.dpPath) els.dpPath.value = '';
+  els.dirPicker.hidden = false;
+  browseDir('');
+}
+
+function closeDirPicker() {
+  if (els.dirPicker) els.dirPicker.hidden = true;
+}
+
+async function browseDir(path) {
+  const list = els.dpList;
+  if (!list) return;
+  list.innerHTML = '<div class="dp-empty">' +
+    '<div class="spinner" style="margin:0 auto 10px"></div>正在读取…</div>';
+  try {
+    const r = await fetch('/api/browse?path=' + encodeURIComponent(path || ''));
     const data = await r.json();
-    hideLoading();
-    if (!data.ok) { toast('扫描失败：' + data.error); return; }
-    if (!data.files.length) { toast('该目录下没有找到 PDF 文件'); return; }
-    serverFiles = data.files;
-    paintFileList();
-    const info = $('scanInfo');
-    if (info) info.textContent = `共 ${data.count} 个文档（含临时目录 ${dir}）`;
-    toast(`找到 ${data.count} 个文档`, 1600);
+    if (!data.ok) throw new Error(data.error || '读取失败');
+    browsePath = data.path || '';
+    renderBrowse(data);
   } catch (err) {
-    hideLoading();
-    toast('扫描失败：' + err.message);
+    // 模态框盖住了页面，toast 会被压在底下看不见 —— 错误就地显示
+    list.innerHTML = `<div class="dp-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* 面包屑：用原字符串切片，不自己拼分隔符（Windows 的 \ 和 POSIX 的 / 不同） */
+function crumbsHtml(path) {
+  const out = ['<button class="dp-crumb" data-path="">此电脑</button>'];
+  if (!path) return out.join('');
+
+  const sep = path.includes('\\') ? '\\' : '/';
+  const segs = [];
+  let i = 0;
+  while (i < path.length) {
+    const j = path.indexOf(sep, i);
+    if (j === -1) {
+      segs.push({ label: path.slice(i), prefix: path });
+      break;
+    }
+    if (j > i) segs.push({ label: path.slice(i, j), prefix: path.slice(0, j + 1) });
+    i = j + 1;
+  }
+
+  for (const s of segs) {
+    out.push('<span class="dp-crumb-sep">›</span>');
+    out.push(`<button class="dp-crumb" data-path="${escapeHtml(s.prefix)}">` +
+             `${escapeHtml(s.label)}</button>`);
+  }
+  return out.join('');
+}
+
+function locHtml(loc, active) {
+  return `<div class="dp-item${samePath(loc.path, active) ? ' on' : ''}" ` +
+    `data-path="${escapeHtml(loc.path)}">${folderSvg()}` +
+    `<span class="dp-name" title="${escapeHtml(loc.path)}">${escapeHtml(loc.name)}</span></div>`;
+}
+
+function savedListHtml() {
+  if (!savedDirs.length) {
+    return '<div class="dp-empty" style="padding:8px 14px;text-align:left">' +
+           '还没有添加过目录</div>';
+  }
+  return savedDirs.map(p =>
+    `<div class="dp-item${samePath(p, pickedDir || browsePath) ? ' on' : ''}" ` +
+    `data-path="${escapeHtml(p)}">${folderSvg()}` +
+    `<span class="dp-name" title="${escapeHtml(p)}">${escapeHtml(p)}</span>` +
+    `<button class="dp-rm" data-rm="${escapeHtml(p)}" title="从列表移除">&times;</button></div>`
+  ).join('');
+}
+
+function renderBrowse(data) {
+  const active = pickedDir || browsePath;
+
+  els.dpRoots.innerHTML = (data.roots || []).concat(data.common || [])
+    .map(l => locHtml(l, active)).join('');
+  els.dpSaved.innerHTML = savedListHtml();
+  els.dpCrumbs.innerHTML = crumbsHtml(data.path);
+
+  if (!data.path) {
+    els.dpList.innerHTML =
+      '<div class="dp-empty">从左侧选择驱动器或常用位置<br>也可以直接在下方输入完整路径</div>';
+  } else if (!data.dirs.length) {
+    els.dpList.innerHTML =
+      '<div class="dp-empty">这个目录下没有子文件夹<br>可以直接点右下角「添加」</div>';
+  } else {
+    els.dpList.innerHTML = data.dirs.map(d =>
+      `<div class="dp-item${samePath(d.path, active) ? ' on' : ''}" ` +
+      `data-path="${escapeHtml(d.path)}">${folderSvg()}` +
+      `<span class="dp-name" title="${escapeHtml(d.path)}">${escapeHtml(d.name)}</span></div>`
+    ).join('') + (data.truncated
+      ? `<div class="dp-empty">子目录太多，只显示前 ${data.dirs.length} 个</div>` : '');
+  }
+
+  bindItemsIn(els.dpRoots);
+  bindItemsIn(els.dpSaved);
+  bindItemsIn(els.dpList);
+}
+
+function bindItemsIn(box) {
+  if (!box) return;
+  box.querySelectorAll('.dp-item').forEach(el => {
+    const path = el.dataset.path;
+    // 单击 = 选中（并回填路径框），双击 = 进去。跟系统文件框一致。
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.dp-rm')) return;
+      pickedDir = path;
+      if (els.dpPath) els.dpPath.value = path;
+      markPicked();
+    });
+    el.addEventListener('dblclick', () => { if (path) browseDir(path); });
+  });
+  box.querySelectorAll('.dp-rm').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      savedDirs = savedDirs.filter(d => !samePath(d, btn.dataset.rm));
+      saveSavedDirs();
+      els.dpSaved.innerHTML = savedListHtml();
+      bindItemsIn(els.dpSaved);          // 旧节点连同监听器一起被换掉了
+      loadServerFiles();
+    });
+  });
+}
+
+function markPicked() {
+  const active = pickedDir || browsePath;
+  document.querySelectorAll('#dirPicker .dp-item').forEach(el => {
+    el.classList.toggle('on', samePath(el.dataset.path, active));
+  });
+}
+
+function confirmDir() {
+  const typed = (els.dpPath ? els.dpPath.value : '').trim();
+  const dir = typed || pickedDir || browsePath;
+  if (!dir) { toast('请先选择一个目录'); return; }
+  if (!savedDirs.some(d => samePath(d, dir))) {
+    savedDirs.push(dir);
+    saveSavedDirs();
+  }
+  closeDirPicker();
+  loadServerFiles();
+  toast('已添加目录', 1400);
+}
+
+/* 模态框是静态 HTML，只绑一次 */
+function bindDirPicker() {
+  if (els.dpOk) els.dpOk.addEventListener('click', confirmDir);
+  if (els.dpCancel) els.dpCancel.addEventListener('click', closeDirPicker);
+  if (els.dpPath) {
+    els.dpPath.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); browseDir(els.dpPath.value.trim()); }
+    });
+  }
+  if (els.dirPicker) {
+    // 点遮罩关闭，点对话框本体不关
+    els.dirPicker.addEventListener('click', (e) => {
+      if (e.target === els.dirPicker) closeDirPicker();
+    });
+  }
+  // 面包屑是每次渲染重建的，用委托，免得跟着重绑
+  if (els.dpCrumbs) {
+    els.dpCrumbs.addEventListener('click', (e) => {
+      const b = e.target.closest('.dp-crumb');
+      if (b) browseDir(b.dataset.path);
+    });
   }
 }
 
@@ -2124,12 +2396,17 @@ function bindToolbar() {
     }
   });
 
-  // 涂黑确认框：Esc 一律视为取消（绝不默认确认不可逆操作）
+  // 涂黑确认框 / 目录选择器：Esc 一律视为取消（绝不默认确认不可逆操作）
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (els.redactConfirm && !els.redactConfirm.hidden) {
       e.preventDefault();
       els.redactConfirm.hidden = true;
+      return;
+    }
+    if (els.dirPicker && !els.dirPicker.hidden) {
+      e.preventDefault();
+      closeDirPicker();
     }
   });
 
@@ -2446,6 +2723,9 @@ function cacheAllEls() {
     // 涂黑
     'btnRedactPdf', 'redactCount', 'redactConfirm', 'redactConfirmStats',
     'redactCancel', 'redactOk',
+    // 目录选择器
+    'dirPicker', 'dpRoots', 'dpSaved', 'dpCrumbs', 'dpList', 'dpPath',
+    'dpCancel', 'dpOk',
   ]);
   els.sideBody = document.querySelector('.side-body');
 }
@@ -2455,6 +2735,7 @@ async function init() {
   bindNavHelpers(goToPage, renderPage);
   bindEditHelpers({ goToPage, renderPage });
   bindToolbar();
+  bindDirPicker();
   window.addEventListener('resize', onResize);
 
   // 离开页面前保存进度

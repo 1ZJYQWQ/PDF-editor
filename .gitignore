@@ -25,9 +25,17 @@ _scratch/
 # 字体转换用的 venv / pip 缓存都不在项目里（见 makefont.py），
 # 但 assets/fonts/*.ttf 是**要提交的资产**（锁定的中文字体）。
 
-# 测试运行时在 documents/ 下重建的临时夹具（有下划线前缀）。
-# 不进版本库：它们是每次跑测试都会重新生成的中间产物。
-documents/_*.pdf
+# documents/：服务端默认扫描目录，放的是**用户自己的 PDF**，不是项目源码。
+# 整个目录忽略 —— 本规则覆盖了原先只忽略测试夹具（documents/_*.pdf）的写法。
+# 若将来确实要往仓库里放样例 PDF，用 !documents/样例.pdf 显式放行。
+documents/
+
+# 运行时产生的用户数据（与 exports/ 同类：属于输出，不属于源）
+annotations/
+edits/
+
+# AI 助手的工作状态（记忆笔记、机械扫描原始产物），不属于项目源码
+.workbuddy-ai/
 
 # 编辑器/系统杂项
 .DS_Store

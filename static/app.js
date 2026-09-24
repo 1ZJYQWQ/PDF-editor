@@ -129,7 +129,29 @@ function updateBookmarkBtn() {
    文档加载
    -------------------------------------------------------------------------- */
 
-async function loadPdfFromPath(path, name, docId) {
+/* 从 pdf.js 的错误里取出 HTTP 状态码。
+
+   pdf.js 的 UnexpectedResponseException 带 status 属性（vendor 里
+   constructor(t,e){super(t,"UnexpectedResponseException");this.status=e}），
+   但万一被上层包装过就丢了，所以再从 message 里的 "(403)" 兜底捞一次。 */
+function httpStatusOf(err) {
+  if (err && typeof err.status === 'number') return err.status;
+  const m = String(err?.message || err || '').match(/\((\d{3})\)/);
+  return m ? Number(m[1]) : 0;
+}
+
+function openErrorMessage(err) {
+  const status = httpStatusOf(err);
+  if (status === 403) {
+    return '无权访问：该文件所在目录未授权，请点「重新扫描」';
+  }
+  if (status === 404) {
+    return '文件不存在：可能已被移动或删除，请点「重新扫描」';
+  }
+  return '打开失败：' + (err?.message || err);
+}
+
+async function loadPdfFromPath(path, name, docId, retried) {
   showLoading('正在打开文档…');
   try {
     const url = '/api/file?path=' + encodeURIComponent(path);
@@ -146,7 +168,13 @@ async function loadPdfFromPath(path, name, docId) {
     if (String(err).includes('password') || err?.name === 'PasswordException') {
       return handlePassword(path, name, docId);
     }
-    toast('打开失败：' + (err?.message || err));
+    // 403 多半是服务端重启过、内存里的目录列表空了。重新推一次再试一遍 ——
+    // 能自愈就不该拿错误去打扰用户。
+    if (httpStatusOf(err) === 403 && !retried) {
+      await pushDirs();
+      return loadPdfFromPath(path, name, docId, true);
+    }
+    toast(openErrorMessage(err), 3000);
   }
 }
 
@@ -1758,11 +1786,13 @@ function onBoxDown(e) {
    欢迎页 / 文件选择
    -------------------------------------------------------------------------- */
 let serverFiles = [];
-// 用户添加过、需要记住的目录。服务端不持久化这类选择（SCAN_DIRS 只在
-// 启动时定一次），所以"记住"这件事整个放在浏览器这边。
+// 用户添加过、需要记住的目录。浏览器是唯一真相源：服务端只在内存里
+// 记一份（POST /api/dirs），重启就没了，靠页面加载时重新推送自愈。
 let savedDirs = loadSavedDirs();
 let browsePath = '';      // 目录选择器当前浏览到哪，'' 表示根状态
 let pickedDir = null;     // 目录选择器里当前选中的目录
+let loadSeq = 0;          // 列表请求序号，只认最后一次的结果
+let lastIgnoredKey = '';  // 上次提示过的"失效目录"组合，避免反复弹同样的提示
 
 async function renderWelcome() {
   const container = els.pages;
@@ -1819,17 +1849,41 @@ function bindWelcome() {
   $('btnPickDir').addEventListener('click', openDirPicker);
 }
 
+/* 把浏览器记住的目录推给服务端。
+
+   服务端只把它记在内存里（重启即清空），所以每次拉列表前都推一遍 ——
+   服务端重启后这一推就自愈了，用户不需要做任何事。
+   返回服务端认为无效、已忽略的目录列表。 */
+async function pushDirs() {
+  try {
+    const r = await fetch('/api/dirs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dirs: savedDirs }),
+    });
+    const d = await r.json();
+    return d && d.ok ? (d.ignored || []) : [];
+  } catch (e) {
+    // 服务端没起来时不该阻塞页面渲染，后面的列表请求自己会报错
+    return [];
+  }
+}
+
 async function loadServerFiles() {
   const list = $('fileList');
   if (!list) return;
+  const seq = ++loadSeq;          // 连点「重新扫描」时只认最后一次
   try {
-    // 把记住的目录都带上。服务端对 ?dir= 是「叠加」语义（不写回 SCAN_DIRS），
-    // 且会用 isdir 自动忽略已经不存在的目录，所以这里不必先筛一遍。
-    const q = new URLSearchParams();
-    savedDirs.forEach(d => q.append('dir', d));
-    const r = await fetch('/api/files' + (q.toString() ? '?' + q : ''));
+    // 先推目录再拉列表：服务端按推送结果决定允许扫描和读取哪些目录。
+    // 顺序不能反 —— 反了就会「列得出来、点开 403」。
+    const ignored = await pushDirs();
+    if (seq !== loadSeq) return;
+
+    const r = await fetch('/api/files');
     const data = await r.json();
+    if (seq !== loadSeq) return;
     if (!data.ok) throw new Error(data.error || '扫描失败');
+
     serverFiles = data.files || [];
     paintFileList();
     const info = $('scanInfo');
@@ -1837,7 +1891,17 @@ async function loadServerFiles() {
       info.textContent = `共 ${data.count} 个文档 · ${(data.dirs || []).length} 个扫描目录`;
       info.title = (data.dirs || []).join('\n');
     }
+
+    // 目录被删掉/改了名：只提示，不替用户从 localStorage 里删掉 ——
+    // 可能只是 U 盘没插或换了盘符，擅自清理是越权。
+    // 用 key 去重，否则每次刷新都弹一遍同样的提示。
+    const key = ignored.join('|');
+    if (key && key !== lastIgnoredKey) {
+      toast(`${ignored.length} 个已添加的目录不存在，已忽略`, 2600);
+    }
+    lastIgnoredKey = key;
   } catch (err) {
+    if (seq !== loadSeq) return;
     list.innerHTML = `<div class="empty-tip">扫描失败：${escapeHtml(err.message)}<br>
       请确认服务已启动，或点击「重新扫描」</div>`;
   }

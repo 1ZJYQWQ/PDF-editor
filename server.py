@@ -14,6 +14,8 @@ PDF Viewer - 本地服务端
   GET  /api/edits?doc=...      读取某文档的编辑数据
   POST /api/edits              写入某文档的编辑数据
   GET  /api/pdfinfo?path=...   返回 PDF 的页数与各页尺寸（供编辑模式用）
+  GET  /api/browse?path=...    列出某个目录的子目录（供「选择目录」用，仅本机）
+  POST /api/dirs               注册前端添加的扫描目录（整体替换，仅本机）
   POST /api/export             应用编辑，产出一份新的 PDF 供下载
   POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
   GET  /static/...             静态资源
@@ -48,11 +50,23 @@ EDIT_DIR = os.path.join(BASE_DIR, "edits")
 EXPORT_DIR = os.path.join(BASE_DIR, "exports")
 
 # 全局配置，由 main() 填充
+#
+# SCAN_DIRS 是启动时定下的目录，此后**不可变**。
+# 想拿"本次请求允许访问哪些目录"，一律用 allowed_dirs()，不要直接引用它 ——
+# 直接引用会让「前端添加的目录能列出文件、却打不开」这个 bug 复发。
 SCAN_DIRS = []
+
+# 前端添加的目录（来自浏览器的 localStorage，页面加载时全量推送过来）。
+#
+# 刻意用不可变 tuple + 整体重绑定，见 allowed_dirs() 的说明。
+# 不落盘：浏览器才是唯一真相源，服务端重启后由前端推送自愈。
+USER_DIRS = ()
+
 PORT = 8000
 PORT_SCAN_RANGE = 20     # 端口被占用时，向后顺延尝试的个数
 
 MAX_LIST = 2000          # 单次最多返回的 PDF 数量
+MAX_USER_DIRS = 50       # 前端最多能添加多少个目录
 CHUNK = 64 * 1024        # 流式分块大小
 MAX_BODY = 8 * 1024 * 1024   # 请求体上限
 
@@ -77,6 +91,25 @@ def is_within(path, roots):
         if p == rn or p.startswith(rn + os.sep):
             return True
     return False
+
+
+def allowed_dirs():
+    """
+    本次请求允许访问的根目录集合：启动目录 + 前端添加的目录。
+
+    ★ 所有路径校验都必须用这个函数，不能直接用 SCAN_DIRS。
+       `/api/files` 按哪个集合列文件，`/api/file` 就得按哪个集合放行 ——
+       两者不一致的后果是「列表里看得见、点开却 403」，这个 bug 已经
+       发生过一次（`?dir=` 只影响列表、不影响校验），别再犯。
+
+    并发说明：USER_DIRS 是 tuple，写方构造新 tuple 再整体赋值，
+    读者要么看到旧的、要么看到新的，不会读到半成品。这里不加锁是
+    刻意的 —— 交换的是内存引用（GIL 下原子），而 _annot_lock /
+    _edit_lock 保护的是文件 I/O，不是同一类问题。
+    反过来，如果 USER_DIRS 是 list 且原地 append，is_within 遍历
+    roots 时就可能撞上「迭代期间集合被改变」。
+    """
+    return list(SCAN_DIRS) + list(USER_DIRS)
 
 
 def human_size(n):
@@ -730,7 +763,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         if route not in ("/api/annotations", "/api/edits", "/api/export",
-                         "/api/redact"):
+                         "/api/redact", "/api/dirs"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -751,7 +784,69 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_edits(payload)
         if route == "/api/redact":
             return self._post_redact(payload)
+        if route == "/api/dirs":
+            return self._post_dirs(payload)
         return self._post_export(payload)
+
+    # ---- POST: 注册前端添加的扫描目录 ----
+    def _post_dirs(self, payload):
+        """
+        整体替换「前端添加的目录」集合。
+
+        为什么是整体替换而不是增量 add/remove：浏览器的 localStorage
+        是唯一真相源，页面每次加载全量推一次，服务端重启后自然自愈。
+        增量语义反而会让两边慢慢漂移，还得额外处理删除。
+
+        ★ 仅允许本机来源。这个端点会扩大「允许读取的目录」范围，
+          如果局域网可达，等于让任何人把 C:\\ 加进来读整台机器。
+          与 /api/browse 同一道防线。
+
+        注意副作用：用 curl 手动调用会覆盖掉浏览器推的那份，
+        直到浏览器下次刷新。这是"浏览器是唯一真相源"的必然结果。
+        """
+        global USER_DIRS
+
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return self.send_error_json(403, "仅允许本机访问")
+
+        raw = payload.get("dirs")
+        if not isinstance(raw, list):
+            return self.send_error_json(400, "dirs 必须是数组")
+        if len(raw) > MAX_USER_DIRS:
+            return self.send_error_json(
+                400, f"最多只能添加 {MAX_USER_DIRS} 个目录")
+
+        accepted = []
+        ignored = []
+        seen = {norm(d) for d in SCAN_DIRS}
+        for item in raw:
+            if not isinstance(item, str) or not item.strip():
+                ignored.append(str(item))
+                continue
+            real = os.path.realpath(item.strip())
+            if not os.path.isdir(real):
+                ignored.append(item)
+                continue
+            # 已经落在启动目录里的（含子目录）不必重复注册 ——
+            # 否则 scan_pdfs 会对同一批文件白跑一遍 os.walk
+            if is_within(real, SCAN_DIRS):
+                ignored.append(item)
+                continue
+            key = norm(real)
+            if key in seen:
+                continue
+            seen.add(key)
+            accepted.append(real)
+
+        # 整体重绑定（不是原地改），见 allowed_dirs() 的并发说明
+        USER_DIRS = tuple(accepted)
+
+        self.send_json({
+            "ok": True,
+            "dirs": allowed_dirs(),
+            "accepted": len(accepted),
+            "ignored": ignored,
+        })
 
     # ---- POST: 标注 ----
     def _post_annotations(self, payload):
@@ -809,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_dirs()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -903,7 +998,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_dirs()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -970,13 +1065,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- API: 文件列表 ----
     def api_files(self, query):
-        # 支持 ?dir= 临时指定扫描目录
-        extra = query.get("dir", [])
-        dirs = list(SCAN_DIRS)
-        for d in extra:
-            d = urllib.parse.unquote(d)
-            if os.path.isdir(d) and norm(d) not in {norm(x) for x in dirs}:
-                dirs.append(d)
+        # 扫描「启动目录 + 前端添加的目录」。
+        # 原来这里支持 ?dir= 临时加目录，但那个参数只影响列表、
+        # 不影响 /api/file 的校验，导致列出来的文件一打开就 403。
+        # 现在目录统一走 POST /api/dirs 注册，两边用同一个集合。
+        dirs = allowed_dirs()
         try:
             files = scan_pdfs(dirs)
         except Exception as exc:  # noqa: BLE001
@@ -1001,7 +1094,7 @@ class Handler(BaseHTTPRequestHandler):
             size = os.path.getsize(real)
         except OSError:
             return self.send_error_json(404, "文件不存在")
-        if not is_within(real, SCAN_DIRS):
+        if not is_within(real, allowed_dirs()):
             return self.send_error_json(403, "该文件不在允许的扫描目录内")
 
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
@@ -1104,7 +1197,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_dirs()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
         except Exception as exc:  # noqa: BLE001
@@ -1174,7 +1267,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_dirs()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             if sys.platform == "win32":
                 os.startfile(real)  # type: ignore[attr-defined]

@@ -121,7 +121,12 @@ export function pdfToNorm(pageNum, x, y, w, h) {
    -------------------------------------------------------------------------- */
 
 export async function loadEdits(docId) {
-  if (!docId) return;
+  // ★ 先无条件清空：否则切到"没有编辑数据"的文档时（或 docId 为空时），
+  //   上一个文档的编辑对象会残留 —— 表现为"打开新文件却带出上次编辑的内容"。
+  editState.objects = [];
+  editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
+  editState.selectedId = null;
+  if (!docId) { editState.dirty = false; return; }
   try {
     const data = await api(`/api/edits?doc=${encodeURIComponent(docId)}`);
     const p = data.pages || {};
@@ -914,6 +919,13 @@ export function currentColor() {
 export function bindEditUI() {
   if (bound) return;
   bound = true;
+
+  // 中文字体（@font-face，约 10MB）是异步加载的。预览文字的**基线偏移**
+  // 依赖字体度量：字体没就绪时按兜底字体算，会与导出差一点。加载完成后
+  // 重绘一次，让预览的字体与基线位置都对齐到导出。
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { if (editState.on) repaintEdits(); });
+  }
 
   els.btnEditMode && els.btnEditMode.addEventListener('click', () => {
     setEditMode(!editState.on);

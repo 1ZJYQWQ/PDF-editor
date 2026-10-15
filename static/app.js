@@ -223,6 +223,8 @@ async function openDocument(task, name, docId, path) {
     .forEach(id => { els[id] && (els[id].hidden = false); });
   if (els.progressBar) els.progressBar.hidden = false;
 
+  // ★ 打开文档时退出编辑模式 —— 避免从上一次残留的编辑态进来
+  if (editState.on) setEditMode(false);
   loadBookmarks();
   await buildPages();
   setupObserver();
@@ -265,6 +267,12 @@ async function openDocument(task, name, docId, path) {
 
 /* 关闭当前文档，回到欢迎页 */
 function closeDocument() {
+  // ★ 回主页必须把**编辑模式**也收掉 —— 否则它会一直开着，
+  //   下次打开文件就"自动进入编辑模式"、还带着上一次的编辑对象。
+  setEditMode(false);
+  editState.objects = [];
+  editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
+  editState.dirty = false;
   if (state.observer) { state.observer.disconnect(); state.observer = null; }
   stopAutoScroll();
   if (state.pdf) { try { state.pdf.destroy(); } catch (e) { /* noop */ } }
@@ -1556,6 +1564,12 @@ function onEditMouseUp(e) {
 
   editState.tempShape = null;
   addObject(obj);
+  // ★ 画完自动切到「选择」工具并选中它 —— 这样四角缩放手柄立刻出现，
+  //   用户能马上调整大小/位置；否则得手动切工具才看得到手柄（易被当成"没做"）。
+  setTool('select');
+  editState.selectedId = obj.id;
+  showObjBar(rec, obj);
+  repaintEdits();
   const label = { whiteout: '涂白', rect: '矩形', ellipse: '椭圆',
                   line: '直线', redact: '涂黑区域' }[tool] || '对象';
   // 涂黑只标记区域，真正的销毁在点「涂黑并另存为」时发生 ——
@@ -1594,10 +1608,13 @@ function openTextPop(rec, clientX, clientY, editing = null) {
     els.tipSize.value = String(editing ? (editing.size || 14) : 14);
   }
 
-  let left = clientX - vr.left;
-  let top = clientY - vr.top;
-  left = Math.max(8, Math.min(left, vr.width - 250));
-  if (top + 150 > vr.height) top = Math.max(8, vr.height - 170);
+  // fixed 定位：直接用**视口坐标**（clientX/clientY）。
+  // 减去 viewer 偏移是 absolute 的写法，滚动后会让弹窗错位。
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = Math.max(8, Math.min(clientX, vw - 250));
+  let top = clientY;
+  if (top + 180 > vh) top = Math.max(8, vh - 190);
   pop.style.left = left + 'px';
   pop.style.top = top + 'px';
 

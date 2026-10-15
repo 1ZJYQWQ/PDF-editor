@@ -1887,7 +1887,10 @@ body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
 
 /* 文字编辑输入浮层 */
 .text-input-pop {
-  position: absolute;
+  /* fixed：相对**视口**定位，才与 openTextPop 里的 clientX/clientY 对应。
+     原来 absolute 相对 .viewer（自带滚动），滚动过后弹窗会落到视口外，
+     紧接着的 focus() 就把页面滚回顶端 —— 即"插入文字时自动滚到顶"的根因。 */
+  position: fixed;
   z-index: 66;
   width: 240px;
   background: var(--bg-panel);

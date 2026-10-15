@@ -265,6 +265,12 @@ export function paintPageEdits(rec) {
     measureTextBox(obj, el, rec);
   }
 
+  // 选中的可缩放对象：四角画缩放手柄（仅"选择工具"下）
+  const sel = mine.find(o => o.id === editState.selectedId);
+  if (sel && editState.tool === 'select' && RESIZABLE_KINDS.has(sel.kind)) {
+    renderResizeHandles(layer, sel, rec);
+  }
+
   // 拖拽中的临时对象
   if (editState.tempShape && editState.tempShape.page === rec.num) {
     const t = renderObjectEl(editState.tempShape, rec, true);
@@ -295,6 +301,31 @@ function measureTextBox(obj, el, rec) {
     w: b.width / r.width,
     h: b.height / r.height,
   };
+}
+
+/*
+  行盒顶部 → 文字基线的像素距离。
+
+  用途：PDF 里 Td 定位的是**基线**，而 HTML 的 top 落在**行盒顶部**。
+  要让预览的"基线"落在锚点上（与导出对齐），就得把盒子整体上移
+  这么多个像素。
+
+  用 canvas 实测字体度量，而不是写死比例 —— 中英文字体（Noto Sans SC
+  / Helvetica）的行高度量不同，写死一个比例会顾此失彼。
+*/
+function textBaselineOffset(fontSize, lineHeight) {
+  try {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = `${fontSize}px Helvetica, Arial, "NotoSansSC", sans-serif`;
+    const m = ctx.measureText('Hg中');
+    const asc = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || fontSize * 0.8;
+    const desc = m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || fontSize * 0.2;
+    const content = asc + desc;
+    return (fontSize * lineHeight - content) / 2 + asc;
+  } catch (e) {
+    // 极端环境下 canvas 不可用：退化为经验值（ascent≈0.8em + 居中≈0.125em）
+    return fontSize * 0.925;
+  }
 }
 
 function renderObjectEl(obj, rec, isTemp = false) {
@@ -343,10 +374,17 @@ function renderObjectEl(obj, rec, isTemp = false) {
     // 文字：按页面实际尺寸估算字号，保证视觉与导出一致
     const size = (obj.size || 12) * (rec.wrap.getBoundingClientRect().width /
       (pageSize(obj.page).width || 595));
-    el.style.fontSize = Math.max(6, size) + 'px';
+    const fs = Math.max(6, size);
+    el.style.fontSize = fs + 'px';
     el.style.color = obj.color || '#000000';
     el.style.lineHeight = '1.25';
     el.textContent = obj.text || '';
+    // ★ 基线对齐：PDF 的 Td 定位**基线**，而上面的 left/top 落在盒子的
+    //   左上角 —— 两者语义不同，会让预览文字整体比导出**低**约一行
+    //   （README 长期挂着的"预览与导出垂直位置差"就是它）。
+    //   把盒子整体上移"行盒顶部→基线"的距离，使**基线**落在锚点，
+    //   与导出（Td 基线）一致，从而所见即所得。
+    el.style.top = (s.top - textBaselineOffset(fs, 1.25)) + 'px';
     // ★ 必须放在**最后**：上面按矩形算出来的宽高对文字是 1px，会把文字裁没。
     //   数据层里文字只有锚点（w/h = 0），盒子要按内容自适应。
     makeTextBoxAuto(el);
@@ -356,6 +394,40 @@ function renderObjectEl(obj, rec, isTemp = false) {
     el.classList.add('on');
   }
   return el;
+}
+
+/* 可缩放的对象类型：有矩形尺寸的那些。
+   文字是锚点（w/h = 0）、直线是两端点 —— 缩放语义不同，先不纳入。 */
+const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact']);
+
+/*
+  在选中对象的四角画缩放手柄。
+
+  与其它编辑元素不同，手柄**必须可交互**（pointer-events: auto），
+  否则拖不动 —— .ed* 系列默认全是 pointer-events:none（命中统一走
+  hitTest 几何计算），手柄是唯一的例外。
+
+  手柄挂在 .edit-layer 上、按渲染盒子的四角绝对定位；
+  交互由 app.js 的 onEditMouseDown（closest('.ed-handle')）接管。
+*/
+function renderResizeHandles(layer, obj, rec) {
+  const p = obj._norm || pdfToNorm(obj.page, obj.x, obj.y, obj.w, obj.h);
+  const s = normToScreen(rec, p.x, p.y, p.w, p.h);
+  const corners = [
+    ['nw', s.left, s.top],
+    ['ne', s.left + s.width, s.top],
+    ['sw', s.left, s.top + s.height],
+    ['se', s.left + s.width, s.top + s.height],
+  ];
+  for (const [name, cx, cy] of corners) {
+    const hd = document.createElement('div');
+    hd.className = 'ed-handle ed-handle-' + name;
+    hd.dataset.id = obj.id;
+    hd.dataset.corner = name;
+    hd.style.left = cx + 'px';
+    hd.style.top = cy + 'px';
+    layer.appendChild(hd);
+  }
 }
 
 function renderLineEl(obj, rec, isTemp) {

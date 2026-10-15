@@ -15,14 +15,13 @@ PDF Viewer - 本地服务端
   POST /api/edits              写入某文档的编辑数据
   GET  /api/pdfinfo?path=...   返回 PDF 的页数与各页尺寸（供编辑模式用）
   POST /api/export             应用编辑，产出一份新的 PDF 供下载
-  POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
+POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
   GET  /static/...             静态资源
 
 用法：
   python server.py                 # 默认扫描 项目文档目录 与 用户文档目录
   python server.py --dir D:\\PDFs   # 指定要扫描的 PDF 目录（可多次）
-  python server.py --port 8080     # 指定端口（默认 8000）
-                                   # 端口被占用时向后顺延 8081、8082… 并在终端提示
+  python server.py --port 8080     # 指定端口
 """
 
 import argparse
@@ -43,6 +42,7 @@ import pdfredact
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")   # 字体等资产（/assets/fonts/*.ttf）
 ANNOT_DIR = os.path.join(BASE_DIR, "annotations")
 EDIT_DIR = os.path.join(BASE_DIR, "edits")
 EXPORT_DIR = os.path.join(BASE_DIR, "exports")
@@ -69,13 +69,46 @@ def norm(path):
     return os.path.normcase(os.path.abspath(path))
 
 
+def _clean_path(path):
+    """
+    把路径规范成"可直接做包含关系比较"的形式。
+
+    两个 Windows 上的坑，必须在这里一并处理：
+      1. 用 realpath 而不是 abspath —— 只有 realpath 会解析
+         符号链接 / junction（目录联结）。用户把同步盘、下载目录
+         用 junction 挂进扫描目录时，abspath 得到的"逻辑路径"会
+         与文件的"物理路径"不一致。
+      2. 去掉扩展长度前缀 "\\\\?\\" —— os.path.realpath 在 Windows 上
+         会给结果加这个前缀（突破 260 字符限制），若只在长路径上
+         出现，比较双方一个有、一个没有，startswith 就会误判。
+    """
+    p = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+    if p.startswith("\\\\?\\"):
+        p = p[len("\\\\?\\"):]
+    return p
+
+
 def is_within(path, roots):
-    """校验 path 是否位于允许的根目录内，防止路径穿越。"""
-    p = norm(path)
+    """
+    校验 path 是否位于允许的根目录内，防止路径穿越。
+
+    用 os.path.commonpath 判断，而不是 `p.startswith(root + os.sep)`：
+      - **盘符根**以分隔符结尾（"C:\\"），再拼一个 os.sep 会得到
+        "C:\\\\"，与真实路径 "C:\\Program Files\\..." 的前缀对不上，
+        于是扫描盘符根时**所有文件**都被误判为越权（整盘 403）。
+      - commonpath 能正确处理盘符根、大小写与分隔符差异。
+      - 不同盘符时 commonpath 抛 ValueError，视为"不包含"。
+    """
+    p = _clean_path(path)
     for r in roots:
-        rn = norm(r)
-        if p == rn or p.startswith(rn + os.sep):
+        rn = _clean_path(r)
+        if p == rn:
             return True
+        try:
+            if os.path.commonpath([rn, p]) == rn:
+                return True
+        except ValueError:
+            continue
     return False
 
 
@@ -602,6 +635,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not is_within(target, [STATIC_DIR]):
                     return self.send_error_json(403, "拒绝访问")
                 return self.serve_file(target)
+            if route.startswith("/assets/"):
+                # 字体等静态资产：@font-face 预览要能通过 HTTP 取到
+                # assets/fonts/NotoSansSC-Regular.ttf，让预览与嵌入字体一致
+                rel = urllib.parse.unquote(route[len("/assets/"):])
+                target = os.path.join(ASSETS_DIR, rel.replace("/", os.sep))
+                if not is_within(target, [ASSETS_DIR]):
+                    return self.send_error_json(403, "拒绝访问")
+                return self.serve_file(target)
             return self.send_error_json(404, "未找到该路径")
         except BrokenPipeError:
             pass
@@ -854,15 +895,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_file(query, head_only=True)
         self.send_error(404)
 
+    # ---- 目录集合：扫描与校验必须用同一份 ----
+
+    def _resolve_dirs(self, query):
+        """
+        返回本次请求允许访问的目录集合，并把临时目录并入全局 SCAN_DIRS。
+
+        修一个真实事故：api_files 扫描时会把 ?dir= 指定的目录加进
+        **局部** dirs，但 api_file 读内容时只校验**全局** SCAN_DIRS ——
+        于是前端「添加目录」加进来的位置，列表能列出来、点开任何一个
+        都 403。
+
+        现在把临时目录并入全局（语义 = 用户添加了目录，本会话内即可
+        访问），并让所有取文件/读信息的端点都走这份合并集合，前端
+        因此无需在每个请求上重复携带 ?dir=。
+        """
+        global SCAN_DIRS
+        seen = {norm(x) for x in SCAN_DIRS}
+        for d in (query.get("dir") or []):
+            d = urllib.parse.unquote(d)
+            if not os.path.isdir(d):
+                continue
+            rd = os.path.realpath(d)
+            if norm(rd) not in seen:
+                SCAN_DIRS.append(rd)
+                seen.add(norm(rd))
+        return list(SCAN_DIRS)
+
     # ---- API: 文件列表 ----
     def api_files(self, query):
-        # 支持 ?dir= 临时指定扫描目录
-        extra = query.get("dir", [])
-        dirs = list(SCAN_DIRS)
-        for d in extra:
-            d = urllib.parse.unquote(d)
-            if os.path.isdir(d) and norm(d) not in {norm(x) for x in dirs}:
-                dirs.append(d)
+        # 支持 ?dir= 临时指定扫描目录（会并入全局，见 _resolve_dirs）
+        dirs = self._resolve_dirs(query)
         try:
             files = scan_pdfs(dirs)
         except Exception as exc:  # noqa: BLE001
@@ -887,7 +950,7 @@ class Handler(BaseHTTPRequestHandler):
             size = os.path.getsize(real)
         except OSError:
             return self.send_error_json(404, "文件不存在")
-        if not is_within(real, SCAN_DIRS):
+        if not is_within(real, self._resolve_dirs(query)):
             return self.send_error_json(403, "该文件不在允许的扫描目录内")
 
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
@@ -990,7 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, self._resolve_dirs(query)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
         except Exception as exc:  # noqa: BLE001
@@ -1007,7 +1070,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, self._resolve_dirs(query)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             if sys.platform == "win32":
                 os.startfile(real)  # type: ignore[attr-defined]
@@ -1037,6 +1100,10 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "text/html; charset=utf-8"
         elif path.endswith(".json"):
             ctype = "application/json; charset=utf-8"
+        elif path.endswith(".ttf"):
+            ctype = "font/ttf"
+        elif path.endswith(".otf"):
+            ctype = "font/otf"
 
         with open(path, "rb") as fp:
             body = fp.read()

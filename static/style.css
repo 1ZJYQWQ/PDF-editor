@@ -2,6 +2,18 @@
    PDF Viewer - 样式
    ========================================================================== */
 
+/* 编辑预览用的中文字体：与导出时嵌入的 Noto Sans SC（= 思源黑体）
+   是同一份文件，让"预览"与"最终 PDF"字体一致。
+   字体约 9.9MB，首载稍慢，故 font-display: swap：
+   先用系统字体兜底显示，加载完成后替换，避免白屏。 */
+@font-face {
+  font-family: "NotoSansSC";
+  src: url("/assets/fonts/NotoSansSC-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg-app: #f4f4f5;
   --bg-toolbar: #ffffff;
@@ -1441,10 +1453,34 @@ body.dark .an-highlight { mix-blend-mode: screen; }
   /* 保持 none —— 命中由 hitTest 负责，见上方注释 */
   pointer-events: none;
   cursor: text;
-  font-family: Helvetica, Arial, sans-serif;
+  /* 拉丁走 Helvetica/Arial（导出纯拉丁用标准 14 字体，保持一致）；
+     中文 fallback 到嵌入的 Noto Sans SC（导出中文走子集嵌入）——
+     这样"预览 = 导出"的字体一致。 */
+  font-family: Helvetica, Arial, "NotoSansSC", sans-serif;
 }
 
 .ed-line, .ed-svg { pointer-events: none; }
+
+/*
+  选中对象的四角缩放手柄。
+  ★ 它是编辑层里**唯一**可交互的元素 —— 其它 .ed* 一律
+    pointer-events:none（命中统一走 hitTest 几何计算）。
+*/
+.ed-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  z-index: 5;
+  touch-action: none;
+}
+.ed-handle-nw, .ed-handle-se { cursor: nwse-resize; }
+.ed-handle-ne, .ed-handle-sw { cursor: nesw-resize; }
 
 /* 编辑模式下页面加一圈提示边框 */
 body.edit-mode .page { cursor: crosshair; }
@@ -1452,8 +1488,11 @@ body.edit-mode .page .text-layer { pointer-events: none; }
 
 /* 编辑工具面板 */
 .edit-palette {
-  position: absolute;
-  top: 14px;
+  /* fixed：贴视口底部居中。此前是 absolute 相对 .viewer，
+     被钉在滚动内容流的顶部 —— 既挡住 PDF 第一页开头，
+     又随滚动一起滚走。fixed 后固定在视口，不随内容滚动。 */
+  position: fixed;
+  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 58;
@@ -1720,12 +1759,14 @@ body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
 
 /* 页面管理面板 */
 .page-panel {
-  position: absolute;
-  top: 14px;
+  /* fixed：贴视口右上、让开主工具栏。此前是 absolute 相对
+     .viewer，同样会被钉在内容流里随滚动滚走。 */
+  position: fixed;
+  top: calc(var(--toolbar-h) + 12px);
   right: 14px;
   z-index: 57;
   width: 246px;
-  max-height: calc(100% - 28px);
+  max-height: calc(100vh - var(--toolbar-h) - 24px);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

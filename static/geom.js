@@ -185,6 +185,53 @@ export function movedPosition(orig, d) {
 }
 
 /*
+  按角拖动缩放矩形。
+
+  orig: { x, y, w, h }  —— PDF 坐标（原点左下、y 向上）
+  corner: 'nw' | 'ne' | 'sw' | 'se'
+  d: { dx, dy }         —— PDF 坐标系位移（来自 dragDeltaToPdf）
+
+  原则：**对角固定** —— 拖某个角时，对面的角保持不动。
+  返回 { x, y, w, h }，宽高不小于 MIN（避免拖成负尺寸）。
+
+  ★ PDF 的 y 轴向上，所以 corner 里的 n/s 是按**屏幕观感**命名的：
+    n（上边）在 PDF 里是 y + h 那一侧。用 n/s/e/w 而不是 y 大/y 小，
+    是为了让调用方（按屏幕四角）读起来不绕。
+  ★ 与 movedPosition 一样，每帧都从 **原始值**算，不做累加。
+*/
+export function resizedRect(orig, corner, d) {
+  const MIN = 6;
+  const east = corner.indexOf('e') >= 0;    // 拖东侧（右边界）
+  const north = corner.indexOf('n') >= 0;   // 拖北侧（上边界 = y+h）
+
+  let x = orig.x, y = orig.y, w = orig.w, h = orig.h;
+
+  if (east) {
+    w = w + d.dx;                 // 右边界动，左边固定
+  } else {
+    x = x + d.dx;                 // 左边界动，右边固定
+    w = w - d.dx;
+  }
+  if (north) {
+    h = h + d.dy;                 // 上边界（y+h）动，下边固定
+  } else {
+    y = y + d.dy;                 // 下边界动，上边固定
+    h = h - d.dy;
+  }
+
+  // 最小尺寸保护：保持"对面那条边"不动
+  if (w < MIN) {
+    w = MIN;
+    if (!east) x = orig.x + orig.w - MIN;    // 拖左边：右边固定
+  }
+  if (h < MIN) {
+    h = MIN;
+    if (!north) y = orig.y + orig.h - MIN;   // 拖下边：上边固定
+  }
+  return { x, y, w, h };
+}
+
+/*
   ★ 文字对象的盒子必须**按内容自适应**，绝不能当成矩形给固定宽高。
 
   为什么单独抽成一个函数（而不是就地写几行样式）：

@@ -23,8 +23,8 @@ import {
   exportPdf, buildExportPayload, pdfToNorm,
 } from '/static/edit.js';
 
-// 纯几何（可单测）—— 拖动位移与坐标换算
-import { dragDeltaToPdf, movedPosition } from '/static/geom.js';
+// 纯几何（可单测）—— 拖动位移、按角缩放与坐标换算
+import { dragDeltaToPdf, movedPosition, resizedRect } from '/static/geom.js';
 
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
@@ -1238,6 +1238,7 @@ function finishMenuAction() {
 
 let dragState = null;      // { rec, page, start, tool, color }  绘制新对象
 let moveState = null;      // 拖动已有对象：{ id, startX/Y, orig, rec, rw/rh, pw/ph }
+let resizeState = null;    // 缩放已有对象：{ id, corner, startX/Y, orig, rec, rw/rh, pw/ph }
 let textPopInfo = null;    // 文字输入浮层的上下文
 let objBarId = null;       // 操作条当前绑定的对象 id
 
@@ -1337,6 +1338,34 @@ function onEditMouseDown(e) {
   if (!editState.on || !editState.tool) return;
   if (e.button !== 0) return;
 
+  // 缩放手柄：优先于落笔/选择。
+  // 手柄在 .page 内部（也匹配 closest('.page')），必须在那道判据之前
+  // 拦下来，否则点手柄会被当成「选中/落笔」。
+  const handle = e.target.closest('.ed-handle');
+  if (handle) {
+    if (editState.tool !== 'select') return;
+    const obj = editState.objects.find(o => o.id === handle.dataset.id);
+    const hrec = pageAt(e.clientX, e.clientY);
+    if (!obj || !hrec) return;
+    e.preventDefault();
+    const hr = hrec.wrap.getBoundingClientRect();
+    const hps = pageSize(hrec.num);
+    resizeState = {
+      id: obj.id,
+      rec: hrec,
+      corner: handle.dataset.corner,
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { x: obj.x, y: obj.y, w: obj.w, h: obj.h },
+      rw: hr.width,
+      rh: hr.height,
+      pw: hps.width,
+      ph: hps.height,
+    };
+    hideObjBar();
+    return;
+  }
+
   // 落笔必须发生在**页面内容**上。
   // 编辑 UI（工具面板 / 文字输入框 / 对象操作条 / 页面管理 / 涂黑确认框）
   // 全都是 #viewer 的后代，它们的 mousedown 会一路冒泡到这里。
@@ -1429,8 +1458,18 @@ function dragMoveObject(e) {
   updateObject(st.id, movedPosition(st.orig, d));
 }
 
+/* 拖角缩放：几何换算交给 geom.js 的 resizedRect（可单测） */
+function dragResizeObject(e) {
+  const st = resizeState;
+  const dxs = e.clientX - st.startX;
+  const dys = e.clientY - st.startY;
+  const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
+  updateObject(st.id, resizedRect(st.orig, st.corner, d));
+}
+
 /* 拖拽中：实时预览 */
 function onEditMouseMove(e) {
+  if (resizeState) { dragResizeObject(e); return; }
   if (moveState) { dragMoveObject(e); return; }
   if (!dragState) return;
   const { rec, page, start, tool, color } = dragState;
@@ -1466,6 +1505,15 @@ function onEditMouseMove(e) {
 
 /* 拖拽结束：落成一个对象 */
 function onEditMouseUp(e) {
+  // 缩放已有对象：坐标在拖动过程中已写回，这里只收尾
+  if (resizeState) {
+    const st = resizeState;
+    resizeState = null;
+    const obj = editState.objects.find(o => o.id === st.id);
+    if (obj) showObjBar(st.rec, obj);   // 操作条贴回对象旁边
+    toast('已缩放', 900);
+    return;
+  }
   // 拖动已有对象：坐标在拖动过程中已经写回了，这里只收尾
   if (moveState) {
     const st = moveState;

@@ -590,6 +590,13 @@ export function insertBlank(afterIndex) {
   });
   scheduleSave();
   refreshPagePanel();
+  notifyPagesChanged();
+  toast('已在末尾插入空白页（滚动到最下方可见）', 2000);
+}
+
+/* 通知视图层：页面结构变了，请同步空白页展示 */
+function notifyPagesChanged() {
+  document.dispatchEvent(new CustomEvent('pdf:pages-changed'));
 }
 
 /* 刷新页面管理面板 */
@@ -666,6 +673,7 @@ export function refreshPagePanel() {
     editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
     scheduleSave();
     refreshPagePanel();
+    notifyPagesChanged();
     toast('已重置页面改动', 1400);
   });
 

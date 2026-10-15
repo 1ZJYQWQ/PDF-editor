@@ -227,6 +227,7 @@ async function openDocument(task, name, docId, path) {
   if (editState.on) setEditMode(false);
   loadBookmarks();
   await buildPages();
+  syncBlankPages();     // 恢复上次的插入页（若有）
   setupObserver();
 
   // 加载标注
@@ -342,6 +343,50 @@ async function buildPages() {
   }
   container.appendChild(frag);
 }
+
+/*
+  同步「插入的空白页」到视图。
+
+  背景：插入的空白页原本**只在导出时**生成，前端视图里看不到 ——
+  用户点了「末尾插入空白页」后看不到任何变化，以为没生效（真实反馈）。
+
+  这里把它作为**虚拟空白页**追加到容器末尾（UI 只提供"末尾插入"），
+  并更新总页数，做到所见即所得。
+
+  为什么追加 DOM 而不重建整本：重建要重新 getPage 渲染所有位图，
+  对几十页的文档代价太大；空白页本身是纯白，追加即可。
+*/
+function syncBlankPages() {
+  if (!els.pages) return;
+  const need = (editState.pages && editState.pages.insert)
+    ? editState.pages.insert.length : 0;
+  const blanks = [...els.pages.querySelectorAll(':scope > .page.blank')];
+
+  // 多了就去掉（从末尾开始）
+  for (let i = blanks.length - 1; i >= need; i--) blanks[i].remove();
+
+  // 少了就补；尺寸沿用第一页的实际显示尺寸，保证观感一致
+  const first = els.pages.querySelector(':scope > .page:not(.blank)');
+  const w = (first && first.offsetWidth) || 595;
+  const h = (first && first.offsetHeight) || 842;
+  for (let i = blanks.length; i < need; i++) {
+    const d = document.createElement('div');
+    d.className = 'page blank';
+    d.dataset.blank = '1';
+    d.dataset.ph = '空白页（导出时写入）';
+    d.style.width = w + 'px';
+    d.style.height = h + 'px';
+    els.pages.appendChild(d);
+  }
+
+  // 总页数把插入页算进去
+  const total = state.pageCount + need;
+  if (els.pageInput) els.pageInput.max = total;
+  if (els.pageTotal) els.pageTotal.textContent = '/ ' + total;
+}
+
+// 编辑层改动页面结构后，通过事件通知这里同步
+document.addEventListener('pdf:pages-changed', syncBlankPages);
 
 function setupObserver() {
   if (state.observer) state.observer.disconnect();

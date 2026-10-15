@@ -1482,6 +1482,13 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 .ed-handle-nw, .ed-handle-se { cursor: nwse-resize; }
 .ed-handle-ne, .ed-handle-sw { cursor: nesw-resize; }
 
+/* 插入的空白页：导出时才真正写入 PDF，编辑期在视图里显示为一张白页。
+   用淡虚线边框区分它是"待插入"的，而不是原文件本来就有的页。 */
+.page.blank {
+  background: #ffffff;
+  border: 1px dashed var(--border-strong);
+}
+
 /* 编辑模式下页面加一圈提示边框 */
 body.edit-mode .page { cursor: crosshair; }
 body.edit-mode .page .text-layer { pointer-events: none; }

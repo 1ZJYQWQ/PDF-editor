@@ -1009,7 +1009,10 @@ body.dark .obj-bar { background: #3f3f47; }
    ========================================================================== */
 
 .annot-pop {
-  position: absolute;
+  /* fixed：相对**视口**定位，才与 openAnnotPop 里的视口坐标对应。
+     原来 absolute 相对 .viewer（自带滚动）却不补滚动量 —— 页面滚动后
+     气泡会落到视口外，紧接着的 apNote.focus() 把页面滚回顶端。 */
+  position: fixed;
   z-index: 65;
   width: 306px;
   background: var(--bg-panel);

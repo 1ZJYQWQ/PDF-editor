@@ -74,6 +74,16 @@ export function pageSize(pageNum) {
   if (info && info.width > 0 && info.height > 0) {
     return { width: info.width, height: info.height };
   }
+  // 插入的空白页（页号超出原始页范围）：用它的插入规格尺寸，
+  // 否则画在上面的对象会按 A4 兜底换算，与页面实际尺寸对不上。
+  const base = Array.isArray(editState.pageInfo) ? editState.pageInfo.length : 0;
+  const ins = editState.pages && editState.pages.insert;
+  if (ins && pageNum > base) {
+    const spec = ins[pageNum - base - 1];
+    if (spec && spec.width > 0 && spec.height > 0) {
+      return { width: spec.width, height: spec.height };
+    }
+  }
   // 兜底：A4
   return { width: 595, height: 842 };
 }

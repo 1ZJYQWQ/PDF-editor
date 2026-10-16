@@ -358,31 +358,58 @@ async function buildPages() {
 */
 function syncBlankPages() {
   if (!els.pages) return;
-  const need = (editState.pages && editState.pages.insert)
-    ? editState.pages.insert.length : 0;
-  const blanks = [...els.pages.querySelectorAll(':scope > .page.blank')];
+  const inserts = (editState.pages && editState.pages.insert) || [];
+  const need = inserts.length;
+
+  // 现有的空白页 rec（带 blank 标记）
+  const blanks = state.pages.filter(r => r.blank);
 
   // 多了就去掉（从末尾开始）
-  for (let i = blanks.length - 1; i >= need; i--) blanks[i].remove();
+  for (let i = blanks.length - 1; i >= need; i--) {
+    const rec = blanks[i];
+    rec.wrap.remove();
+    const idx = state.pages.indexOf(rec);
+    if (idx >= 0) state.pages.splice(idx, 1);
+  }
 
-  // 少了就补；尺寸沿用第一页的实际显示尺寸，保证观感一致
+  // 尺寸沿用第一页的实际显示尺寸，保证观感一致
   const first = els.pages.querySelector(':scope > .page:not(.blank)');
   const w = (first && first.offsetWidth) || 595;
   const h = (first && first.offsetHeight) || 842;
+
+  // 少了就补：空白页做成**完整的页 rec**（含 canvas / text-layer）。
+  // ★ 关键 —— 编辑操作是基于 state.pages 的（pageAt/hitTest 都遍历它），
+  //   只追加一个裸 DOM 的话，空白页上**画不了任何东西**（真实反馈）。
+  //   做成 rec 后，它和普通页一样能被命中、能挂编辑层。
   for (let i = blanks.length; i < need; i++) {
-    const d = document.createElement('div');
-    d.className = 'page blank';
-    d.dataset.blank = '1';
-    d.dataset.ph = '空白页（导出时写入）';
-    d.style.width = w + 'px';
-    d.style.height = h + 'px';
-    els.pages.appendChild(d);
+    const num = state.pageCount + i + 1;
+    const wrap = document.createElement('div');
+    wrap.className = 'page blank';
+    wrap.dataset.page = num;
+    wrap.dataset.blank = '1';
+    wrap.dataset.ph = '空白页（导出时写入）';
+    wrap.style.width = w + 'px';
+    wrap.style.height = h + 'px';
+    const canvas = document.createElement('canvas');
+    const textLayer = document.createElement('div');
+    textLayer.className = 'text-layer';
+    wrap.append(canvas, textLayer);
+    els.pages.appendChild(wrap);
+    state.pages.push({
+      num, wrap, canvas, textLayer,
+      rendered: true, rendering: false,
+      viewport: { width: w, height: h }, textContent: null, task: null,
+      blank: true,
+    });
   }
 
   // 总页数把插入页算进去
   const total = state.pageCount + need;
   if (els.pageInput) els.pageInput.max = total;
   if (els.pageTotal) els.pageTotal.textContent = '/ ' + total;
+
+  // 编辑模式下：为空白页补上编辑层并重画对象
+  if (editState.on) repaintEdits();
 }
 
 // 编辑层改动页面结构后，通过事件通知这里同步
@@ -1756,18 +1783,25 @@ function openAnnotPop(id) {
   const pop = els.annotPop;
   pop.hidden = false;
 
+  // fixed 定位：直接用**视口坐标**。
+  // 原来（absolute）用视口坐标却没补滚动量，页面一滚动气泡就错位到
+  // 视口外，紧接着的 apNote.focus() 会把页面滚回顶端（真实反馈）。
   const pw = pop.offsetWidth || 306;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   let left, top;
   if (el) {
     const r = el.getBoundingClientRect();
-    left = r.left - vr.left;
-    top = r.bottom - vr.top + 10;
+    left = r.left;
+    top = r.bottom + 10;
   } else {
-    left = vr.width / 2 - pw / 2;
+    left = vw / 2 - pw / 2;
     top = 80;
   }
-  left = Math.max(8, Math.min(left, vr.width - pw - 8));
-  if (top + 200 > vr.height) top = Math.max(8, (el ? el.getBoundingClientRect().top - vr.top : 100) - 210);
+  left = Math.max(8, Math.min(left, vw - pw - 8));
+  if (top + 240 > vh) {
+    top = Math.max(8, (el ? el.getBoundingClientRect().top : 200) - 250);
+  }
   pop.style.left = left + 'px';
   pop.style.top = top + 'px';
 

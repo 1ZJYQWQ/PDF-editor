@@ -230,6 +230,12 @@ async function openDocument(task, name, docId, path) {
   syncBlankPages();     // 恢复上次的插入页（若有）
   setupObserver();
 
+  // ★ 侧边栏内容：缩略图 + 目录。
+  //   这两个函数**此前从未被调用** —— 于是侧边栏的「缩略图」「目录」
+  //   从打开文档起就是空的（既有 bug，不是本轮引入）。
+  buildThumbs();
+  buildOutline();
+
   // 加载标注
   await loadAnnotations(state.docId);
 
@@ -2424,8 +2430,12 @@ function bindToolbar() {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.side-tab').forEach(t => t.classList.toggle('on', t === tab));
       const key = tab.dataset.tab;
+      // ★ 三个面板都要 toggle —— 之前漏了 panelAnnots：点「标注」时
+      //   thumbs/outline 被关掉、annots 又从不打开，导致侧栏一片空白
+      //   （既有 bug，不是本轮引入）。
       $('panelThumbs').classList.toggle('on', key === 'thumbs');
       $('panelOutline').classList.toggle('on', key === 'outline');
+      $('panelAnnots').classList.toggle('on', key === 'annots');
     });
   });
 

@@ -438,6 +438,13 @@ button { font-family: inherit; }
 .thumb.on .thumb-num { color: var(--accent); font-weight: 500; }
 
 /* ---- 目录 ---- */
+/* 目录面板里的分组标题（如「我的书签」） */
+.outline-heading {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 6px 8px 4px;
+}
+
 .outline-empty {
   padding: 24px 12px;
   text-align: center;

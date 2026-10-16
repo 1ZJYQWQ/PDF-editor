@@ -116,6 +116,8 @@ function toggleBookmark() {
   saveBookmarks();
   updateProgressMarkers();
   updateBookmarkBtn();
+  // ★ 「目录」面板里也列着「我的书签」，加/删后重建一次目录
+  buildOutline();
 }
 
 function updateBookmarkBtn() {
@@ -892,11 +894,23 @@ async function buildOutline() {
   state.outlinMap = new Map();
   if (!state.pdf) return;
 
+  // ★ 先渲染「我的书签」（用户用「本页加书签」/ B 键加的阅读书签）。
+  //   它和 PDF 自带目录是**两个来源** —— 之前面板只显示 PDF 目录，
+  //   所以加完书签在「目录」里看不到任何变化（真实反馈）。
+  renderMyBookmarks(box);
+
   let outline = null;
   try { outline = await state.pdf.getOutline(); } catch (e) { outline = null; }
 
   if (!outline || !outline.length) {
-    box.innerHTML = `<div class="outline-empty">此文档没有目录<br><span style="font-size:12px">有些 PDF 未嵌入书签结构</span></div>`;
+    // 没有 PDF 目录时：若已有「我的书签」，就不再显示"无目录"的空提示
+    if (!state.bookmarks.size) {
+      const div = document.createElement('div');
+      div.className = 'outline-empty';
+      div.innerHTML = '此文档没有目录<br>' +
+        '<span style="font-size:12px">有些 PDF 未嵌入书签结构</span>';
+      box.appendChild(div);
+    }
     return;
   }
 
@@ -904,6 +918,30 @@ async function buildOutline() {
   const rendered = await Promise.all(outline.map(item => buildOutlineNode(item, 0)));
   rendered.forEach(n => n && frag.appendChild(n));
   box.appendChild(frag);
+}
+
+/* 把阅读书签渲染进目录面板（复用 .outline-item 样式，点击跳页） */
+function renderMyBookmarks(box) {
+  const pages = [...state.bookmarks].sort((a, b) => a - b);
+  if (!pages.length) return;
+  const head = document.createElement('div');
+  head.className = 'outline-heading';
+  head.textContent = '我的书签';
+  box.appendChild(head);
+  for (const p of pages) {
+    const btn = document.createElement('button');
+    btn.className = 'outline-item';
+    btn.innerHTML = `<span>第 ${p} 页</span>` +
+      `<span class="outline-page">${p}</span>`;
+    btn.style.paddingLeft = '8px';
+    btn.addEventListener('click', () => {
+      goToPage(p, true);
+      els.outlineList.querySelectorAll('.outline-item.on')
+        .forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+    });
+    box.appendChild(btn);
+  }
 }
 
 async function resolveDestPage(dest) {

@@ -716,9 +716,31 @@ export async function exportPdf() {
   }
 
   const payload = buildExportPayload();
+  const nRedact = redactCount();
+
   if (!hasAnyEdit(payload)) {
-    toast('还没有任何编辑内容', 1800);
+    // 可能什么都没画，也可能**只画了涂黑** —— 后者必须说清楚，
+    // 否则用户会盯着"还没有任何编辑内容"发懵。
+    toast(nRedact > 0
+      ? '涂黑不参与「导出 PDF」，请点「涂黑并另存为…」'
+      : '还没有任何编辑内容', nRedact > 0 ? 3000 : 1800);
     return;
+  }
+
+  // ★ 防呆：画了涂黑却点了「导出 PDF」。
+  //   普通导出是**叠加式**的，删不掉底层文字，所以涂黑**不会**被包含 ——
+  //   用户极易误点这个按钮，然后以为"已经涂黑了"（实际一个字都没删）。
+  //   项目最怕的正是这种「假安全」，所以这里显式拦一道。
+  if (nRedact > 0) {
+    const ok = confirm(
+      `你画了 ${nRedact} 处涂黑区域，但「导出 PDF」不包含涂黑。\n\n` +
+      `· 继续导出：仅导出其它编辑内容，涂黑区域里的文字不会被删除。\n` +
+      `· 要真正涂黑：请取消，改用「涂黑并另存为…」。\n\n确定继续导出吗？`
+    );
+    if (!ok) {
+      toast('已取消。要涂黑请点「涂黑并另存为…」', 2800);
+      return;
+    }
   }
 
   const btn = els.btnExportPdf;

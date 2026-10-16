@@ -48,7 +48,10 @@
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
           "PingFang SC", "Hiragino Sans GB", Roboto, sans-serif;
-  --font-mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  /* 通用等宽族放最前：Firefox 的字体指纹保护会拦掉对**本地具体字体**
+     （Cascadia Mono / Consolas…）的请求并报警告，用 ui-monospace 直接命中
+     系统等宽字体，既安静又不必依赖某个具体字体是否存在。 */
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
 /* 深色模式 */

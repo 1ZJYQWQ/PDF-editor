@@ -983,7 +983,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "public, max-age=3600")
+        # ★ 本地工具，静态资源**不能长缓存**。
+        #   原来这里是 public, max-age=3600 —— 改完前端代码后浏览器还在吃
+        #   1 小时前的旧副本，于是出现"明明改了却没效果 / 行为错乱"的假象
+        #   （真实踩过：撤销功能改完测不出来）。
+        #   no-cache = 每次都回来问一次，永远拿到最新版本。
+        self.send_header("Cache-Control", "no-cache")
         if partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()

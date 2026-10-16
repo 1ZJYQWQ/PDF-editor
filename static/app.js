@@ -21,6 +21,7 @@ import {
   makeRectObject, makeLineObject, hitTest, removeObject, addObject,
   updateObject, pageSize, screenToNorm, refreshPagePanel,
   exportPdf, buildExportPayload, pdfToNorm,
+  undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
 } from '/static/edit.js';
 
 // 纯几何（可单测）—— 拖动位移、按角缩放与坐标换算
@@ -1757,6 +1758,10 @@ function openTextPop(rec, clientX, clientY, editing = null) {
 function closeTextPop() {
   if (els.textPop) els.textPop.hidden = true;
   textPopInfo = null;
+  // ★ 把焦点从输入框移开。否则「刚插入完文字」时焦点还落在（已隐藏的）
+  //   tipText 上，全局快捷键的 typing 保护会把 Ctrl+Z 当成"输入框内撤销"、
+  //   直接跳过编辑撤销 —— 表现为「形状能撤销、设的字不能」（真实反馈）。
+  if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
 
 function confirmTextPop() {
@@ -2547,6 +2552,15 @@ function bindToolbar() {
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
 
     if ((e.ctrlKey || e.metaKey) && !typing) {
+      // 编辑模式：撤销 / 重做 / 复制 / 粘贴 / 原地复制
+      if (editState.on) {
+        const k = e.key.toLowerCase();
+        if (k === 'z') { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); return; }
+        if (k === 'y') { e.preventDefault(); redoEdit(); return; }
+        if (k === 'c') { e.preventDefault(); copySelected(); return; }
+        if (k === 'v') { e.preventDefault(); pasteObject(); return; }
+        if (k === 'd') { e.preventDefault(); duplicateSelected(); return; }
+      }
       if (e.key === 'o') { e.preventDefault(); els.filePicker.click(); return; }
       if (e.key === '=' || e.key === '+') { e.preventDefault(); stepZoom(1); return; }
       if (e.key === '-') { e.preventDefault(); stepZoom(-1); return; }
@@ -2648,7 +2662,7 @@ function cacheAllEls() {
     'selMenu', 'annotPop', 'apTag', 'apText', 'apNote', 'apSave', 'apCancel', 'apDelete',
     // 编辑模式
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
-    'editColorValue', 'btnEditUndo', 'btnEditClear', 'btnExportPdf',
+    'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
     'objBar', 'objBarName', 'objBarFront', 'objBarBack', 'objBarDel',

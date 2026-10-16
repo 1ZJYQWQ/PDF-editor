@@ -136,6 +136,7 @@ export async function loadEdits(docId) {
   editState.objects = [];
   editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
   editState.selectedId = null;
+  resetHistory();                       // 新文档：历史从零开始
   if (!docId) { editState.dirty = false; return; }
   try {
     const data = await api(`/api/edits?doc=${encodeURIComponent(docId)}`);
@@ -194,12 +195,151 @@ function updateSaveHint() {
 }
 
 /* --------------------------------------------------------------------------
+   撤销 / 重做（对象 + 页面的快照栈）
+   -------------------------------------------------------------------------- */
+
+const MAX_HISTORY = 60;
+const history = { past: [], future: [] };
+let lastSnap = null;
+let histTimer = null;
+
+/* 快照：**剔除渲染缓存字段** _norm / _box。
+   它们记的是旧坐标，留着的话恢复后 renderObjectEl 会直接用旧缓存、
+   渲染停在旧位置（与 updateObject 里作废 _norm 是同一个坑）。 */
+function takeSnapshot() {
+  const objects = editState.objects.map(o => {
+    const c = { ...o };
+    delete c._norm;
+    delete c._box;
+    return c;
+  });
+  return JSON.stringify({ objects, pages: editState.pages });
+}
+
+/* 首次改动**之前**建立基线 —— 把「改动前」的状态记进 lastSnap。
+   没有它，第一次 commitHistory 只会把 lastSnap 从 null 填成"改动后"，
+   于是**第一个操作永远撤不掉**。放在每个改动入口调用，就不依赖
+   setEditMode 的执行时机了（更稳）。 */
+function ensureHistoryBaseline() {
+  if (lastSnap === null) lastSnap = takeSnapshot();
+}
+
+/* 清空历史。★ 只在**打开新文档**时调用；
+   绝不要在「进出编辑模式」时调（那会让用户切一下模式就丢掉全部撤销能力）。 */
+function resetHistory() {
+  history.past = [];
+  history.future = [];
+  lastSnap = null;
+  syncHistoryButtons();
+}
+
+function commitHistory() {
+  if (histTimer) { clearTimeout(histTimer); histTimer = null; }
+  const cur = takeSnapshot();
+  if (lastSnap === null) { lastSnap = cur; return; }
+  if (cur === lastSnap) return;
+  history.past.push(lastSnap);
+  if (history.past.length > MAX_HISTORY) history.past.shift();
+  history.future.length = 0;
+  lastSnap = cur;
+  syncHistoryButtons();
+}
+
+/* 延迟提交：把一串连续操作（一次拖动 = 多帧 update）合并成**一条**历史。
+   撤销前会强制 flush，所以即使操作后立刻 Ctrl+Z 也不会丢。 */
+export function scheduleHistory() {
+  if (histTimer) clearTimeout(histTimer);
+  histTimer = setTimeout(commitHistory, 350);
+}
+
+function restoreSnapshot(json) {
+  const s = JSON.parse(json);
+  editState.objects = Array.isArray(s.objects) ? s.objects : [];
+  editState.pages = s.pages || { order: null, delete: [], rotate: {}, insert: [] };
+  editState.selectedId = null;
+  lastSnap = takeSnapshot();
+  scheduleSave();
+  repaintEdits();
+  refreshPagePanel();
+  syncHistoryButtons();
+}
+
+export function undoEdit() {
+  commitHistory();                                   // 先把未提交的改动并进历史
+  if (!history.past.length) { toast('没有可撤销的操作', 1200); return; }
+  history.future.push(takeSnapshot());
+  restoreSnapshot(history.past.pop());
+  toast('已撤销', 900);
+}
+
+export function redoEdit() {
+  commitHistory();
+  if (!history.future.length) { toast('没有可重做的操作', 1200); return; }
+  history.past.push(takeSnapshot());
+  restoreSnapshot(history.future.pop());
+  toast('已重做', 900);
+}
+
+function syncHistoryButtons() {
+  if (els.btnEditUndo) els.btnEditUndo.disabled = !history.past.length;
+  if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
+}
+
+/* --------------------------------------------------------------------------
+   复制 / 粘贴（内部剪贴板，不占用系统剪贴板，免得和「复制所选文字」打架）
+   -------------------------------------------------------------------------- */
+
+let clipboard = null;
+
+function cloneObj(o) {
+  const c = JSON.parse(JSON.stringify(o));
+  delete c._norm;
+  delete c._box;
+  return c;
+}
+
+export function copySelected() {
+  const o = editState.objects.find(x => x.id === editState.selectedId);
+  if (!o) { toast('先选中一个对象再复制', 1500); return; }
+  clipboard = cloneObj(o);
+  toast('已复制对象（Ctrl+V 粘贴）', 1400);
+}
+
+export function duplicateSelected() {
+  const o = editState.objects.find(x => x.id === editState.selectedId);
+  if (!o) { toast('先选中一个对象', 1500); return; }
+  pasteObj(cloneObj(o));
+}
+
+export function pasteObject() {
+  if (!clipboard) { toast('剪贴板为空（先选中对象按 Ctrl+C）', 1800); return; }
+  pasteObj(cloneObj(clipboard));
+}
+
+/* 粘到**当前页**，向右下偏移一点，免得和原件完全重叠、看起来没反应 */
+function pasteObj(base) {
+  const D = 14;
+  const o = { ...base, id: uid(), page: state.currentPage };
+  o.x += D;
+  o.y -= D;                                        // PDF 的 y 向上：减 = 往下
+  if (o.x2 !== undefined && o.x2 !== null) { o.x2 += D; o.y2 -= D; }
+  editState.objects.push(o);
+  editState.selectedId = o.id;
+  scheduleHistory();
+  scheduleSave();
+  repaintEdits();
+  toast('已粘贴对象', 900);
+}
+
+/* --------------------------------------------------------------------------
    对象的增删改
    -------------------------------------------------------------------------- */
 
 export function addObject(obj) {
+  ensureHistoryBaseline();
   const item = { id: uid(), ...obj };
   editState.objects.push(item);
+  scheduleHistory();
   scheduleSave();
   repaintEdits();
   return item;
@@ -208,8 +348,10 @@ export function addObject(obj) {
 export function removeObject(id) {
   const i = editState.objects.findIndex(o => o.id === id);
   if (i < 0) return false;
+  ensureHistoryBaseline();
   editState.objects.splice(i, 1);
   if (editState.selectedId === id) editState.selectedId = null;
+  scheduleHistory();
   scheduleSave();
   repaintEdits();
   return true;
@@ -218,11 +360,13 @@ export function removeObject(id) {
 export function updateObject(id, patch) {
   const obj = editState.objects.find(o => o.id === id);
   if (!obj) return false;
+  ensureHistoryBaseline();
   Object.assign(obj, patch);
   // ★ 渲染缓存必须作废。_norm 是「避免反复换算」的缓存，
   //   位置一变还留着它，渲染就会停在**旧位置**（拖动时踩过这个坑）。
   //   作废后 renderObjectEl 会从 x/y/w/h 重算，结果一致、不会漂。
   if (!('_norm' in patch)) obj._norm = null;
+  scheduleHistory();
   scheduleSave();
   repaintEdits();
   return true;
@@ -231,6 +375,7 @@ export function updateObject(id, patch) {
 export function clearAllObjects() {
   editState.objects = [];
   editState.selectedId = null;
+  scheduleHistory();
   scheduleSave();
   repaintEdits();
 }
@@ -926,6 +1071,16 @@ export function setEditMode(on) {
   syncToolButtons();
   repaintEdits();
   if (editState.on) {
+    // ★ 进入编辑模式时建立历史**基线**（= 当前状态）。
+    //   否则第一次 commitHistory 只会把 lastSnap 从 null 填成"操作后"的状态，
+    //   没留下"操作前"可回退 —— 表现为**第一个操作永远撤不掉**
+    //   （真实反馈：插入一段文字后 Ctrl+Z 没反应）。
+    // ★ 这里**不要清空历史** —— 历史应当跨「进出编辑模式」保留。
+    //   否则退出编辑模式再进来，之前做的操作就全撤不掉了（真实反馈：
+    //   "不退出编辑模式能撤销，退出后就不行"）。
+    //   只在基线缺失时补一次（首次操作时 ensureHistoryBaseline 也会兜底）。
+    if (lastSnap === null) lastSnap = takeSnapshot();
+    syncHistoryButtons();
     refreshPagePanel();
     toast('编辑模式：拖拽绘制，点选可删除', 2200);
   }
@@ -993,14 +1148,8 @@ export function bindEditUI() {
     }
   });
 
-  els.btnEditUndo && els.btnEditUndo.addEventListener('click', () => {
-    const last = editState.objects.pop();
-    if (!last) { toast('没有可撤销的对象', 1400); return; }
-    if (editState.selectedId === last.id) editState.selectedId = null;
-    scheduleSave();
-    repaintEdits();
-    toast('已撤销上一个对象', 1200);
-  });
+  els.btnEditUndo && els.btnEditUndo.addEventListener('click', undoEdit);
+  els.btnEditRedo && els.btnEditRedo.addEventListener('click', redoEdit);
 
   els.btnExportPdf && els.btnExportPdf.addEventListener('click', exportPdf);
 

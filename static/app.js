@@ -688,6 +688,8 @@ function rotate() {
   if (!state.pdf) return;
   state.rotation = (state.rotation + 90) % 360;
   applyScale(state.scaleMode === 'auto' ? 'auto' : state.scaleMode);
+  // ★ 缩略图是按 state.rotation 渲染的，旋转后必须重建（buildThumbs 会清缓存）
+  buildThumbs();
   toast(`旋转 ${state.rotation}°`, 1200);
 }
 
@@ -784,6 +786,10 @@ let thumbObserver = null;
 async function buildThumbs() {
   const box = els.thumbList;
   box.innerHTML = '';
+  // ★ 缩略图 DOM 刚被清空重建，缓存必须同步清掉 ——
+  //   否则切换文档后，"第 N 页已渲染"的记忆还在，编号相同的缩略图
+  //   会被直接跳过，表现为新文档缩略图大片空白。
+  thumbCache.clear();
   if (!state.pdf) return;
   if (thumbObserver) thumbObserver.disconnect();
 
@@ -802,10 +808,15 @@ async function buildThumbs() {
   // 缩略图本身也懒加载
   thumbObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
-      if (e.isIntersecting) {
-        renderThumb(parseInt(e.target.dataset.page, 10));
-        thumbObserver.unobserve(e.target);
-      }
+      if (!e.isIntersecting) continue;
+      const n = parseInt(e.target.dataset.page, 10);
+      // ★ 只有**渲染成功**才解除观察。
+      //   此前是无条件 unobserve —— 一旦某页渲染失败（该页字体异常，
+      //   或被快速滚动取消渲染），它就再也得不到重试机会，缩略图永久
+      //   定格为空白：即"缩略图偶尔发癫"的根因。
+      renderThumb(n)
+        .then(ok => { if (ok) thumbObserver.unobserve(e.target); })
+        .catch(() => { /* 保留观察，下次进入视野再试 */ });
     }
   }, { root: els.sideBody, rootMargin: '200px 0px' });
 
@@ -815,9 +826,10 @@ async function buildThumbs() {
 const thumbCache = new Map();
 
 async function renderThumb(num) {
-  if (!state.pdf || thumbCache.has(num)) return;
+  // 返回 true = 已渲染/无需再渲染（可解除观察）；false = 失败（保留观察重试）
+  if (!state.pdf || thumbCache.has(num)) return true;
   const btn = els.thumbList.querySelector(`.thumb[data-page="${num}"]`);
-  if (!btn) return;
+  if (!btn) return false;
   const holder = btn.querySelector('.thumb-img');
 
   try {
@@ -841,12 +853,17 @@ async function renderThumb(num) {
     }).promise;
 
     thumbCache.set(num, true);
-    if (!btn.isConnected) return;
+    if (!btn.isConnected) return true;
     const ph = holder.querySelector('.thumb-ph');
     if (ph) ph.remove();
     holder.appendChild(canvas);
+    return true;
   } catch (err) {
-    if (err?.name !== 'RenderingCancelledException') console.warn('缩略图失败', num, err);
+    // ★ 失败**不**写入 thumbCache —— 这样它下次进入视野时会被重试
+    if (err && err.name !== 'RenderingCancelledException') {
+      console.warn('缩略图渲染失败（下次可见时重试）', num, err);
+    }
+    return false;
   }
 }
 

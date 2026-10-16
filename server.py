@@ -1155,6 +1155,33 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = (os.name != "nt")
 
 
+def run_startup_check():
+    """
+    启动时跑一遍前端静态自检（check.py）。
+
+    为什么放进启动流程：前端有低级错误（漏 import、DOM id 写错、
+    CSS 盖掉 [hidden]、.ed-text 被裁等）时，浏览器里往往只表现为
+    "白屏"或"某个按钮没反应"，要开控制台才看得到。启动时先自检一遍，
+    问题第一时间暴露在**服务端控制台**。
+
+    失败只**警告**，不阻止启动 —— 自检是开发期门禁，不该拦住服务。
+    可用 --no-check 跳过。
+    """
+    try:
+        import check  # 同目录的 check.py
+    except Exception:  # noqa: BLE001
+        return  # 没有 check.py（精简部署）：静默跳过
+    try:
+        rc = check.main()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  前端自检无法运行：{exc}")
+        return
+    if rc:
+        print()
+        print("  ⚠ 前端自检发现问题（见上）。不阻止启动，")
+        print("    但页面可能异常，建议先修复；或用 --no-check 跳过自检。")
+
+
 def main():
     global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR
 
@@ -1164,6 +1191,8 @@ def main():
     ap.add_argument("--port", type=int, default=8000, help="监听端口，默认 8000")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机")
     ap.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    ap.add_argument("--no-check", action="store_true",
+                    help="启动时跳过前端静态自检（check.py）")
     # 可写目录重定向：**测试必须用它们**，否则测试会往用户真实的
     # exports/ edits/ annotations/ 里写东西（导出文件、编辑数据）。
     ap.add_argument("--export-dir", default=None,
@@ -1189,6 +1218,10 @@ def main():
         print("请用 --dir 指定存放 PDF 的文件夹，例如：")
         print("  python server.py --dir D:\\我的PDF")
         return 1
+
+    # ---- 启动自检（开发期门禁；--no-check 可跳过）----
+    if not args.no_check:
+        run_startup_check()
 
     # ---- 先绑定，再打印，再开浏览器 ----
     # 原来的顺序是反的：先打印 URL、先开浏览器，最后才 bind ——

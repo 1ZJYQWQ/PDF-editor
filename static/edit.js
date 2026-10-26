@@ -402,9 +402,10 @@ export function repaintEdits() {
     if (!rec.rendered) continue;
     paintPageEdits(rec);
   }
-  // 所有对象变更都会经过这里，顺带刷新涂黑计数
+  // 所有对象变更都会经过这里，顺带刷新涂黑 / 替换计数
   // （不在每个 add/remove 里各写一遍，避免漏掉某条路径）
   syncRedactCount();
+  syncReplaceCount();
 }
 
 export function paintPageEdits(rec) {
@@ -548,6 +549,17 @@ function renderObjectEl(obj, rec, isTemp = false) {
     // ★ 必须放在**最后**：上面按矩形算出来的宽高对文字是 1px，会把文字裁没。
     //   数据层里文字只有锚点（w/h = 0），盒子要按内容自适应。
     makeTextBoxAuto(el);
+  } else if (obj.kind === 'replace') {
+    // 原位替换：视觉上画成**琥珀色虚线框 + 半透明底**，与涂黑的红色区分。
+    // 框内显示「将要写入的新文字」预览 —— 让用户落地前就能看到替换结果，
+    // 也避免「框画了却不知道要替换成什么」。底色不是实心，提示"尚未导出"。
+    el.style.border = '1.5px dashed #d97706';
+    el.style.background = 'rgba(217, 119, 6, 0.12)';
+    el.classList.add('ed-replace');
+    const t = document.createElement('span');
+    t.className = 'ed-replace-text';
+    t.textContent = obj.text || '';
+    el.appendChild(t);
   }
 
   if (!isTemp && editState.selectedId === obj.id) {
@@ -558,7 +570,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
 
 /* 可缩放的对象类型：有矩形尺寸的那些。
    文字是锚点（w/h = 0）、直线是两端点 —— 缩放语义不同，先不纳入。 */
-const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact']);
+const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact', 'replace']);
 
 /*
   在选中对象的四角画缩放手柄。
@@ -862,28 +874,33 @@ export async function exportPdf() {
 
   const payload = buildExportPayload();
   const nRedact = redactCount();
+  const nReplace = replaceCount();
+  const hasSpecial = nRedact > 0 || nReplace > 0;
 
   if (!hasAnyEdit(payload)) {
-    // 可能什么都没画，也可能**只画了涂黑** —— 后者必须说清楚，
+    // 可能什么都没画，也可能**只画了涂黑 / 替换** —— 后者必须说清楚，
     // 否则用户会盯着"还没有任何编辑内容"发懵。
-    toast(nRedact > 0
-      ? '涂黑不参与「导出 PDF」，请点「涂黑并另存为…」'
-      : '还没有任何编辑内容', nRedact > 0 ? 3000 : 1800);
+    toast(hasSpecial
+      ? '涂黑 / 替换 不参与「导出 PDF」，请点对应的「并另存为…」'
+      : '还没有任何编辑内容', hasSpecial ? 3000 : 1800);
     return;
   }
 
-  // ★ 防呆：画了涂黑却点了「导出 PDF」。
-  //   普通导出是**叠加式**的，删不掉底层文字，所以涂黑**不会**被包含 ——
-  //   用户极易误点这个按钮，然后以为"已经涂黑了"（实际一个字都没删）。
+  // ★ 防呆：画了涂黑 / 替换却点了「导出 PDF」。
+  //   普通导出是**叠加式**的，不会删除底层文字、也不会改写文字，
+  //   所以这些操作**不会**被包含 —— 用户极易误点这个按钮。
   //   项目最怕的正是这种「假安全」，所以这里显式拦一道。
-  if (nRedact > 0) {
+  if (hasSpecial) {
+    const parts = [];
+    if (nRedact > 0) parts.push(`涂黑 ${nRedact} 处`);
+    if (nReplace > 0) parts.push(`替换 ${nReplace} 处`);
     const ok = confirm(
-      `你画了 ${nRedact} 处涂黑区域，但「导出 PDF」不包含涂黑。\n\n` +
-      `· 继续导出：仅导出其它编辑内容，涂黑区域里的文字不会被删除。\n` +
-      `· 要真正涂黑：请取消，改用「涂黑并另存为…」。\n\n确定继续导出吗？`
+      `你画了 ${parts.join('、')}，但「导出 PDF」不包含这些操作。\n\n` +
+      `· 继续导出：仅导出其它编辑内容，这些区域不会被处理。\n` +
+      `· 要真正执行：请取消，改用对应的「并另存为…」。\n\n确定继续导出吗？`
     );
     if (!ok) {
-      toast('已取消。要涂黑请点「涂黑并另存为…」', 2800);
+      toast('已取消。要执行请点对应的「并另存为…」', 2800);
       return;
     }
   }
@@ -1053,6 +1070,104 @@ export async function redactPdf() {
 }
 
 /* --------------------------------------------------------------------------
+   原位替换（in-place text replace）—— 与涂黑平行的独立路径
+
+   为什么也独立：替换要「重写原文内容流」，风险等级高于普通叠加编辑
+   （普通导出是不破坏原文的）。但它**不销毁信息**（只是改写、且只另存为），
+   所以不像涂黑那样需要二次危险确认；与导出一样走一键，但必须走
+   专用的 /api/replace，绝不能混进普通 /api/export（否则位置/字体对不上）。
+   -------------------------------------------------------------------------- */
+
+/* 取当前所有替换区域（转成 PDF 坐标，附带要写入的新文字） */
+export function replaceRegions() {
+  return editState.objects
+    .filter(o => o.kind === 'replace')
+    .map(o => {
+      const x = Number(o.x) || 0;
+      const y = Number(o.y) || 0;
+      const w = Number(o.w) || 0;
+      const h = Number(o.h) || 0;
+      return { page: o.page, x, y, w, h, text: (o.text || '').toString() };
+    })
+    .filter(r => r.w > 0 && r.h > 0 && r.text.trim());
+}
+
+export function replaceCount() {
+  return replaceRegions().length;
+}
+
+export async function replacePdf() {
+  if (!state.filePath) {
+    toast('请先打开一个文档', 1600);
+    return;
+  }
+
+  const regions = replaceRegions();
+  if (!regions.length) {
+    toast('还没有替换区域，先用「替换」工具框住要改的文字并输入新文字', 3000);
+    return;
+  }
+
+  const btn = els.btnReplacePdf;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+
+  try {
+    const r = await fetch('/api/replace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: state.filePath,
+        replacements: regions,
+        // 明确声明不覆盖原文件（服务端也会强制拒绝覆盖请求）
+        overwrite: false,
+      }),
+    });
+
+    if (!r.ok) {
+      let msg = `替换失败 (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j.error) msg = j.error;
+      } catch (e) { /* 忽略 */ }
+      throw new Error(msg);
+    }
+
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    let name = `${state.fileName}-已替换.pdf`;
+    const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    if (m) {
+      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+    const glyphs = r.headers.get('X-Replace-Glyphs') || '0';
+    const pages = r.headers.get('X-Replace-Pages') || '0';
+    toast(`替换完成：${pages} 页，改写 ${glyphs} 个字形`, 4200);
+  } catch (e) {
+    toast(e.message || '替换失败', 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  }
+}
+
+/* 更新替换区域计数显示 */
+export function syncReplaceCount() {
+  const el = els.replaceCount;
+  if (!el) return;
+  const n = replaceCount();
+  el.textContent = `${n} 处`;
+  const btn = els.btnReplacePdf;
+  if (btn) btn.disabled = n === 0;
+}
+
+/* --------------------------------------------------------------------------
    模式切换
    -------------------------------------------------------------------------- */
 
@@ -1167,7 +1282,11 @@ export function bindEditUI() {
     if (e.target === els.redactConfirm) closeRedactConfirm();
   });
 
+  // ---- 原位替换 ----
+  els.btnReplacePdf && els.btnReplacePdf.addEventListener('click', replacePdf);
+
   syncRedactCount();
+  syncReplaceCount();
 }
 
 /* 更新涂黑区域计数显示 */

@@ -126,7 +126,7 @@ export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
 */
 export function payloadObjects(objects) {
   return objects
-    .filter(o => o.kind !== 'redact')
+    .filter(o => o.kind !== 'redact' && o.kind !== 'replace')
     .map(o => {
       const out = { ...o };
       // 内部字段不下发：_norm/_box 是渲染缓存，id 是本地标识

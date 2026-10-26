@@ -657,7 +657,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         if route not in ("/api/annotations", "/api/edits", "/api/export",
-                         "/api/redact"):
+                         "/api/redact", "/api/replace"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -678,6 +678,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_edits(payload)
         if route == "/api/redact":
             return self._post_redact(payload)
+        if route == "/api/replace":
+            return self._post_replace(payload)
         return self._post_export(payload)
 
     # ---- POST: 标注 ----
@@ -885,6 +887,94 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Redact-Outline",
                          str(result.get("outline_titles_cleaned", 0)))
         self.send_header("X-Redact-Dropped", str(dropped))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # ---- POST: 原位替换（改 PDF 里已有的文字，另存为） ----
+
+    def _post_replace(self, payload):
+        """
+        把 PDF 里**已有**的文字改成新文字，产出新 PDF 供下载。
+
+        与涂黑一样**只另存为**，绝不写回原文件；零命中（矩形没框到字）
+        同样报错不产文件 —— 否则用户以为改到了、实际没动。
+        """
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(
+                400, "原位替换不允许覆盖原文件，只支持另存为")
+
+        try:
+            real = os.path.realpath(src)
+            if not os.path.isfile(real):
+                return self.send_error_json(404, "源文件不存在")
+            if not is_within(real, SCAN_DIRS):
+                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        # 解析替换项：坐标已是 PDF 系（原点左下、y 向上），由前端翻转好
+        replacements = []
+        for r in payload.get("replacements") or []:
+            try:
+                item = {
+                    "page": int(r.get("page")),
+                    "x": float(r.get("x")), "y": float(r.get("y")),
+                    "w": float(r.get("w")), "h": float(r.get("h")),
+                    "text": str(r.get("text") or ""),
+                }
+            except (TypeError, ValueError):
+                continue
+            if item["w"] <= 0 or item["h"] <= 0 or not item["text"]:
+                continue
+            replacements.append(item)
+        if not replacements:
+            return self.send_error_json(400, "没有有效的替换区域")
+
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
+            os.path.basename(real))[0])
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        out_name = f"{stem}-已替换-{stamp}.pdf"
+        out_path = os.path.join(EXPORT_DIR, out_name)
+
+        try:
+            with _edit_lock:
+                result = pdfredact.apply_text_replace(
+                    real, out_path, replacements)
+        except ValueError as exc:
+            return self.send_error_json(400, f"替换失败: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            return self.send_error_json(500, f"替换失败: {exc}")
+
+        # 零命中：不进文件，直接报错
+        if result.get("replaced_glyphs", 0) <= 0:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(
+                409,
+                "所选区域没有覆盖到任何文字，可能位置不对。"
+                "请调整选区，确认框住要修改的内容后再试")
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, f"读取输出文件失败: {exc}")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+        self.send_header("X-Replace-Pages", str(result.get("pages_replaced", 0)))
+        self.send_header("X-Replace-Glyphs", str(result.get("replaced_glyphs", 0)))
         self.end_headers()
         self.wfile.write(body)
 

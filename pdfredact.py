@@ -112,10 +112,10 @@ class GlyphBox:
     """一个字形的包围盒（已变换到页面坐标）。"""
 
     __slots__ = ("x0", "y0", "x1", "y1", "op_index", "char_index", "code",
-                 "font_alias")
+                 "font_alias", "font_size")
 
     def __init__(self, x0, y0, x1, y1, op_index=-1, char_index=0, code=-1,
-                 font_alias=""):
+                 font_alias="", font_size=12.0):
         # 保证 x0<=x1 / y0<=y1，避免变换后反转导致判定出错
         self.x0 = min(x0, x1)
         self.x1 = max(x0, x1)
@@ -130,6 +130,8 @@ class GlyphBox:
         # 否则还原文本时只能瞎猜。
         self.code = code
         self.font_alias = font_alias
+        # 字号：原位替换写新字时需要和原文同字号，保证视觉一致。
+        self.font_size = font_size
 
     def intersects(self, rect):
         """与矩形是否有交叠（用严格不等，仅共边不算交叠）。"""
@@ -620,7 +622,7 @@ class ContentStreamInterpreter:
             ys = [c[1] for c in corners]
             self.glyphs.append(GlyphBox(
                 min(xs), min(ys), max(xs), max(ys), op_index, char_index,
-                code, gs.font_alias or ""))
+                code, gs.font_alias or "", gs.font_size or 12.0))
             char_index += 1
 
             # 前进：字符宽度 + 字距（词间再加词距）。
@@ -1439,6 +1441,137 @@ def apply_redactions(src_path, out_path, redactions, clean_meta=True):
         "dropped_objects": dropped_objs,
         "details": stats,
     }
+
+
+def apply_text_replace(src_path, out_path, replacements, clean_meta=True):
+    """
+    原位替换：把 PDF 里**已有**的文字改成新文字。
+
+    与 redaction 的区别：redaction 是「销毁」（删字 + 黑块 + 清理泄漏面）；
+    这里是「改写」—— 删掉被选中的原文，在**原基线位置**用嵌入字体写新字。
+
+    replacements: [
+        {"page": 1, "x": 72.0, "y": 640.0, "w": 300.0, "h": 24.0, "text": "新"},
+        ...
+    ] 坐标是 PDF 坐标系（原点左下、y 向上）。
+
+    返回统计（含每页替换的字形数）。任意一条替换区域零命中会抛
+    ValueError（和 redaction 一致：用户以为改到了，实际没框到字，必须报错）。
+    """
+    from pdfedit import (ContentBuilder, build_cjk_font, build_pdf,
+                         has_non_latin, _attach_font_resource)
+
+    with open(src_path, "rb") as fp:
+        data = fp.read()
+    doc = PDFDocument.load(data)
+    if not doc.pages_ref:
+        raise ValueError("无法定位页面树，文件可能不是标准 PDF")
+    refs = doc.page_refs()
+
+    per_page = {}
+    for r in replacements:
+        try:
+            pno = int(r.get("page", 1))
+            x = float(r.get("x", 0)); y = float(r.get("y", 0))
+            w = float(r.get("w", 0)); h = float(r.get("h", 0))
+            txt = str(r.get("text") or "")
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0 or not txt:
+            continue
+        if not (1 <= pno <= len(refs)):
+            continue
+        per_page.setdefault(pno - 1, []).append(
+            ((x, y, x + w, y + h), txt))
+
+    if not per_page:
+        raise ValueError("没有有效的替换区域")
+
+    stats = []
+    total_replaced = 0
+    for pidx, items in per_page.items():
+        pref = refs[pidx]
+        content = read_page_content(doc, pref)
+        resources = doc.resolve(doc.inherited(pref, "Resources"))
+
+        # 每个字体别名对应的「字符码宽度」（CID=2 / 简单=1），删除粒度需要
+        font_bytes = {}
+        if isinstance(resources, dict):
+            fonts = doc.resolve(resources.get("Font"))
+            if isinstance(fonts, dict):
+                for alias, fref in fonts.items():
+                    try:
+                        info = FontInfo(doc, doc.resolve(fref))
+                        font_bytes[str(alias)] = info.code_bytes
+                    except Exception:
+                        font_bytes[str(alias)] = 1
+
+        glyphs = []
+        if content.strip():
+            interp = ContentStreamInterpreter(doc, resources)
+            interp.run(content)
+            glyphs = interp.glyphs
+
+        # 合并本页所有替换区域的命中，一次删除；每条替换单独记 anchor 写新字
+        all_killed = set()
+        anchors = []          # [(GlyphBox, new_text), ...]
+        for rect, txt in items:
+            hit = [g for g in glyphs if g.intersects(rect)]
+            if not hit:
+                raise ValueError("第 %d 页的替换区域没有框到任何文字"
+                                 % (pidx + 1))
+            all_killed |= {(g.op_index, g.char_index) for g in hit}
+            anchor = min(hit, key=lambda g: (g.op_index, g.char_index))
+            anchors.append((anchor, txt))
+
+        # 删原文（整字）→ 删后流
+        del_content = _rewrite_text(content, all_killed, font_bytes)
+
+        # 汇总本页新字字符，只子集化一次中文字体
+        all_text = "".join(txt for _, txt in anchors)
+        cjk_ref = cjk_subset = None
+        if has_non_latin(all_text):
+            cjk_ref, cjk_subset = build_cjk_font(
+                doc, {ord(c) for c in all_text})
+
+        # 用一个 builder 写本页所有新字（多次 text 各自 BT/ET），字体统一挂
+        new_builder = ContentBuilder()
+        if cjk_subset is not None:
+            new_builder.set_cid_font(cjk_ref, cjk_subset)
+        for anchor, txt in anchors:
+            # y0 是字形包围盒底边；PDF 的 Td 定位的是**基线**，必须上移约一个字降。
+            # 用 0.2·字号 近似字降（latin ~0.20em、CJK ~0.10em，取折中），
+            # 让新字竖向落在原字所在的「行带」里，而不是沉到盒子底部。
+            anchor_baseline = anchor.y0 + 0.2 * (anchor.font_size or 12.0)
+            new_builder.text(anchor.x0, anchor_baseline, txt,
+                            anchor.font_size or 12.0, (0, 0, 0))
+        new_stream_bytes = new_builder.to_bytes()
+
+        # 组装该页 /Contents = [删后流, 新字流]（追加模式）
+        # 原内容流已被「删后流」完全替代，从对象表里丢弃（和 redaction 一致）
+        old_streams = _collect_content_refs(doc, pref)
+        page = doc.resolve(pref)
+        new_refs = [
+            doc.new_obj(({"Length": len(del_content)}, del_content)),
+            doc.new_obj(({"Length": len(new_stream_bytes)}, new_stream_bytes)),
+        ]
+        if isinstance(page, dict):
+            page["Contents"] = new_refs
+        # 把用到的字体资源挂到本页（CID 嵌入字体 + 标准 14 字体）
+        fr = new_builder.font_resources()
+        if fr:
+            _attach_font_resource(doc, pref, fr)
+        _drop_objects(doc, old_streams)
+
+        replaced = len(all_killed)
+        total_replaced += replaced
+        stats.append({"page": pidx + 1, "replaced_glyphs": replaced,
+                      "items": len(anchors)})
+
+    size = build_pdf(doc, {}, out_path)
+    return {"ok": True, "size": size, "pages": len(refs),
+            "pages_replaced": len(stats),
+            "replaced_glyphs": total_replaced, "details": stats}
 
 
 def _collect_content_refs(doc, page_ref):

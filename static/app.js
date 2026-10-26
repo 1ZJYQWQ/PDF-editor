@@ -1410,7 +1410,7 @@ function showObjBar(rec, obj) {
   if (!obj) { hideObjBar(); return; }
 
   const names = { whiteout: '涂白块', text: '文字', rect: '矩形',
-                  ellipse: '椭圆', line: '直线' };
+                  ellipse: '椭圆', line: '直线', replace: '替换文字' };
   if (els.objBarName) els.objBarName.textContent = names[obj.kind] || '对象';
   objBarId = obj.id;
 
@@ -1470,9 +1470,15 @@ function onEditDoubleClick(e) {
   const rec = pageAt(e.clientX, e.clientY);
   if (!rec) return;
   const obj = hitTest(rec, e.clientX, e.clientY);
-  if (!obj || obj.kind !== 'text') return;
-  e.preventDefault();
-  openTextPop(rec, e.clientX, e.clientY, obj);
+  if (!obj) return;
+  if (obj.kind === 'text') {
+    e.preventDefault();
+    openTextPop(rec, e.clientX, e.clientY, obj);
+  } else if (obj.kind === 'replace') {
+    // 双击替换框 → 改要替换成的新文字
+    e.preventDefault();
+    openReplacePop(obj, e.clientX, e.clientY);
+  }
 }
 
 /* 编辑层的鼠标按下 */
@@ -1697,13 +1703,19 @@ function onEditMouseUp(e) {
   }
 
   editState.tempShape = null;
-  addObject(obj);
+  const created = addObject(obj);
   // ★ 画完自动切到「选择」工具并选中它 —— 这样四角缩放手柄立刻出现，
   //   用户能马上调整大小/位置；否则得手动切工具才看得到手柄（易被当成"没做"）。
   setTool('select');
-  editState.selectedId = obj.id;
-  showObjBar(rec, obj);
+  editState.selectedId = created.id;
+  showObjBar(rec, created);
   repaintEdits();
+  // 替换：框完立刻弹输入框让用户填新文字（和「文字」工具单击弹框一个思路）
+  if (tool === 'replace') {
+    toast('已框选替换区域，请输入要替换成的新文字', 2600);
+    openReplacePop(created, e.clientX, e.clientY);
+    return;
+  }
   const label = { whiteout: '涂白', rect: '矩形', ellipse: '椭圆',
                   line: '直线', redact: '涂黑区域' }[tool] || '对象';
   // 涂黑只标记区域，真正的销毁在点「涂黑并另存为」时发生 ——
@@ -1809,6 +1821,52 @@ function confirmTextPop() {
 
   closeTextPop();
   toast('已添加文字', 1100);
+}
+
+/* ---- 原位替换文字输入浮层 ---- */
+
+let replacePopInfo = null;   // 替换文字输入浮层的上下文
+
+function openReplacePop(obj, clientX, clientY) {
+  const pop = els.replaceTextPop;
+  if (!pop) return;
+
+  replacePopInfo = { id: obj.id };
+
+  pop.hidden = false;
+  if (els.replaceText) els.replaceText.value = obj.text || '';
+
+  // fixed 定位：直接用视口坐标（clientX/clientY），与文字浮层一致
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = Math.max(8, Math.min(clientX, vw - 250));
+  let top = clientY;
+  if (top + 180 > vh) top = Math.max(8, vh - 190);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+
+  setTimeout(() => els.replaceText && els.replaceText.focus(), 30);
+}
+
+function closeReplacePop() {
+  if (els.replaceTextPop) els.replaceTextPop.hidden = true;
+  replacePopInfo = null;
+  // ★ 把焦点从输入框移开，避免刚确认完焦点还落在（已隐藏的）输入框上，
+  //   全局快捷键的 typing 保护会把接下来的快捷键当成"输入框内操作"。
+  if (els.replaceText && document.activeElement === els.replaceText) els.replaceText.blur();
+}
+
+function confirmReplacePop() {
+  if (!replacePopInfo) return;
+  const txt = (els.replaceText && els.replaceText.value || '').trim();
+  const { id } = replacePopInfo;
+  if (!txt) {
+    toast('替换文字不能为空', 1800);
+    return;
+  }
+  updateObject(id, { text: txt });
+  closeReplacePop();
+  toast('已设置替换文字', 1100);
 }
 
 /* 应用标注：sel 为已固化的选区快照 */
@@ -2381,6 +2439,24 @@ function bindToolbar() {
     closeTextPop();
   }, true);
 
+  // 原位替换浮层
+  if (els.replaceOk) els.replaceOk.addEventListener('click', confirmReplacePop);
+  if (els.replaceCancel) els.replaceCancel.addEventListener('click', closeReplacePop);
+  if (els.replaceText) {
+    els.replaceText.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeReplacePop(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault(); confirmReplacePop();
+      }
+    });
+  }
+  // 点击浮层外区域关闭（替换文字浮层）
+  document.addEventListener('mousedown', (e) => {
+    if (!els.replaceTextPop || els.replaceTextPop.hidden) return;
+    if (els.replaceTextPop.contains(e.target)) return;
+    closeReplacePop();
+  }, true);
+
   // 编辑对象操作条
   if (els.objBarDel) {
     els.objBarDel.addEventListener('click', () => {
@@ -2669,6 +2745,9 @@ function cacheAllEls() {
     // 涂黑
     'btnRedactPdf', 'redactCount', 'redactConfirm', 'redactConfirmStats',
     'redactCancel', 'redactOk',
+    // 原位替换
+    'btnReplacePdf', 'replaceCount', 'replaceTextPop', 'replaceText',
+    'replaceCancel', 'replaceOk',
   ]);
   els.sideBody = document.querySelector('.side-body');
 }

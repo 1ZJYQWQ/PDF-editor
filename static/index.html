@@ -237,6 +237,14 @@
           </svg>
           <em>涂黑</em>
         </button>
+        <button class="ep-tool replace" data-tool="replace"
+          title="原位替换 — 框选要改的文字，输入新文字（另存为新文件）">
+          <svg viewBox="0 0 24 24">
+            <path d="M4 8h12l-3-3M20 16H8l3 3" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <em>替换</em>
+        </button>
       </div>
 
       <div class="ep-row">
@@ -263,6 +271,17 @@
         <button class="ep-btn danger" id="btnRedactPdf"
           title="执行涂黑并另存为新文件">涂黑并另存为…</button>
       </div>
+
+      <div class="ep-row ep-redact-row ep-replace-row">
+        <span class="ep-label replace">替换</span>
+        <span class="ep-warn">
+          替换会把区域内原文改写成新文字（另存为新文件，原文件不变）
+        </span>
+        <span class="ep-gap"></span>
+        <span class="ep-redact-count" id="replaceCount">0 处</span>
+        <button class="ep-btn replace" id="btnReplacePdf"
+          title="执行原位替换并另存为新文件">替换并另存为…</button>
+      </div>
     </div>
 
     <!-- 页面管理面板 -->
@@ -282,6 +301,17 @@
         <span class="ep-gap"></span>
         <button class="tip-btn" id="tipCancel">取消</button>
         <button class="tip-btn primary" id="tipOk">确定</button>
+      </div>
+    </div>
+
+    <!-- 原位替换文字输入浮层 -->
+    <div class="text-input-pop" id="replaceTextPop" hidden>
+      <textarea class="tip-textarea" id="replaceText" rows="3"
+        placeholder="输入要替换成的新文字…（可多行）"></textarea>
+      <div class="tip-foot">
+        <span class="ep-gap"></span>
+        <button class="tip-btn" id="replaceCancel">取消</button>
+        <button class="tip-btn primary" id="replaceOk">确定</button>
       </div>
     </div>
 

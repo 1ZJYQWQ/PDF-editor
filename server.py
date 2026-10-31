@@ -1,28 +1,3 @@
-"""
-PDF Viewer - 本地服务端
-
-零第三方依赖，仅使用 Python 标准库。
-
-功能：
-  GET  /                       前端页面
-  GET  /api/files              扫描并返回 PDF 文件列表
-  GET  /api/file?path=...      流式返回 PDF 内容（支持 Range 请求）
-  GET  /api/open?path=...      用系统默认程序打开 PDF
-  GET  /api/annotations?doc=...  读取某文档的全部标注
-  POST /api/annotations        写入某文档的标注
-  GET  /api/notes?doc=...      导出该文档的标注为 Markdown
-  GET  /api/edits?doc=...      读取某文档的编辑数据
-  POST /api/edits              写入某文档的编辑数据
-  GET  /api/pdfinfo?path=...   返回 PDF 的页数与各页尺寸（供编辑模式用）
-  POST /api/export             应用编辑，产出一份新的 PDF 供下载
-POST /api/redact             执行涂黑（真正的信息销毁，不可逆）—— 只另存为
-  GET  /static/...             静态资源
-
-用法：
-  python server.py                 # 默认扫描 项目文档目录 与 用户文档目录
-  python server.py --dir D:\\PDFs   # 指定要扫描的 PDF 目录（可多次）
-  python server.py --port 8080     # 指定端口
-"""
 
 import argparse
 import hashlib
@@ -42,46 +17,29 @@ import pdfredact
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")   # 字体等资产（/assets/fonts/*.ttf）
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")   
 ANNOT_DIR = os.path.join(BASE_DIR, "annotations")
 EDIT_DIR = os.path.join(BASE_DIR, "edits")
 EXPORT_DIR = os.path.join(BASE_DIR, "exports")
 
-# 全局配置，由 main() 填充
 SCAN_DIRS = []
 PORT = 8000
-PORT_SCAN_RANGE = 20     # 端口被占用时，向后顺延尝试的个数
+PORT_SCAN_RANGE = 20     
 
-MAX_LIST = 2000          # 单次最多返回的 PDF 数量
-CHUNK = 64 * 1024        # 流式分块大小
-MAX_BODY = 8 * 1024 * 1024   # 请求体上限
+MAX_LIST = 2000          
+CHUNK = 64 * 1024        
+MAX_BODY = 8 * 1024 * 1024   
 
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
 
 
-# --------------------------------------------------------------------------
-# 工具函数
-# --------------------------------------------------------------------------
 
 def norm(path):
-    """统一路径分隔符，便于跨平台比较。"""
     return os.path.normcase(os.path.abspath(path))
 
 
 def _clean_path(path):
-    """
-    把路径规范成"可直接做包含关系比较"的形式。
-
-    两个 Windows 上的坑，必须在这里一并处理：
-      1. 用 realpath 而不是 abspath —— 只有 realpath 会解析
-         符号链接 / junction（目录联结）。用户把同步盘、下载目录
-         用 junction 挂进扫描目录时，abspath 得到的"逻辑路径"会
-         与文件的"物理路径"不一致。
-      2. 去掉扩展长度前缀 "\\\\?\\" —— os.path.realpath 在 Windows 上
-         会给结果加这个前缀（突破 260 字符限制），若只在长路径上
-         出现，比较双方一个有、一个没有，startswith 就会误判。
-    """
     p = os.path.normcase(os.path.normpath(os.path.realpath(path)))
     if p.startswith("\\\\?\\"):
         p = p[len("\\\\?\\"):]
@@ -89,16 +47,6 @@ def _clean_path(path):
 
 
 def is_within(path, roots):
-    """
-    校验 path 是否位于允许的根目录内，防止路径穿越。
-
-    用 os.path.commonpath 判断，而不是 `p.startswith(root + os.sep)`：
-      - **盘符根**以分隔符结尾（"C:\\"），再拼一个 os.sep 会得到
-        "C:\\\\"，与真实路径 "C:\\Program Files\\..." 的前缀对不上，
-        于是扫描盘符根时**所有文件**都被误判为越权（整盘 403）。
-      - commonpath 能正确处理盘符根、大小写与分隔符差异。
-      - 不同盘符时 commonpath 抛 ValueError，视为"不包含"。
-    """
     p = _clean_path(path)
     for r in roots:
         rn = _clean_path(r)
@@ -120,14 +68,12 @@ def human_size(n):
 
 
 def scan_pdfs(dirs):
-    """递归扫描目录，收集 PDF 文件信息。"""
     found = []
     seen = set()
     for root_dir in dirs:
         if not os.path.isdir(root_dir):
             continue
         for dirpath, dirnames, filenames in os.walk(root_dir):
-            # 跳过隐藏目录和常见缓存目录
             dirnames[:] = [
                 d for d in dirnames
                 if not d.startswith(".") and d.lower() not in
@@ -161,15 +107,8 @@ def scan_pdfs(dirs):
     return found
 
 
-# --------------------------------------------------------------------------
-# 文档指纹与标注存储
-# --------------------------------------------------------------------------
 
 def doc_id(path, size=None):
-    """
-    由「文件名 + 文件大小」生成稳定指纹。
-    不用完整路径，这样同一份文档换位置后标注依然能识别。
-    """
     try:
         if size is None:
             size = os.path.getsize(path)
@@ -181,7 +120,6 @@ def doc_id(path, size=None):
 
 
 def annot_path(did):
-    """标注文件路径，did 已做白名单校验。"""
     return os.path.join(ANNOT_DIR, f"{did}.json")
 
 
@@ -202,7 +140,7 @@ def load_annotations(did):
         data["ok"] = True
         data["docId"] = did
         return data
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         return {"ok": False, "error": f"读取标注失败: {exc}", "items": []}
 
 
@@ -232,34 +170,11 @@ TAG_LABEL = {
 }
 
 
-# --------------------------------------------------------------------------
-# 编辑数据存储
-#
-# 与标注分开存盘（不同目录、不同文件），理由：
-#   - 标注是"阅读痕迹"，编辑是"内容改动"，生命周期不同
-#   - 结构差异大，混在一个文件里读写都别扭
-#   - 编辑一旦出错影响面更大，独立存放便于单独清理
-#
-# 数据结构：
-#   {
-#     "pages":   { "order": [...], "delete": [...], "rotate": {...},
-#                  "insert": [...] },
-#     "objects": [ { "page":1, "kind":"whiteout", "x":.., "y":.., ... } ]
-#   }
-# 前端提交的坐标必须是 **PDF 坐标**（原点左下、y 向上），
-# 由前端完成屏幕坐标 -> PDF 坐标的翻转，服务端不做猜测。
-# --------------------------------------------------------------------------
 
 EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line"}
 
-# 批注类型（导出时写成 PDF 原生注释 /Annots，不是画进内容流）
 ANNOT_KINDS = {"highlight", "underline", "wavy", "strike", "box", "note"}
 
-# 涂黑区域也持久化在编辑数据里（这样刷新页面不会丢），
-# 但它**不能**走 /api/export —— 普通导出是叠加式的，
-# 无法删除底层文字，让涂黑框走那条路只会产出
-# "看着是黑块、文字其实还在"的文件，正是要避免的事故。
-# 所以这里单独列出，export 路径会把它过滤掉。
 REDACT_KIND = "redact"
 
 
@@ -291,7 +206,7 @@ def load_edits(did):
         data["ok"] = True
         data["docId"] = did
         return data
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         return {"ok": False, "error": f"读取编辑数据失败: {exc}",
                 "pages": {}, "objects": []}
 
@@ -314,16 +229,8 @@ def save_edits(did, pages, objects, meta=None):
 
 
 def sanitize_edits(pages, objects):
-    """
-    校验并规范化前端提交的编辑数据。
-
-    原则：宁可丢弃可疑数据，也不能让非法值流进 PDF 写出阶段 ——
-    写坏一份 PDF 比拒绝一次请求严重得多。
-    返回 (干净的 pages, 干净的 objects, 被丢弃的数量)。
-    """
     dropped = 0
 
-    # ---- pages ----
     clean_pages = {"order": None, "delete": [], "rotate": {}, "insert": []}
     if isinstance(pages, dict):
         order = pages.get("order")
@@ -375,21 +282,17 @@ def sanitize_edits(pages, objects):
                 continue
             w = _safe_float(spec.get("width"), 595.0)
             h = _safe_float(spec.get("height"), 842.0)
-            # 尺寸做合理区间约束，防止 0 或天文数字
             w = min(max(w, 10.0), 20000.0)
             h = min(max(h, 10.0), 20000.0)
             clean_pages["insert"].append({"at": max(0, at),
                                           "width": w, "height": h})
 
-    # ---- objects ----
     clean_objs = []
     for obj in (objects or []):
         if not isinstance(obj, dict):
             dropped += 1
             continue
         kind = str(obj.get("kind") or "").lower()
-        # 涂黑区域允许持久化（刷新不丢），但它只会被
-        # /api/redact 消费；/api/export 会另行过滤掉。
         if kind not in EDITABLE_KINDS and kind != REDACT_KIND:
             dropped += 1
             continue
@@ -436,15 +339,6 @@ def sanitize_edits(pages, objects):
 
 
 def sanitize_annotations(items, max_items=5000):
-    """
-    校验并规范化前端提交的批注（准备写成 PDF 原生注释 /Annots）。
-
-    与 sanitize_edits 同样的原则：宁可丢弃可疑数据，也不能让非法值
-    流进 PDF 写出阶段。批注是**叠加物**，写坏了会在别的阅读器里
-    显示成乱框，比不写更糟。
-
-    返回 (干净的批注列表, 被丢弃数量)。
-    """
     dropped = 0
     clean = []
     for it in (items or [])[:max_items]:
@@ -472,7 +366,6 @@ def sanitize_annotations(items, max_items=5000):
                 x0, y0, x1, y1 = (float(v) for v in r)
             except (TypeError, ValueError):
                 continue
-            # 极端坐标（NaN / inf / 巨值）会把阅读器搞坏，直接丢
             if not all(abs(v) < 1e6 for v in (x0, y0, x1, y1)):
                 continue
             if abs(x1 - x0) < 0.1 or abs(y1 - y0) < 0.1:
@@ -496,13 +389,6 @@ def sanitize_annotations(items, max_items=5000):
 
 
 def unique_out_path(path):
-    """
-    同一秒内多次导出会撞名（文件名精确到秒）。
-
-    直接覆盖的后果：用户先导出"带批注版"、再导出"干净版"，
-    前者就被悄悄顶掉了 —— 导出目录里本该留痕的历史版本会丢。
-    所以撞名时追加 -2 / -3，**绝不覆盖已有文件**。
-    """
     if not os.path.exists(path):
         return path
     stem, ext = os.path.splitext(path)
@@ -515,13 +401,6 @@ def unique_out_path(path):
 
 
 def sanitize_redactions(regions):
-    """
-    校验并规范化前端提交的涂黑区域。
-
-    与 sanitize_edits 同样的原则：宁可丢弃，也不能让非法值进入
-    信息销毁流程 —— redaction 是**不可逆**的，处理错比拒绝更糟。
-    返回 (干净区域列表, 被丢弃数量)。
-    """
     dropped = 0
     clean = []
     for r in (regions or []):
@@ -541,7 +420,6 @@ def sanitize_redactions(regions):
         y = _safe_float(r.get("y"), 0.0)
         w = _safe_float(r.get("w"), 0.0)
         h = _safe_float(r.get("h"), 0.0)
-        # 尺寸做区间约束：负数和天文数字都会让判定失效
         w = min(max(w, 1.0), 20000.0)
         h = min(max(h, 1.0), 20000.0)
         clean.append({"page": page, "x": x, "y": y, "w": w, "h": h})
@@ -554,13 +432,12 @@ def _safe_float(v, default=0.0):
         f = float(v)
     except (TypeError, ValueError):
         return default
-    if f != f or f in (float("inf"), float("-inf")):     # NaN / Inf
+    if f != f or f in (float("inf"), float("-inf")):     
         return default
     return f
 
 
 def _safe_color(v):
-    """颜色只接受 #rgb / #rrggbb 与 rgb(r,g,b) 两种形式。"""
     if not isinstance(v, str):
         return "#000000"
     s = v.strip()
@@ -574,7 +451,6 @@ def _safe_color(v):
 
 
 def _safe_font(v):
-    """只允许标准 14 字体之一 —— 其他字体我们无法嵌入，会渲染失败。"""
     allowed = {
         "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Times-Roman",
         "Times-Bold", "Courier", "Courier-Bold",
@@ -584,7 +460,6 @@ def _safe_font(v):
 
 
 def pdf_page_info(path):
-    """读取 PDF 的页数与各页尺寸（点在 PDF 坐标下，原点左下）。"""
     with open(path, "rb") as fp:
         data = fp.read()
     doc = pdfedit.PDFDocument.load(data)
@@ -616,7 +491,6 @@ def pdf_page_info(path):
 
 
 def export_markdown(did, doc_name=""):
-    """把标注导出为 Markdown 笔记。"""
     data = load_annotations(did)
     items = data.get("items", [])
     lines = [f"# {doc_name or did} 阅读笔记", ""]
@@ -628,7 +502,6 @@ def export_markdown(did, doc_name=""):
         lines.append("_暂无标注_")
         return "\n".join(lines)
 
-    # 按页分组
     by_page = {}
     for it in items:
         by_page.setdefault(it.get("page", 1), []).append(it)
@@ -651,23 +524,17 @@ def export_markdown(did, doc_name=""):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------
-# 请求处理
-# --------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "PDFViewer/1.0"
     protocol_version = "HTTP/1.1"
 
-    # ---- 日志精简 ----
     def log_message(self, fmt, *args):
         msg = fmt % args
-        # 过滤掉静态资源的噪声日志
         if "/static/" in msg or "/api/file" in msg:
             return
         sys.stderr.write(f"  {msg}\n")
 
-    # ---- 响应助手 ----
     def send_json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -688,7 +555,6 @@ class Handler(BaseHTTPRequestHandler):
     def send_error_json(self, status, message):
         self.send_json({"ok": False, "error": message}, status=status)
 
-    # ---- 路由 ----
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
@@ -720,8 +586,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_error_json(403, "拒绝访问")
                 return self.serve_file(target)
             if route.startswith("/assets/"):
-                # 字体等静态资产：@font-face 预览要能通过 HTTP 取到
-                # assets/fonts/NotoSansSC-Regular.ttf，让预览与嵌入字体一致
                 rel = urllib.parse.unquote(route[len("/assets/"):])
                 target = os.path.join(ASSETS_DIR, rel.replace("/", os.sep))
                 if not is_within(target, [ASSETS_DIR]):
@@ -730,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(404, "未找到该路径")
         except BrokenPipeError:
             pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             self.log_message("ERROR %s", exc)
             try:
                 self.send_error_json(500, f"服务器错误: {exc}")
@@ -768,7 +632,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_reflow(payload)
         return self._post_export(payload)
 
-    # ---- POST: 标注 ----
     def _post_annotations(self, payload):
         did = payload.get("docId")
         if not valid_doc_id(did):
@@ -783,10 +646,9 @@ class Handler(BaseHTTPRequestHandler):
                 saved = save_annotations(did, items, payload.get("doc"))
             self.send_json({"ok": True, "count": len(items),
                             "updated": saved["updated"]})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             self.send_error_json(500, f"保存失败: {exc}")
 
-    # ---- POST: 编辑数据 ----
     def _post_edits(self, payload):
         did = payload.get("docId")
         if not valid_doc_id(did):
@@ -804,18 +666,10 @@ class Handler(BaseHTTPRequestHandler):
                 "dropped": dropped,
                 "updated": saved["updated"],
             })
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             self.send_error_json(500, f"保存失败: {exc}")
 
-    # ---- POST: 导出 PDF ----
     def _post_export(self, payload):
-        """
-        应用编辑并产出一份新 PDF，直接以附件下载。
-
-        注意：永远不写回原文件 —— 原文件是用户的资产，
-        我们只产出新文件。这样即使导出逻辑有 bug，
-        用户的原始 PDF 也不会被破坏。
-        """
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
             return self.send_error_json(400, "缺少 path 参数")
@@ -832,16 +686,9 @@ class Handler(BaseHTTPRequestHandler):
         pages, objects, dropped = sanitize_edits(
             payload.get("pages"), payload.get("objects"))
 
-        # 批注：写成 PDF 原生注释（/Annots），不是画进内容流 ——
-        # 这样 Acrobat / Edge / 微信预览都能看见，也能再编辑。
         annots, ann_dropped = sanitize_annotations(payload.get("annotations"))
         dropped += ann_dropped
 
-        # 防线：涂黑对象绝不能走普通导出。
-        # 普通导出是叠加式的（往内容流后面追加绘制指令），
-        # 它没法删除底层文字 —— 让涂黑框从这里出去，用户会拿到
-        # 一份"看着是黑块、文字还能被复制"的文件。必须挡掉。
-        # 前端已经不再提交它们，这里是服务端的兜底。
         before_n = len(objects)
         objects = [o for o in objects if o.get("kind") != REDACT_KIND]
         dropped += before_n - len(objects)
@@ -860,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path,
                     {"pages": pages, "objects": objects,
                      "annotations": annots})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"导出失败: {exc}")
 
         try:
@@ -871,10 +718,6 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
-        # ★ 下载响应必须显式关连接。
-        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
-        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
-        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
         self.send_header("Connection", "close")
         self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
@@ -884,12 +727,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Export-Pages", str(result.get("pages", 0)))
         self.send_header("X-Export-Objects", str(result.get("objects", 0)))
         self.send_header("X-Export-Dropped", str(dropped))
-        # 批注写了几条（0 表示没写或全被丢弃）
         self.send_header("X-Export-Annots",
                          str((result.get("annotations") or {}).get("written", 0)))
-        # 中文字体：嵌了多少字形、有没有写不进去的字。
-        # **缺字必须让用户看到** —— 静默丢字会让人以为写进去了，实际没有。
-        # 响应头只能是 latin-1，所以缺字用百分号编码传。
         self.send_header("X-Export-CJK-Glyphs",
                          str(result.get("cjk_glyphs", 0)))
         miss = str(result.get("cjk_missing") or "")
@@ -899,7 +738,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- API: 列出某页的段落（给"改段落"用） ----
 
     def api_paragraphs(self, query):
         paths = query.get("path", [])
@@ -918,19 +756,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             import pdfreflow
             info = pdfreflow.list_paragraphs(real, page)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, "解析段落失败: %s" % exc)
         self.send_json(info)
 
-    # ---- POST: 段落改字 + 重新折行（页内重排） ----
 
     def _post_reflow(self, payload):
-        """
-        把某一段改成新文字并重排，**另存为新文件**（原文件一律不动）。
-
-        溢出页底会返回 400 并说明还差多少 —— 这是有意的：
-        跨页回流还没实现，与其把字画到页面外，不如明确拒绝。
-        """
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
             return self.send_error_json(400, "缺少 path 参数")
@@ -952,8 +783,6 @@ class Handler(BaseHTTPRequestHandler):
         if len(text) > 20000:
             return self.send_error_json(400, "文字太长了（上限 20000 字）")
 
-        # 可选：这段的**原文**（前端 pdf.js 解出来的）。
-        # 没有 ToUnicode 的文档靠它按字对齐反推字符映射。
         orig = payload.get("orig")
         if orig is not None:
             if not isinstance(orig, str):
@@ -961,8 +790,6 @@ class Handler(BaseHTTPRequestHandler):
             if len(orig) > 20000:
                 return self.send_error_json(400, "orig 太长了")
 
-        # 可选：**整页文字**。用来把字符映射的覆盖范围扩到整页
-        # （段落里没出现过的字也能沿用源字体）。同样要过长度闸。
         page_text = payload.get("page_text")
         if page_text is not None:
             if not isinstance(page_text, str):
@@ -991,27 +818,23 @@ class Handler(BaseHTTPRequestHandler):
             import pdfreflow
             with _edit_lock:
                 try:
-                    # 先试"页内重排"（最保守：只动这一页）
                     result = pdfreflow.apply_paragraph_edit(
                         real, out_path, page, para, text,
                         orig_text=orig, page_text=page_text)
                 except ValueError as exc:
-                    # 页内放不下 -> 自动升级成跨页级联：
-                    # 溢出的内容续到下一页，必要时新建页。
                     if "放不下" not in str(exc):
                         raise
                     result = pdfreflow.apply_paragraph_flow(
                         real, out_path, page, para, text,
                         orig_text=orig, page_text=page_text)
         except ValueError as exc:
-            # 业务性拒绝（放不下 / 无 ToUnicode / 越界）：400 + 原文说明
             try:
                 if os.path.exists(out_path):
                     os.remove(out_path)
             except OSError:
                 pass
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             try:
                 if os.path.exists(out_path):
                     os.remove(out_path)
@@ -1027,10 +850,6 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
-        # ★ 下载响应必须显式关连接。
-        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
-        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
-        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
         self.send_header("Connection", "close")
         self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
@@ -1048,39 +867,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Reflow-Mapped", str(result.get("mapped_chars") or 0))
         fb = str(result.get("fallback_chars") or "")
         if fb:
-            # 回退字体用到的字必须让用户知道 —— 字形会和原文不一样
             self.send_header("X-Reflow-Fallback",
                              urllib.parse.quote(fb, safe=""))
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- POST: 涂黑（redaction，不可逆） ----
 
     def _post_redact(self, payload):
-        """
-        执行真正的信息销毁，产出新 PDF 供下载。
-
-        ============================ 安全约束 ============================
-
-        Redaction 是本应用**唯一不可逆**的操作 —— 原文真的没了。
-        因此这里有几条硬性约束，不因前端请求而放宽：
-
-        1. **永远另存为**。本端点只产出新文件到 exports/ 目录，
-           绝不接受"写回原文件"的请求参数。前端也不提供这个选项。
-           即使有人手工构造请求带上覆盖参数，服务端也不认。
-
-        2. **拒绝零命中导出**。如果所有涂黑区加起来一个字形都没删到，
-           说明用户以为盖住了什么、实际什么都没盖住 —— 这时候
-           静默产出一个文件是最危险的（他以为安全了）。直接报错，
-           让他先确认区域位置。
-
-        3. 元数据与书签标题一并清理（泄漏面在引擎里处理）。
-        """
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
             return self.send_error_json(400, "缺少 path 参数")
 
-        # 显式拒绝任何试图覆盖原文件的请求（防御性，缺省就没有这个参数）
         if payload.get("overwrite") or payload.get("inPlace"):
             return self.send_error_json(
                 400, "涂黑操作不允许覆盖原文件，只支持另存为")
@@ -1111,10 +908,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = pdfredact.apply_redactions(real, out_path, regions)
         except ValueError as exc:
             return self.send_error_json(400, f"涂黑失败: {exc}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"涂黑失败: {exc}")
 
-        # 零命中：不进文件，直接报错 —— 静默产出会让用户误以为安全
         if result.get("removed_glyphs", 0) <= 0:
             try:
                 os.remove(out_path)
@@ -1134,10 +930,6 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
-        # ★ 下载响应必须显式关连接。
-        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
-        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
-        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
         self.send_header("Connection", "close")
         self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
@@ -1154,15 +946,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- POST: 原位替换（改 PDF 里已有的文字，另存为） ----
 
     def _post_replace(self, payload):
-        """
-        把 PDF 里**已有**的文字改成新文字，产出新 PDF 供下载。
-
-        与涂黑一样**只另存为**，绝不写回原文件；零命中（矩形没框到字）
-        同样报错不产文件 —— 否则用户以为改到了、实际没动。
-        """
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
             return self.send_error_json(400, "缺少 path 参数")
@@ -1180,7 +965,6 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return self.send_error_json(404, "源文件不存在")
 
-        # 解析替换项：坐标已是 PDF 系（原点左下、y 向上），由前端翻转好
         replacements = []
         for r in payload.get("replacements") or []:
             try:
@@ -1212,10 +996,9 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path, replacements)
         except ValueError as exc:
             return self.send_error_json(400, f"替换失败: {exc}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"替换失败: {exc}")
 
-        # 零命中：不进文件，直接报错
         if result.get("replaced_glyphs", 0) <= 0:
             try:
                 os.remove(out_path)
@@ -1234,10 +1017,6 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
-        # ★ 下载响应必须显式关连接。
-        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
-        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
-        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
         self.send_header("Connection", "close")
         self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
@@ -1256,21 +1035,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_file(query, head_only=True)
         self.send_error(404)
 
-    # ---- 目录集合：扫描与校验必须用同一份 ----
 
     def _resolve_dirs(self, query):
-        """
-        返回本次请求允许访问的目录集合，并把临时目录并入全局 SCAN_DIRS。
-
-        修一个真实事故：api_files 扫描时会把 ?dir= 指定的目录加进
-        **局部** dirs，但 api_file 读内容时只校验**全局** SCAN_DIRS ——
-        于是前端「添加目录」加进来的位置，列表能列出来、点开任何一个
-        都 403。
-
-        现在把临时目录并入全局（语义 = 用户添加了目录，本会话内即可
-        访问），并让所有取文件/读信息的端点都走这份合并集合，前端
-        因此无需在每个请求上重复携带 ?dir=。
-        """
         global SCAN_DIRS
         seen = {norm(x) for x in SCAN_DIRS}
         for d in (query.get("dir") or []):
@@ -1283,13 +1049,11 @@ class Handler(BaseHTTPRequestHandler):
                 seen.add(norm(rd))
         return list(SCAN_DIRS)
 
-    # ---- API: 文件列表 ----
     def api_files(self, query):
-        # 支持 ?dir= 临时指定扫描目录（会并入全局，见 _resolve_dirs）
         dirs = self._resolve_dirs(query)
         try:
             files = scan_pdfs(dirs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"扫描失败: {exc}")
         self.send_json({
             "ok": True,
@@ -1299,7 +1063,6 @@ class Handler(BaseHTTPRequestHandler):
             "truncated": len(files) >= MAX_LIST,
         })
 
-    # ---- API: PDF 内容（支持 Range） ----
     def api_file(self, query, head_only=False):
         paths = query.get("path", [])
         if not paths:
@@ -1317,7 +1080,6 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
         range_header = self.headers.get("Range")
 
-        # 处理 Range：大文件随机跳页的关键
         start, end = 0, size - 1
         partial = False
         if range_header:
@@ -1344,11 +1106,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
-        # ★ 本地工具，静态资源**不能长缓存**。
-        #   原来这里是 public, max-age=3600 —— 改完前端代码后浏览器还在吃
-        #   1 小时前的旧副本，于是出现"明明改了却没效果 / 行为错乱"的假象
-        #   （真实踩过：撤销功能改完测不出来）。
-        #   no-cache = 每次都回来问一次，永远拿到最新版本。
         self.send_header("Cache-Control", "no-cache")
         if partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
@@ -1370,7 +1127,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 remaining -= len(chunk)
 
-    # ---- API: 读取标注 ----
     def api_get_annotations(self, query):
         did = (query.get("doc") or [""])[0]
         if not valid_doc_id(did):
@@ -1380,7 +1136,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(500, data.get("error", "读取失败"))
         self.send_json(data)
 
-    # ---- API: 导出 Markdown 笔记 ----
     def api_notes(self, query):
         did = (query.get("doc") or [""])[0]
         if not valid_doc_id(did):
@@ -1399,7 +1154,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- API: 读取编辑数据 ----
     def api_get_edits(self, query):
         did = (query.get("doc") or [""])[0]
         if not valid_doc_id(did):
@@ -1409,7 +1163,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(500, data.get("error", "读取失败"))
         self.send_json(data)
 
-    # ---- API: PDF 页数/尺寸信息 ----
     def api_pdfinfo(self, query):
         paths = query.get("path", [])
         if not paths:
@@ -1422,11 +1175,10 @@ class Handler(BaseHTTPRequestHandler):
             if not is_within(real, self._resolve_dirs(query)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"解析失败: {exc}")
         self.send_json(info)
 
-    # ---- API: 交给系统默认程序打开 ----
     def api_open(self, query):
         paths = query.get("path", [])
         if not paths:
@@ -1439,23 +1191,21 @@ class Handler(BaseHTTPRequestHandler):
             if not is_within(real, self._resolve_dirs(query)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             if sys.platform == "win32":
-                os.startfile(real)  # type: ignore[attr-defined]
+                os.startfile(real)  
             elif sys.platform == "darwin":
                 import subprocess
                 subprocess.Popen(["open", real])
             else:
                 import subprocess
                 subprocess.Popen(["xdg-open", real])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             return self.send_error_json(500, f"打开失败: {exc}")
         self.send_json({"ok": True})
 
-    # ---- 静态文件 ----
     def serve_file(self, path):
         if not os.path.isfile(path):
             return self.send_error_json(404, "文件未找到")
         ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
-        # .mjs 需要正确的 JS MIME 类型
         if path.endswith(".mjs"):
             ctype = "text/javascript"
         elif path.endswith((".js",)):
@@ -1476,19 +1226,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # 开发期不缓存页面，保证改动即时生效
         if path.endswith((".html", ".css", ".js", ".mjs")):
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
 
-# --------------------------------------------------------------------------
-# 启动
-# --------------------------------------------------------------------------
 
 def default_dirs():
-    """默认扫描目录：项目下的 documents/ 与用户文档目录。"""
     out = []
     local = os.path.join(BASE_DIR, "documents")
     if os.path.isdir(local):
@@ -1502,44 +1247,18 @@ def default_dirs():
 
 
 class Server(ThreadingHTTPServer):
-    """本地服务用的 HTTP 服务器。
-
-    ★ 覆盖 allow_reuse_address 不是"调优"，是 Windows 上的正确性问题。
-    标准库的 HTTPServer 声明 allow_reuse_address = 1，而 SO_REUSEADDR
-    在 Windows 上的语义是"允许绑定一个已被其他 socket 占用的端口"
-    （MSDN 文档化的行为；本机实测：已有实例正在监听 127.0.0.1 时，
-    默认类 bind 依然成功且不报错，关掉之后才抛 WinError 10048）。
-
-    后果是第二个实例静默绑上同一端口，两个进程抢着接受连接，
-    连接落到谁手上不确定 —— 表现就是"有时连不上、像在丢包"，
-    而且日志里什么都看不到。
-
-    关掉它，让端口冲突变成显式 OSError，交给 main() 的顺延循环处理。
-    Linux 上 SO_REUSEADDR 只影响 TIME_WAIT 端口，行为无害，故保留。
-    """
     daemon_threads = True
     allow_reuse_address = (os.name != "nt")
 
 
 def run_startup_check():
-    """
-    启动时跑一遍前端静态自检（check.py）。
-
-    为什么放进启动流程：前端有低级错误（漏 import、DOM id 写错、
-    CSS 盖掉 [hidden]、.ed-text 被裁等）时，浏览器里往往只表现为
-    "白屏"或"某个按钮没反应"，要开控制台才看得到。启动时先自检一遍，
-    问题第一时间暴露在**服务端控制台**。
-
-    失败只**警告**，不阻止启动 —— 自检是开发期门禁，不该拦住服务。
-    可用 --no-check 跳过。
-    """
     try:
-        import check  # 同目录的 check.py
-    except Exception:  # noqa: BLE001
-        return  # 没有 check.py（精简部署）：静默跳过
+        import check  
+    except Exception:  
+        return  
     try:
         rc = check.main()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         print(f"  前端自检无法运行：{exc}")
         return
     if rc:
@@ -1559,8 +1278,6 @@ def main():
     ap.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     ap.add_argument("--no-check", action="store_true",
                     help="启动时跳过前端静态自检（check.py）")
-    # 可写目录重定向：**测试必须用它们**，否则测试会往用户真实的
-    # exports/ edits/ annotations/ 里写东西（导出文件、编辑数据）。
     ap.add_argument("--export-dir", default=None,
                     help="导出产物目录，默认 <项目>/exports")
     ap.add_argument("--edits-dir", default=None,
@@ -1585,18 +1302,9 @@ def main():
         print("  python server.py --dir D:\\我的PDF")
         return 1
 
-    # ---- 启动自检（开发期门禁；--no-check 可跳过）----
     if not args.no_check:
         run_startup_check()
 
-    # ---- 先绑定，再打印，再开浏览器 ----
-    # 原来的顺序是反的：先打印 URL、先开浏览器，最后才 bind ——
-    # 一旦端口被占，用户看到的地址是错的，浏览器也指向一个空端口。
-    #
-    # 端口可能被上一次没关干净的实例（或别的程序）占着。
-    # localhost 上 bind 是微秒级，所以不做花哨的可用性探测 ——
-    # 直接顺序试绑即可：bind 既是最可靠的判据，又是原子的，
-    # 不存在"探测到空闲、绑定时已被抢"的竞态窗口。
     httpd = None
     taken = []
     for p in range(args.port, args.port + PORT_SCAN_RANGE):
@@ -1607,10 +1315,8 @@ def main():
             taken.append(p)
 
     if httpd is None:
-        # 顺延范围内全被占：退到 0 号端口，让系统随便派一个空闲的
         httpd = Server((args.host, 0), Handler)
 
-    # 以**真实绑定到的**端口为准，而不是 args.port
     PORT = httpd.server_address[1]
 
     url = f"http://{args.host}:{PORT}/"
@@ -1618,7 +1324,6 @@ def main():
     print("  PDF 查看器已启动")
     print("=" * 58)
     if taken:
-        # 静默换端口会让人对着旧地址怀疑人生，必须明说
         span = str(taken[0]) if len(taken) == 1 else f"{taken[0]}~{taken[-1]}"
         print(f"  注意     : 端口 {span} 已被占用，已自动改用 {PORT}")
         print( "             若是上一次没关掉的实例，可先结束它再用原端口")

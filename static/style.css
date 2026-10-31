@@ -1,11 +1,4 @@
-/* ==========================================================================
-   PDF Viewer - 样式
-   ========================================================================== */
 
-/* 编辑预览用的中文字体：与导出时嵌入的 Noto Sans SC（= 思源黑体）
-   是同一份文件，让"预览"与"最终 PDF"字体一致。
-   字体约 9.9MB，首载稍慢，故 font-display: swap：
-   先用系统字体兜底显示，加载完成后替换，避免白屏。 */
 @font-face {
   font-family: "NotoSansSC";
   src: url("/assets/fonts/NotoSansSC-Regular.ttf") format("truetype");
@@ -48,13 +41,9 @@
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
           "PingFang SC", "Hiragino Sans GB", Roboto, sans-serif;
-  /* 通用等宽族放最前：Firefox 的字体指纹保护会拦掉对**本地具体字体**
-     （Cascadia Mono / Consolas…）的请求并报警告，用 ui-monospace 直接命中
-     系统等宽字体，既安静又不必依赖某个具体字体是否存在。 */
   --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
-/* 深色模式 */
 body.dark {
   --bg-app: #18181b;
   --bg-toolbar: #1f1f23;
@@ -81,15 +70,6 @@ body.dark {
 
 * { box-sizing: border-box; }
 
-/*
-  hidden 属性的全局兜底。
-
-  HTML 规范里 [hidden] 只在 UA 样式表声明 display: none，
-  优先级低于任何类选择器。Firefox 严格按层叠规则判定，
-  所以 .sel-menu { display: flex } 这类规则会把它"点亮"，
-  导致 hidden 属性形同虚设（Chrome 对 [hidden] 有特殊豁免，看不出问题）。
-  这里用 !important 拉高优先级，确保 hidden 在任何浏览器都真正隐藏。
-*/
 [hidden] { display: none !important; }
 
 html, body {
@@ -106,9 +86,6 @@ html, body {
 
 button { font-family: inherit; }
 
-/* ==========================================================================
-   顶部工具栏
-   ========================================================================== */
 
 .toolbar {
   height: var(--toolbar-h);
@@ -187,7 +164,6 @@ button { font-family: inherit; }
 
 .btn .lbl { font-size: 13px; }
 
-/* 页码输入 */
 .page-input {
   width: 46px;
   height: 30px;
@@ -218,7 +194,6 @@ button { font-family: inherit; }
   padding: 0 4px;
 }
 
-/* 缩放下拉 */
 .zoom-select {
   height: 32px;
   padding: 0 4px;
@@ -234,7 +209,6 @@ button { font-family: inherit; }
 
 .zoom-select:hover { background: var(--bg-hover); }
 
-/* 搜索框 */
 .search-wrap {
   position: relative;
   display: flex;
@@ -307,9 +281,6 @@ button { font-family: inherit; }
 
 .search-input.no-result { border-color: #ef4444; }
 
-/* ==========================================================================
-   主体布局
-   ========================================================================== */
 
 .main {
   display: flex;
@@ -317,7 +288,6 @@ button { font-family: inherit; }
   overflow: hidden;
 }
 
-/* ---- 侧边栏 ---- */
 .sidebar {
   width: 232px;
   flex-shrink: 0;
@@ -372,7 +342,6 @@ button { font-family: inherit; }
 .side-panel { display: none; }
 .side-panel.on { display: block; }
 
-/* 滚动条 */
 .side-body::-webkit-scrollbar,
 .viewer::-webkit-scrollbar,
 .file-list::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -392,7 +361,6 @@ button { font-family: inherit; }
 .side-body::-webkit-scrollbar-track,
 .viewer::-webkit-scrollbar-track { background: transparent; }
 
-/* ---- 缩略图 ---- */
 .thumb {
   display: block;
   width: 100%;
@@ -440,8 +408,6 @@ button { font-family: inherit; }
 
 .thumb.on .thumb-num { color: var(--accent); font-weight: 500; }
 
-/* ---- 目录 ---- */
-/* 目录面板里的分组标题（如「我的书签」） */
 .outline-heading {
   font-size: 11.5px;
   color: var(--text-muted);
@@ -487,9 +453,6 @@ button { font-family: inherit; }
   margin-left: 6px;
 }
 
-/* ==========================================================================
-   阅读区
-   ========================================================================== */
 
 .viewer {
   flex: 1;
@@ -510,7 +473,6 @@ button { font-family: inherit; }
 
 .pages.empty { justify-content: center; align-items: center; padding: 20px; }
 
-/* 页面容器 */
 .page {
   position: relative;
   background: var(--bg-page);
@@ -542,7 +504,6 @@ button { font-family: inherit; }
   color: var(--text-muted);
 }
 
-/* 文字层：透明，用于选中和搜索定位 */
 .text-layer {
   position: absolute;
   inset: 0;
@@ -565,7 +526,6 @@ button { font-family: inherit; }
 .text-layer ::selection { background: rgba(37, 99, 235, 0.28); }
 .text-layer ::-moz-selection { background: rgba(37, 99, 235, 0.28); }
 
-/* 搜索高亮 */
 .text-layer mark.hl {
   background: var(--highlight);
   color: transparent;
@@ -578,9 +538,6 @@ button { font-family: inherit; }
   box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.35);
 }
 
-/* ==========================================================================
-   欢迎 / 文件选择页
-   ========================================================================== */
 
 .welcome {
   max-width: 660px;
@@ -777,9 +734,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
 
 .link-btn:hover { text-decoration: underline; }
 
-/* ==========================================================================
-   状态提示 / 加载
-   ========================================================================== */
 
 .toast {
   position: absolute;
@@ -802,7 +756,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
 
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* 全屏加载遮罩 */
 .loading {
   position: absolute;
   inset: 0;
@@ -830,7 +783,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 页面内小加载 */
 .page-spin {
   width: 20px;
   height: 20px;
@@ -840,7 +792,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
   animation: spin 0.7s linear infinite;
 }
 
-/* 移动端提示 */
 @media (max-width: 760px) {
   .sidebar { position: absolute; top: var(--toolbar-h); bottom: 0; left: 0; z-index: 25; box-shadow: var(--shadow-lg); }
   .sidebar.collapsed { margin-left: 0; transform: translateX(-100%); }
@@ -849,9 +800,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
   .btn .lbl { display: none; }
 }
 
-/* ==========================================================================
-   标注：颜色选择器
-   ========================================================================== */
 
 .color-picker {
   display: flex;
@@ -879,9 +827,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
   box-shadow: 0 0 0 2px var(--bg-toolbar) inset;
 }
 
-/* ==========================================================================
-   划词浮动菜单
-   ========================================================================== */
 
 .sel-menu {
   position: absolute;
@@ -898,7 +843,6 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
 
 body.dark .sel-menu { background: #3f3f47; }
 
-/* 编辑对象操作条 —— 与划词菜单同族外观，但多了对象名和危险操作 */
 .obj-bar {
   position: absolute;
   z-index: 61;
@@ -1014,14 +958,8 @@ body.dark .obj-bar { background: #3f3f47; }
   margin: 0 3px;
 }
 
-/* ==========================================================================
-   标注气泡（编辑笔记）
-   ========================================================================== */
 
 .annot-pop {
-  /* fixed：相对**视口**定位，才与 openAnnotPop 里的视口坐标对应。
-     原来 absolute 相对 .viewer（自带滚动）却不补滚动量 —— 页面滚动后
-     气泡会落到视口外，紧接着的 apNote.focus() 把页面滚回顶端。 */
   position: fixed;
   z-index: 65;
   width: 306px;
@@ -1113,9 +1051,6 @@ body.dark .obj-bar { background: #3f3f47; }
 .ap-btn.danger:hover { background: #fee2e2; color: #b91c1c; }
 body.dark .ap-btn.danger:hover { background: #451a1a; color: #f87171; }
 
-/* ==========================================================================
-   标注绘制层
-   ========================================================================== */
 
 .annot-layer {
   position: absolute;
@@ -1133,7 +1068,6 @@ body.dark .ap-btn.danger:hover { background: #451a1a; color: #f87171; }
 
 .an:hover { filter: brightness(0.92); }
 
-/* PDF 自带注释（只读层）：不抢文字的选择与点击，也不响应 hover 高亮 */
 .an-ext { pointer-events: none; }
 .an-ext:hover { filter: none; }
 .an-ext.an-note {
@@ -1142,14 +1076,9 @@ body.dark .ap-btn.danger:hover { background: #451a1a; color: #f87171; }
   opacity: 0.9;
 }
 
-/* 各标注类型 */
 .an-highlight { border-radius: 2px; mix-blend-mode: multiply; }
 body.dark .an-highlight { mix-blend-mode: screen; }
 
-/* 下划线 / 删除线：用 1px 渐变线画在盒子**内边缘**，不用 border。
-   原因：border 画在盒子外面，各段盒子高度不同 → 线高低不齐；
-   而且 2px 太粗，压到字形下缘。配合 annot.js 的「按行合并」，
-   整行只剩一条连续的细线。 */
 .an-underline {
   background-image: linear-gradient(currentColor, currentColor);
   background-size: 100% 1px;
@@ -1158,7 +1087,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 }
 
 .an-wavy {
-  /* 虚线用点阵画，位置同样贴盒子内底，跟随合并后的整行 */
   background-image: radial-gradient(circle at 2px 100%, transparent 1.6px, currentColor 1.7px);
   background-size: 5px 3px;
   background-repeat: repeat-x;
@@ -1203,7 +1131,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
   border-radius: 3px;
 }
 
-/* 有笔记的标注加个角标 */
 .an.has-note::before {
   content: "";
   position: absolute;
@@ -1216,9 +1143,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
   border-color: transparent #f59e0b transparent transparent;
 }
 
-/* ==========================================================================
-   标注侧栏面板
-   ========================================================================== */
 
 .annot-filter {
   display: flex;
@@ -1359,9 +1283,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 
 .mini-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-/* ==========================================================================
-   阅读进度条
-   ========================================================================== */
 
 .progress-bar {
   position: absolute;
@@ -1402,9 +1323,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 .pm-annot { background: #fbbf24; }
 .pm-bookmark { background: #ef4444; width: 3px; height: 140%; top: -20%; }
 
-/* ==========================================================================
-   双栏视图
-   ========================================================================== */
 
 .pages.double {
   flex-direction: row;
@@ -1415,9 +1333,6 @@ body.dark .an-highlight { mix-blend-mode: screen; }
   gap: 12px;
 }
 
-/* ==========================================================================
-   标注模式光标
-   ========================================================================== */
 
 .viewer.annot-mode .text-layer { cursor: crosshair; }
 .viewer.annot-mode .page { cursor: crosshair; }
@@ -1431,19 +1346,9 @@ body.dark .an-highlight { mix-blend-mode: screen; }
   z-index: 10;
 }
 
-/* 自动滚动指示 */
 .btn.scrolling { background: var(--accent-soft); color: var(--accent); }
 
-/* ==========================================================================
-   编辑模式
-   ========================================================================== */
 
-/* 编辑绘制层
-   注意：整层与层内对象都必须 pointer-events: none。
-   编辑对象只是"预览图层"，命中测试统一由 edit.js 的 hitTest()
-   按几何计算 —— 若让对象可接收指针事件，点击会被对象自己吃掉，
-   页面收不到事件，选择工具永远删不掉对象。
-   （曾经踩过：.ed 设了 auto，导致点击删除完全失灵。） */
 .edit-layer {
   position: absolute;
   inset: 0;
@@ -1461,37 +1366,21 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 .ed.on {
   outline: 1.5px solid var(--accent);
   outline-offset: 2px;
-  /* 选中态再亮一点，弥补失去了 hover 反馈 */
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .ed.temp { opacity: 0.7; }
 
 .ed-text {
-  /* ★ 这里**不能**设 overflow: hidden。
-     文字对象在数据层是**锚点**（w/h = 0，对应 PDF 的 Td + Tj），
-     盒子由 edit.js 的 makeTextBoxAuto() 设成按内容自适应；
-     一旦裁剪，1px 的盒子会把整段文字裁得干干净净 ——
-     表现是「对象建出来了（面板提示有未保存的改动），页面上却空白」。
-     这个 bug 真实发生过，而且不报错，查了很久。 */
   white-space: pre;
   overflow: visible;
-  /* 保持 none —— 命中由 hitTest 负责，见上方注释 */
   pointer-events: none;
   cursor: text;
-  /* 拉丁走 Helvetica/Arial（导出纯拉丁用标准 14 字体，保持一致）；
-     中文 fallback 到嵌入的 Noto Sans SC（导出中文走子集嵌入）——
-     这样"预览 = 导出"的字体一致。 */
   font-family: Helvetica, Arial, "NotoSansSC", sans-serif;
 }
 
 .ed-line, .ed-svg { pointer-events: none; }
 
-/*
-  选中对象的四角缩放手柄。
-  ★ 它是编辑层里**唯一**可交互的元素 —— 其它 .ed* 一律
-    pointer-events:none（命中统一走 hitTest 几何计算）。
-*/
 .ed-handle {
   position: absolute;
   width: 10px;
@@ -1508,22 +1397,15 @@ body.dark .an-highlight { mix-blend-mode: screen; }
 .ed-handle-nw, .ed-handle-se { cursor: nwse-resize; }
 .ed-handle-ne, .ed-handle-sw { cursor: nesw-resize; }
 
-/* 插入的空白页：导出时才真正写入 PDF，编辑期在视图里显示为一张白页。
-   用淡虚线边框区分它是"待插入"的，而不是原文件本来就有的页。 */
 .page.blank {
   background: #ffffff;
   border: 1px dashed var(--border-strong);
 }
 
-/* 编辑模式下页面加一圈提示边框 */
 body.edit-mode .page { cursor: crosshair; }
 body.edit-mode .page .text-layer { pointer-events: none; }
 
-/* 编辑工具面板 */
 .edit-palette {
-  /* fixed：贴视口底部居中。此前是 absolute 相对 .viewer，
-     被钉在滚动内容流的顶部 —— 既挡住 PDF 第一页开头，
-     又随滚动一起滚走。fixed 后固定在视口，不随内容滚动。 */
   position: fixed;
   bottom: 16px;
   left: 50%;
@@ -1587,9 +1469,6 @@ body.edit-mode .page .text-layer { pointer-events: none; }
 
 .ep-tool em { font-style: normal; }
 
-/* ---- 涂黑工具与确认流程 ----
-   涂黑是唯一不可逆的操作，视觉上必须和普通工具明确区分：
-   红色系、独立一行、带警示文案、二次确认。 */
 
 .ep-tool.danger { color: #dc2626; }
 
@@ -1636,9 +1515,6 @@ body.edit-mode .page .text-layer { pointer-events: none; }
   border-color: #dc2626;
 }
 
-/* 涂黑框在画布上的样子：红色虚线 + 浅红底。
-   刻意不用实心黑 —— 实心黑会让人误以为"已经安全了"，
-   但此时文字还在，只有导出后才真正删除。 */
 .ed-redact::after {
   content: "涂黑";
   position: absolute;
@@ -1655,13 +1531,10 @@ body.edit-mode .page .text-layer { pointer-events: none; }
 
 body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
 
-/* 原位替换框：琥珀色虚线 + 浅琥珀底，与涂黑（红）区分。
-   框内显示「将要写入的新文字」预览，让用户落地前看到替换结果。 */
 .ed-replace {
   display: flex;
   align-items: center;
-  justify-content: flex-start;   /* 横向靠左，和导出起点一致 */
-  /* 不要 overflow:hidden —— ::after 标签在 box 之外(top:-15px)，裁掉就看不见了 */
+  justify-content: flex-start;   
 }
 
 .ed-replace-text {
@@ -1670,7 +1543,6 @@ body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
   color: #9a5b00;
   text-align: left;
   padding: 0 2px;
-  /* 不折行 → 横向铺开，和导出（在原基线横排）一致；框窄就向右溢出显示 */
   white-space: nowrap;
   pointer-events: none;
 }
@@ -1692,7 +1564,6 @@ body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
 body.dark .ed-replace::after { background: rgba(0, 0, 0, 0.65); }
 body.dark .ed-replace-text { color: #fbbf24; }
 
-/* 替换工具 / 按钮：琥珀色，区分涂黑的红色 */
 .ep-label.replace { color: #d97706; }
 .ep-btn.replace {
   border-color: rgba(217, 119, 6, 0.5);
@@ -1708,7 +1579,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
   background: rgba(217, 119, 6, 0.12);
 }
 
-/* ---- 二次确认对话框 ---- */
 
 .confirm-mask {
   position: fixed;
@@ -1843,10 +1713,7 @@ body.dark .ed-replace-text { color: #fbbf24; }
 
 .edit-hint.dirty { color: var(--warning, #b45309); }
 
-/* 页面管理面板 */
 .page-panel {
-  /* fixed：贴视口右上、让开主工具栏。此前是 absolute 相对
-     .viewer，同样会被钉在内容流里随滚动滚走。 */
   position: fixed;
   top: calc(var(--toolbar-h) + 12px);
   right: 14px;
@@ -1971,11 +1838,7 @@ body.dark .ed-replace-text { color: #fbbf24; }
   padding: 8px 4px 2px;
 }
 
-/* 文字编辑输入浮层 */
 .text-input-pop {
-  /* fixed：相对**视口**定位，才与 openTextPop 里的 clientX/clientY 对应。
-     原来 absolute 相对 .viewer（自带滚动），滚动过后弹窗会落到视口外，
-     紧接着的 focus() 就把页面滚回顶端 —— 即"插入文字时自动滚到顶"的根因。 */
   position: fixed;
   z-index: 66;
   width: 240px;
@@ -2002,9 +1865,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
 
 .tip-textarea:focus { border-color: var(--accent); }
 
-/* ---- 改段落编辑区（在右侧栏里，不再浮在页面上） ----
-   为什么不再用浮动层：它 anchor 在视口上，页面一滚就和要改的那段脱开，
-   而且 560px 的框直接盖住正文。放进侧栏后：滚动只动 PDF，编辑器原地不动。 */
 .para-edit {
   position: relative;
   padding: 10px;
@@ -2014,7 +1874,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* 头部：页码做成小标签，描述文字允许换行 */
 .para-edit .para-head {
   display: flex;
   align-items: flex-start;
@@ -2043,7 +1902,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
   word-break: break-word;
 }
 
-/* 收起按钮：只关编辑区，不退出编辑模式 */
 .para-edit .para-fold {
   flex: 0 0 auto;
   width: 20px;
@@ -2058,7 +1916,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
 }
 .para-edit .para-fold:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-/* 正文：随侧栏宽度自适应，行距放宽 */
 .para-edit .tip-textarea {
   min-height: 176px;
   max-height: 42vh;
@@ -2121,26 +1978,15 @@ body.dark .ed-replace-text { color: #fbbf24; }
 
 
 
-/* ==========================================================================
-   右侧编辑侧栏（编辑 + 页面管理）
-   --------------------------------------------------------------------------
-   原来是两个浮层：底部居中的工具条 + 右上角的页面管理卡片。
-   两个都在遮挡 PDF，而且工具变多后底部那条明显挤。
-   改成一条可开合的右侧栏：与工具栏同高、从上到下排布，宽度固定，内部滚动。
-   ========================================================================== */
 
 .edit-drawer {
   position: fixed;
   top: var(--toolbar-h);
   right: 0;
   bottom: 0;
-  /* 宽度可拖拽调整（--drawer-w 由 app.js 写入 localStorage） */
   width: var(--drawer-w, 300px);
   min-width: 240px;
   max-width: 620px;
-  /* ★ 层级必须低于「划词菜单 60 / 标注气泡 65 / 确认框 300」：
-     侧栏是常驻面板，任何"临时浮层"都要能盖在它上面，
-     否则划词菜单、标注气泡一落到右半边就被侧栏挡住 —— 点不到。 */
   z-index: 56;
   display: flex;
   flex-direction: column;
@@ -2199,7 +2045,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
   gap: 12px;
 }
 
-/* 两块面板原本是浮层，进侧栏后取消定位、去掉自己的阴影和边框重叠 */
 .edit-drawer .edit-palette,
 .edit-drawer .page-panel {
   position: static;
@@ -2228,14 +2073,11 @@ body.dark .ed-replace-text { color: #fbbf24; }
 
 .edit-drawer .pp-body { padding: 0; overflow: visible; }
 
-/* 窄栏里工具改成网格：比一行硬挤好看，也不会把标签压扁 */
 .edit-drawer .ep-row { flex-wrap: wrap; gap: 6px; }
 
-/* 标签独占一行，否则它会和第一个按钮挤在同一行，把 3×3 网格挤成 4 行 */
 .edit-drawer .ep-label { flex: 1 1 100%; margin-bottom: 2px; }
 
 .edit-drawer .ep-tool {
-  /* 9 个工具分三列，正好 3×3；两列会拉成 5 行，侧栏显得很长 */
   flex: 1 1 calc(33.333% - 4px);
   min-width: 0;
   height: 32px;
@@ -2250,7 +2092,6 @@ body.dark .ed-replace-text { color: #fbbf24; }
   white-space: nowrap;
 }
 
-/* 警示文案在窄栏里换行显示（比藏起来安全） */
 .edit-drawer .ep-warn {
   flex: 1 1 100%;
   font-size: 11px;
@@ -2261,16 +2102,12 @@ body.dark .ed-replace-text { color: #fbbf24; }
 
 .edit-drawer .ep-btn { flex: 1 1 auto; }
 
-/* 侧栏打开时，把阅读区往里让 —— 侧栏是"占位"而不是"盖住"。
-   用 padding 而不是改容器宽度：后者会触发 auto 缩放重排（整本重渲染）。 */
 body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
 
-/* 窄窗口下侧栏改为覆盖，免得阅读区被挤没 */
 @media (max-width: 1100px) {
   body.edit-mode .viewer { padding-right: 0; }
 }
 
-/* 侧栏左缘的拖拽条：调宽度。用绝对定位压在边框上，不占布局宽度。 */
 .sp-resizer {
   position: absolute;
   left: -3px;
@@ -2283,14 +2120,6 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
 .sp-resizer:hover,
 .sp-resizer.dragging { background: var(--accent-soft); }
 
-/* ==========================================================================
-   工具栏容纳：左侧可滚动 + 右侧文件操作常驻
-   --------------------------------------------------------------------------
-   之前是单层 flex：按钮总宽约 1490px，在 1440 甚至 1280 的窗口下
-   右侧的「打印 / 导出」被直接裁到视口外 —— 看不见、点不到。
-   现在把功能组放进可横向滚动的 .tb-scroll，
-   文件操作放进 .tb-fixed 固定在最右，任何宽度都在。
-   ========================================================================== */
 
 .toolbar { overflow: hidden; }
 
@@ -2307,7 +2136,6 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
 
 .tb-scroll::-webkit-scrollbar { display: none; }
 
-/* 不许压缩：按钮被挤窄比出现滚动条更难用（图标会压成一条缝） */
 .tb-scroll > * { flex: 0 0 auto; }
 
 .tb-fixed {
@@ -2319,17 +2147,12 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
   border-left: 1px solid var(--border);
 }
 
-/* 中等宽度（≤1360，含 200% DPI 的 2560 屏）改「图标模式」：
-   按钮只剩图标、搜索框收窄。不这么做的话，工具栏总宽约 1376px
-   会把搜索框挤到可视区外 —— 用户以为搜索没了。
-   图标本身都有 title 提示，鼠标悬停就知道是什么。 */
 @media (max-width: 1360px) {
   .btn .lbl { display: none; }
   .search-input { width: 132px; }
   .search-input:focus { width: 168px; }
 }
 
-/* PDF 自带注释的列表标记（只读来源，一眼可辨） */
 .ac-src {
   font-size: 10px;
   color: var(--text-muted);
@@ -2347,10 +2170,8 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
 
 .annot-card.is-ext .ac-text { color: var(--text-secondary); }
 
-/* 只读注释没有备注时给一句说明，别让卡片看起来是空的 */
 .ac-note.ac-none { color: var(--text-muted); font-style: italic; }
 
-/* 只读注释被选中时，页面上的元素也高亮一下 */
 .an-ext.active {
   outline: 1.5px solid var(--accent);
   outline-offset: 1px;

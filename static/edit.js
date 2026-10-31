@@ -1,24 +1,5 @@
-/* ==========================================================================
-   编辑模块：叠加式内容编辑 + 页面管理
-
-   设计原则（很重要，决定了它能稳定工作）：
-     1. **不改原文**。所有编辑都是"往上盖"的新对象，原 PDF 字节不动。
-     2. **数据与渲染分离**。editState.objects 是唯一真相，
-        渲染层只是它的投影，随时可整层重画。
-     3. **坐标即存即转**。屏幕上拖出来的框，立刻转成 PDF 坐标存起来；
-        渲染时再从 PDF 坐标转回屏幕。这样缩放、旋转后都不会错位。
-     4. **不做回流重排**。PDF 里没有重排所需的结构信息，硬做必崩。
-
-   坐标转换：
-      屏幕坐标 -> PDF 坐标：
-        pdfX = (screenX - pageLeft) / scale
-        pdfY = pageHeight - (screenY - pageTop) / scale      // y 轴翻转
-      （这里是简化式，真实的 pageHeight 来自服务端的 MediaBox）
-   ========================================================================== */
 
 import { state, els, api, toast, uid } from '/static/core.js';
-// 纯几何/数据变换放在 geom.js —— 那边不依赖 state/DOM/pdf.js，
-// 所以可以在 node 里单测（见 webtest.mjs）。这里只做「读状态 + 转调」。
 import {
   screenToNorm as gScreenToNorm,
   normToScreen as gNormToScreen,
@@ -29,55 +10,44 @@ import {
   hasAnyEdit,
   makeTextBoxAuto,
 } from '/static/geom.js';
-// 批注要以 PDF 原生注释（/Annots）写进导出文件，换算逻辑在 annot.js
 import { annotationsToPdfItems } from '/static/annot.js';
 
-/* --------------------------------------------------------------------------
-   状态
-   -------------------------------------------------------------------------- */
 
 export const editState = {
-  on: false,                 // 编辑模式是否开启
-  tool: null,                // 当前工具：whiteout | text | rect | ellipse | line | select
-  objects: [],               // 编辑对象列表（唯一真相）
-  pages: {                   // 页面结构改动
-    order: null,             // null 表示原序
-    delete: [],              // 被删页下标
-    rotate: {},              // 下标 -> 角度增量描述
-    insert: [],              // { at, width, height }
+  on: false,                 
+  tool: null,                
+  objects: [],               
+  pages: {                   
+    order: null,             
+    delete: [],              
+    rotate: {},              
+    insert: [],              
   },
-  pageInfo: [],              // 服务端返回的各页尺寸 [{width,height,rotate}]
-  selectedId: null,          // 当前选中的对象
-  dirty: false,              // 是否有未保存改动
-  tempShape: null,           // 拖拽中的临时对象
+  pageInfo: [],              
+  selectedId: null,          
+  dirty: false,              
+  tempShape: null,           
 };
 
 let bound = false;
 let saveTimer = null;
 
-/* 外部注入的依赖（避免与 app.js 循环引用） */
 let deps = {
   goToPage: () => {},
   renderPage: () => {},
-  refreshPages: null,        // 重建页面（增删页后调用）
+  refreshPages: null,        
 };
 
 export function bindEditHelpers(inject) {
   deps = { ...deps, ...inject };
 }
 
-/* --------------------------------------------------------------------------
-   坐标转换
-   -------------------------------------------------------------------------- */
 
-/* 取某页的 PDF 尺寸（来自服务端 MediaBox） */
 export function pageSize(pageNum) {
   const info = editState.pageInfo[pageNum - 1];
   if (info && info.width > 0 && info.height > 0) {
     return { width: info.width, height: info.height };
   }
-  // 插入的空白页（页号超出原始页范围）：用它的插入规格尺寸，
-  // 否则画在上面的对象会按 A4 兜底换算，与页面实际尺寸对不上。
   const base = Array.isArray(editState.pageInfo) ? editState.pageInfo.length : 0;
   const ins = editState.pages && editState.pages.insert;
   if (ins && pageNum > base) {
@@ -86,59 +56,35 @@ export function pageSize(pageNum) {
       return { width: spec.width, height: spec.height };
     }
   }
-  // 兜底：A4
   return { width: 595, height: 842 };
 }
 
-/*
-  屏幕坐标 -> 页面内归一化坐标（0~1）。
-
-  用归一化而不是绝对 PDF 点，好处是**缩放后完全不用改数据** ——
-  scale 变了，归一化值不变，渲染时乘新的尺寸即可。
-  最终提交给服务端时再乘页面尺寸换成 PDF 点。
-
-  纯逻辑在 geom.js（可单测），这里只负责量 DOM 再转调。
-*/
 export function screenToNorm(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   return gScreenToNorm(clientX, clientY, r.left, r.top, r.width, r.height);
 }
 
-/* 归一化 -> 屏幕像素（相对 viewer） */
 export function normToScreen(rec, nx, ny, nw, nh) {
   const r = rec.wrap.getBoundingClientRect();
   return gNormToScreen(nx, ny, nw, nh, r.width, r.height);
 }
 
-/*
-  归一化坐标 -> PDF 坐标（原点左下、y 向上）。
-
-  PDF 的 y 轴方向和屏幕相反，所以：
-      pdfY = pageHeight * (1 - (ny + nh))
-  这是最容易写错的地方，务必保持「先翻转再乘尺寸」的顺序。
-*/
 export function normToPdf(pageNum, nx, ny, nw, nh) {
   const { width, height } = pageSize(pageNum);
   return gNormToPdf(nx, ny, nw, nh, width, height);
 }
 
-/* PDF 坐标 -> 归一化（回显用） */
 export function pdfToNorm(pageNum, x, y, w, h) {
   const { width, height } = pageSize(pageNum);
   return gPdfToNorm(x, y, w, h, width, height);
 }
 
-/* --------------------------------------------------------------------------
-   持久化
-   -------------------------------------------------------------------------- */
 
 export async function loadEdits(docId) {
-  // ★ 先无条件清空：否则切到"没有编辑数据"的文档时（或 docId 为空时），
-  //   上一个文档的编辑对象会残留 —— 表现为"打开新文件却带出上次编辑的内容"。
   editState.objects = [];
   editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
   editState.selectedId = null;
-  resetHistory();                       // 新文档：历史从零开始
+  resetHistory();                       
   if (!docId) { editState.dirty = false; return; }
   try {
     const data = await api(`/api/edits?doc=${encodeURIComponent(docId)}`);
@@ -196,18 +142,12 @@ function updateSaveHint() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   撤销 / 重做（对象 + 页面的快照栈）
-   -------------------------------------------------------------------------- */
 
 const MAX_HISTORY = 60;
 const history = { past: [], future: [] };
 let lastSnap = null;
 let histTimer = null;
 
-/* 快照：**剔除渲染缓存字段** _norm / _box。
-   它们记的是旧坐标，留着的话恢复后 renderObjectEl 会直接用旧缓存、
-   渲染停在旧位置（与 updateObject 里作废 _norm 是同一个坑）。 */
 function takeSnapshot() {
   const objects = editState.objects.map(o => {
     const c = { ...o };
@@ -218,16 +158,10 @@ function takeSnapshot() {
   return JSON.stringify({ objects, pages: editState.pages });
 }
 
-/* 首次改动**之前**建立基线 —— 把「改动前」的状态记进 lastSnap。
-   没有它，第一次 commitHistory 只会把 lastSnap 从 null 填成"改动后"，
-   于是**第一个操作永远撤不掉**。放在每个改动入口调用，就不依赖
-   setEditMode 的执行时机了（更稳）。 */
 function ensureHistoryBaseline() {
   if (lastSnap === null) lastSnap = takeSnapshot();
 }
 
-/* 清空历史。★ 只在**打开新文档**时调用；
-   绝不要在「进出编辑模式」时调（那会让用户切一下模式就丢掉全部撤销能力）。 */
 function resetHistory() {
   history.past = [];
   history.future = [];
@@ -247,8 +181,6 @@ function commitHistory() {
   syncHistoryButtons();
 }
 
-/* 延迟提交：把一串连续操作（一次拖动 = 多帧 update）合并成**一条**历史。
-   撤销前会强制 flush，所以即使操作后立刻 Ctrl+Z 也不会丢。 */
 export function scheduleHistory() {
   if (histTimer) clearTimeout(histTimer);
   histTimer = setTimeout(commitHistory, 350);
@@ -267,7 +199,7 @@ function restoreSnapshot(json) {
 }
 
 export function undoEdit() {
-  commitHistory();                                   // 先把未提交的改动并进历史
+  commitHistory();                                   
   if (!history.past.length) { toast('没有可撤销的操作', 1200); return; }
   history.future.push(takeSnapshot());
   restoreSnapshot(history.past.pop());
@@ -287,9 +219,6 @@ function syncHistoryButtons() {
   if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
 }
 
-/* --------------------------------------------------------------------------
-   复制 / 粘贴（内部剪贴板，不占用系统剪贴板，免得和「复制所选文字」打架）
-   -------------------------------------------------------------------------- */
 
 let clipboard = null;
 
@@ -318,12 +247,11 @@ export function pasteObject() {
   pasteObj(cloneObj(clipboard));
 }
 
-/* 粘到**当前页**，向右下偏移一点，免得和原件完全重叠、看起来没反应 */
 function pasteObj(base) {
   const D = 14;
   const o = { ...base, id: uid(), page: state.currentPage };
   o.x += D;
-  o.y -= D;                                        // PDF 的 y 向上：减 = 往下
+  o.y -= D;                                        
   if (o.x2 !== undefined && o.x2 !== null) { o.x2 += D; o.y2 -= D; }
   editState.objects.push(o);
   editState.selectedId = o.id;
@@ -333,9 +261,6 @@ function pasteObj(base) {
   toast('已粘贴对象', 900);
 }
 
-/* --------------------------------------------------------------------------
-   对象的增删改
-   -------------------------------------------------------------------------- */
 
 export function addObject(obj) {
   ensureHistoryBaseline();
@@ -364,9 +289,6 @@ export function updateObject(id, patch) {
   if (!obj) return false;
   ensureHistoryBaseline();
   Object.assign(obj, patch);
-  // ★ 渲染缓存必须作废。_norm 是「避免反复换算」的缓存，
-  //   位置一变还留着它，渲染就会停在**旧位置**（拖动时踩过这个坑）。
-  //   作废后 renderObjectEl 会从 x/y/w/h 重算，结果一致、不会漂。
   if (!('_norm' in patch)) obj._norm = null;
   scheduleHistory();
   scheduleSave();
@@ -382,9 +304,6 @@ export function clearAllObjects() {
   repaintEdits();
 }
 
-/* --------------------------------------------------------------------------
-   渲染：把编辑对象画到页面上的编辑层
-   -------------------------------------------------------------------------- */
 
 const EDIT_LAYER_CLASS = 'edit-layer';
 
@@ -398,14 +317,11 @@ function ensureLayer(rec) {
   return layer;
 }
 
-/* 重画所有已渲染页面的编辑层 */
 export function repaintEdits() {
   for (const rec of state.pages) {
     if (!rec.rendered) continue;
     paintPageEdits(rec);
   }
-  // 所有对象变更都会经过这里，顺带刷新涂黑 / 替换计数
-  // （不在每个 add/remove 里各写一遍，避免漏掉某条路径）
   syncRedactCount();
   syncReplaceCount();
 }
@@ -414,7 +330,6 @@ export function paintPageEdits(rec) {
   if (!rec) return;
   const layer = ensureLayer(rec);
 
-  // 清掉旧内容（保留拖拽中的预览由 CSS 层单独处理）
   layer.innerHTML = '';
 
   const mine = editState.objects.filter(o => o.page === rec.num);
@@ -422,34 +337,20 @@ export function paintPageEdits(rec) {
     const el = renderObjectEl(obj, rec);
     if (!el) continue;
     layer.appendChild(el);
-    // ★ 文字对象的命中范围必须在**插入 DOM 之后**量 ——
-    // 元素不在文档里时 getBoundingClientRect 全是 0（踩过）。
-    // 存成归一化值：缩放/旋转后每次重画都会刷新，不会失效。
     measureTextBox(obj, el, rec);
   }
 
-  // 选中的可缩放对象：四角画缩放手柄（仅"选择工具"下）
   const sel = mine.find(o => o.id === editState.selectedId);
   if (sel && editState.tool === 'select' && RESIZABLE_KINDS.has(sel.kind)) {
     renderResizeHandles(layer, sel, rec);
   }
 
-  // 拖拽中的临时对象
   if (editState.tempShape && editState.tempShape.page === rec.num) {
     const t = renderObjectEl(editState.tempShape, rec, true);
     if (t) layer.appendChild(t);
   }
 }
 
-/*
-  量文字对象**渲染出来的盒子**，写进 obj._box（归一化）。
-
-  为什么需要：数据层里文字是「锚点」不是矩形（w/h = 0，对应 PDF 的
-  Td + Tj），所以算不出可点范围。唯一正确的来源就是渲染结果 ——
-  命中测试的定义本来就是「用户看得见的地方就该点得中」。
-
-  没有这一步的后果：文字写得进去，但**选不中、删不掉、挪不了**。
-*/
 function measureTextBox(obj, el, rec) {
   if (obj.kind !== 'text') return;
   const r = rec.wrap.getBoundingClientRect();
@@ -466,16 +367,6 @@ function measureTextBox(obj, el, rec) {
   };
 }
 
-/*
-  行盒顶部 → 文字基线的像素距离。
-
-  用途：PDF 里 Td 定位的是**基线**，而 HTML 的 top 落在**行盒顶部**。
-  要让预览的"基线"落在锚点上（与导出对齐），就得把盒子整体上移
-  这么多个像素。
-
-  用 canvas 实测字体度量，而不是写死比例 —— 中英文字体（Noto Sans SC
-  / Helvetica）的行高度量不同，写死一个比例会顾此失彼。
-*/
 function textBaselineOffset(fontSize, lineHeight) {
   try {
     const ctx = document.createElement('canvas').getContext('2d');
@@ -486,7 +377,6 @@ function textBaselineOffset(fontSize, lineHeight) {
     const content = asc + desc;
     return (fontSize * lineHeight - content) / 2 + asc;
   } catch (e) {
-    // 极端环境下 canvas 不可用：退化为经验值（ascent≈0.8em + 居中≈0.125em）
     return fontSize * 0.925;
   }
 }
@@ -501,7 +391,6 @@ function renderObjectEl(obj, rec, isTemp = false) {
   const s = normToScreen(rec, p.x, p.y, p.w, p.h);
 
   if (obj.kind === 'line') {
-    // 线用 SVG 画，才能画出斜线
     return renderLineEl(obj, rec, isTemp);
   }
 
@@ -514,11 +403,6 @@ function renderObjectEl(obj, rec, isTemp = false) {
   if (obj.kind === 'whiteout') {
     el.style.background = '#ffffff';
   } else if (obj.kind === 'redact') {
-    // 涂黑：视觉上画成**红色虚线框 + 半透明红底**，而不是实心黑。
-    // 这是刻意的 —— 实心黑会让人以为"已经盖住了、安全了"，
-    // 但涂黑尚未导出（还没真正删掉底层文字）。
-    // 红色虚线框传达的是"这块待销毁"的语义，
-    // 导出后的文件里才是实心黑。
     el.style.border = '1.5px dashed #dc2626';
     el.style.background = 'rgba(220, 38, 38, 0.14)';
     el.classList.add('ed-redact');
@@ -534,7 +418,6 @@ function renderObjectEl(obj, rec, isTemp = false) {
       el.style.background = hexWithAlpha(obj.color || '#000000', 0.18);
     }
   } else if (obj.kind === 'text') {
-    // 文字：按页面实际尺寸估算字号，保证视觉与导出一致
     const size = (obj.size || 12) * (rec.wrap.getBoundingClientRect().width /
       (pageSize(obj.page).width || 595));
     const fs = Math.max(6, size);
@@ -542,19 +425,9 @@ function renderObjectEl(obj, rec, isTemp = false) {
     el.style.color = obj.color || '#000000';
     el.style.lineHeight = '1.25';
     el.textContent = obj.text || '';
-    // ★ 基线对齐：PDF 的 Td 定位**基线**，而上面的 left/top 落在盒子的
-    //   左上角 —— 两者语义不同，会让预览文字整体比导出**低**约一行
-    //   （README 长期挂着的"预览与导出垂直位置差"就是它）。
-    //   把盒子整体上移"行盒顶部→基线"的距离，使**基线**落在锚点，
-    //   与导出（Td 基线）一致，从而所见即所得。
     el.style.top = (s.top - textBaselineOffset(fs, 1.25)) + 'px';
-    // ★ 必须放在**最后**：上面按矩形算出来的宽高对文字是 1px，会把文字裁没。
-    //   数据层里文字只有锚点（w/h = 0），盒子要按内容自适应。
     makeTextBoxAuto(el);
   } else if (obj.kind === 'replace') {
-    // 原位替换：视觉上画成**琥珀色虚线框 + 半透明底**，与涂黑的红色区分。
-    // 框内显示「将要写入的新文字」预览 —— 让用户落地前就能看到替换结果，
-    // 也避免「框画了却不知道要替换成什么」。底色不是实心，提示"尚未导出"。
     el.style.border = '1.5px dashed #d97706';
     el.style.background = 'rgba(217, 119, 6, 0.12)';
     el.classList.add('ed-replace');
@@ -570,20 +443,8 @@ function renderObjectEl(obj, rec, isTemp = false) {
   return el;
 }
 
-/* 可缩放的对象类型：有矩形尺寸的那些。
-   文字是锚点（w/h = 0）、直线是两端点 —— 缩放语义不同，先不纳入。 */
 const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact', 'replace']);
 
-/*
-  在选中对象的四角画缩放手柄。
-
-  与其它编辑元素不同，手柄**必须可交互**（pointer-events: auto），
-  否则拖不动 —— .ed* 系列默认全是 pointer-events:none（命中统一走
-  hitTest 几何计算），手柄是唯一的例外。
-
-  手柄挂在 .edit-layer 上、按渲染盒子的四角绝对定位；
-  交互由 app.js 的 onEditMouseDown（closest('.ed-handle')）接管。
-*/
 function renderResizeHandles(layer, obj, rec) {
   const p = obj._norm || pdfToNorm(obj.page, obj.x, obj.y, obj.w, obj.h);
   const s = normToScreen(rec, p.x, p.y, p.w, p.h);
@@ -614,7 +475,6 @@ function renderLineEl(obj, rec, isTemp) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
 
-  // 用归一化坐标换算到页面像素
   const n1 = obj._norm ? { x: obj._norm.x, y: obj._norm.y }
     : pdfToNorm(obj.page, obj.x, obj.y, 0, 0);
   const n2 = obj._norm
@@ -642,11 +502,7 @@ function hexWithAlpha(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/* --------------------------------------------------------------------------
-   工具：把屏幕拖出的框转成编辑对象
-   -------------------------------------------------------------------------- */
 
-/* 由两次屏幕坐标（拖拽起止点）生成一个矩形类对象 */
 export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
@@ -676,7 +532,6 @@ export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
   };
 }
 
-/* 由两点生成一条线 */
 export function makeLineObject(rec, pageNum, start, end, opts = {}) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
@@ -698,8 +553,6 @@ export function makeLineObject(rec, pageNum, start, end, opts = {}) {
   };
 }
 
-/* 命中测试：点在哪个编辑对象上（用于选中/删除） */
-/* 命中测试：把屏幕点换成归一化坐标，再交给 geom.js 的纯逻辑 */
 export function hitTest(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   const nx = (clientX - r.left) / (r.width || 1);
@@ -707,11 +560,7 @@ export function hitTest(rec, clientX, clientY) {
   return hitTestNorm(editState.objects, rec.num, nx, ny, pageSize);
 }
 
-/* --------------------------------------------------------------------------
-   页面管理
-   -------------------------------------------------------------------------- */
 
-/* 当前有效页序（考虑删除后重排） */
 export function effectiveOrder() {
   const total = state.pageCount;
   const del = new Set(editState.pages.delete);
@@ -763,12 +612,10 @@ export function insertBlank(afterIndex) {
   toast('已在末尾插入空白页（滚动到最下方可见）', 2000);
 }
 
-/* 通知视图层：页面结构变了，请同步空白页展示 */
 function notifyPagesChanged() {
   document.dispatchEvent(new CustomEvent('pdf:pages-changed'));
 }
 
-/* 刷新页面管理面板 */
 export function refreshPagePanel() {
   const box = els.pageListBody;
   if (!box) return;
@@ -778,7 +625,6 @@ export function refreshPagePanel() {
   const del = new Set(editState.pages.delete);
   const order = editState.pages.order;
 
-  // 面板按「当前展示顺序」列出：先重排，再标删除
   const seq = order ? [...order] : Array.from({ length: total }, (_, i) => i);
 
   const head = document.createElement('div');
@@ -820,7 +666,6 @@ export function refreshPagePanel() {
     box.appendChild(row);
   });
 
-  // 插入空白页的行
   if (editState.pages.insert.length) {
     const ins = document.createElement('div');
     ins.className = 'pm-insert-note';
@@ -852,15 +697,8 @@ export function refreshPagePanel() {
   box.appendChild(hint);
 }
 
-/* --------------------------------------------------------------------------
-   导出
-   -------------------------------------------------------------------------- */
 
 export function buildExportPayload() {
-  // 对象部分的变换在 geom.js —— 那里是纯函数、可以单测。
-  // 其中一条关键约束写在那边：**涂黑对象不参与普通导出**
-  // （普通导出是叠加式的，删不掉底层文字；让它走这条路会产出
-  //  「看着是黑块、文字其实还在」的文件。涂黑必须走 /api/redact）。
   return {
     path: state.filePath,
     pages: editState.pages,
@@ -879,9 +717,6 @@ export async function exportPdf() {
   const nReplace = replaceCount();
   const hasSpecial = nRedact > 0 || nReplace > 0;
 
-  // ★ 批注也参与导出 —— 写成 PDF 原生注释（/Annots），
-  //   这样 Acrobat / Edge / 微信预览都能看见；不写的话导出文件是"干净"的，
-  //   用户会以为标注丢了。
   let annots = [];
   try {
     annots = await annotationsToPdfItems();
@@ -890,19 +725,12 @@ export async function exportPdf() {
   }
   if (annots.length) payload.annotations = annots;
 
-  // ★ 统一出口：没有任何改动也允许导出**原样副本**（用户可能只是想另存一份）。
-  //   但「只有涂黑 / 替换」时仍然拦住 —— 这两类不参与叠加式导出，
-  //   导出会产出「看着没处理过」的文件，很容易被误认为已完成（假安全）。
   const noChange = !hasAnyEdit(payload) && !annots.length;
   if (noChange && hasSpecial) {
     toast('涂黑 / 替换 不参与「导出 PDF」，请点对应的「并另存为…」', 3200);
     return;
   }
 
-  // ★ 防呆：画了涂黑 / 替换却点了「导出 PDF」。
-  //   普通导出是**叠加式**的，不会删除底层文字、也不会改写文字，
-  //   所以这些操作**不会**被包含 —— 用户极易误点这个按钮。
-  //   项目最怕的正是这种「假安全」，所以这里显式拦一道。
   if (hasSpecial) {
     const parts = [];
     if (nRedact > 0) parts.push(`涂黑 ${nRedact} 处`);
@@ -918,9 +746,6 @@ export async function exportPdf() {
     }
   }
 
-  // ★ 两个入口共用同一次导出：工具栏常驻按钮 + 编辑侧栏按钮。
-  //   两边都要置忙 —— 只置一个的话，从工具栏点完，侧栏那个还能再点一次，
-  //   于是同一个动作并发跑两遍，产出两份文件。
   const btns = [els.btnExportTop, els.btnExportPdf].filter(Boolean);
   if (btns.some(b => b.disabled)) return;
   const setBusy = (on) => btns.forEach(b => {
@@ -941,7 +766,7 @@ export async function exportPdf() {
       try {
         const j = await r.json();
         if (j.error) msg = j.error;
-      } catch (e) { /* 忽略 */ }
+      } catch (e) {  }
       throw new Error(msg);
     }
 
@@ -950,7 +775,7 @@ export async function exportPdf() {
     let name = `${state.fileName}-已编辑.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
-      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+      try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
     const url = URL.createObjectURL(blob);
@@ -963,15 +788,12 @@ export async function exportPdf() {
     const pages = r.headers.get('X-Export-Pages');
     const dropped = r.headers.get('X-Export-Dropped');
 
-    // 中文字体里没有的字符写不进去 —— **必须让用户看到**。
-    // 静默丢字是最糟的结果：用户以为写进去了，实际没有。
     const missRaw = r.headers.get('X-Export-CJK-Missing') || '';
     let miss = '';
     if (missRaw) {
       try { miss = decodeURIComponent(missRaw); } catch (e) { miss = missRaw; }
     }
 
-    // 没有改动时说明白是「原样副本」，免得用户以为自己的编辑没生效
     let msg = (noChange ? `已导出原样副本：${name}` : `已导出：${name}`) +
               (pages ? `（${pages} 页）` : '');
     const nAnn = r.headers.get('X-Export-Annots');
@@ -990,20 +812,7 @@ export async function exportPdf() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   涂黑（redaction）—— 与普通编辑完全分开的一条路径
 
-   为什么分开：普通编辑是「叠加」，可逆、不破坏原文；
-   涂黑是**信息销毁**，不可逆。两者风险等级差太远，
-   混在同一个导出流程里会让人放松警惕。
-
-   所以涂黑有自己的一套：
-     - 独立工具（redact），视觉上是红色虚线框
-     - 独立导出按钮与独立的二次确认
-     - 只走 /api/redact，**永远另存为**，不写回原文件
-   -------------------------------------------------------------------------- */
-
-/* 取当前所有涂黑区域（转成 PDF 坐标） */
 export function redactRegions() {
   return editState.objects
     .filter(o => o.kind === 'redact')
@@ -1021,16 +830,6 @@ export function redactCount() {
   return redactRegions().length;
 }
 
-/*
-  执行涂黑导出。
-
-  这里会做一次**本地预检**：如果某个涂黑框在页面上没盖到任何
-  可选中的文字，就提前警告 —— 服务端也会查（零命中直接报错），
-  但本地先查能给出更好的提示。
-
-  注意：本地预检用的是 pdf.js 的文字层，可能和引擎的字形判定
-  有细微差异，所以**不阻断**，只提示。
-*/
 export async function redactPdf() {
   if (!state.filePath) {
     toast('请先打开一个文档', 1600);
@@ -1053,7 +852,6 @@ export async function redactPdf() {
       body: JSON.stringify({
         path: state.filePath,
         regions,
-        // 明确声明不覆盖原文件（服务端也会强制拒绝覆盖请求）
         overwrite: false,
       }),
     });
@@ -1063,7 +861,7 @@ export async function redactPdf() {
       try {
         const j = await r.json();
         if (j.error) msg = j.error;
-      } catch (e) { /* 忽略 */ }
+      } catch (e) {  }
       throw new Error(msg);
     }
 
@@ -1072,7 +870,7 @@ export async function redactPdf() {
     let name = `${state.fileName}-已涂黑.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
-      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+      try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
     const url = URL.createObjectURL(blob);
@@ -1094,16 +892,7 @@ export async function redactPdf() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   原位替换（in-place text replace）—— 与涂黑平行的独立路径
 
-   为什么也独立：替换要「重写原文内容流」，风险等级高于普通叠加编辑
-   （普通导出是不破坏原文的）。但它**不销毁信息**（只是改写、且只另存为），
-   所以不像涂黑那样需要二次危险确认；与导出一样走一键，但必须走
-   专用的 /api/replace，绝不能混进普通 /api/export（否则位置/字体对不上）。
-   -------------------------------------------------------------------------- */
-
-/* 取当前所有替换区域（转成 PDF 坐标，附带要写入的新文字） */
 export function replaceRegions() {
   return editState.objects
     .filter(o => o.kind === 'replace')
@@ -1143,7 +932,6 @@ export async function replacePdf() {
       body: JSON.stringify({
         path: state.filePath,
         replacements: regions,
-        // 明确声明不覆盖原文件（服务端也会强制拒绝覆盖请求）
         overwrite: false,
       }),
     });
@@ -1153,7 +941,7 @@ export async function replacePdf() {
       try {
         const j = await r.json();
         if (j.error) msg = j.error;
-      } catch (e) { /* 忽略 */ }
+      } catch (e) {  }
       throw new Error(msg);
     }
 
@@ -1162,7 +950,7 @@ export async function replacePdf() {
     let name = `${state.fileName}-已替换.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
-      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+      try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
     const url = URL.createObjectURL(blob);
@@ -1182,7 +970,6 @@ export async function replacePdf() {
   }
 }
 
-/* 更新替换区域计数显示 */
 export function syncReplaceCount() {
   const el = els.replaceCount;
   if (!el) return;
@@ -1192,9 +979,6 @@ export function syncReplaceCount() {
   if (btn) btn.disabled = n === 0;
 }
 
-/* --------------------------------------------------------------------------
-   模式切换
-   -------------------------------------------------------------------------- */
 
 export function setEditMode(on) {
   editState.on = !!on;
@@ -1205,12 +989,8 @@ export function setEditMode(on) {
   }
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
-  // 编辑面板 / 页面管理现在是同一条右侧栏，统一开合
   if (els.sidePanel) els.sidePanel.hidden = !editState.on;
 
-  // ★ 编辑与标注**互斥**：进入编辑就退出标注。
-  //   用事件广播而不是直接 import app.js —— 那边已经 import 了本模块，
-  //   反向引用会形成循环依赖（真跑起来是"某个导出变 undefined"的怪问题）。
   if (editState.on) {
     document.dispatchEvent(new CustomEvent('pdf:edit-on'));
   }
@@ -1218,14 +998,6 @@ export function setEditMode(on) {
   syncToolButtons();
   repaintEdits();
   if (editState.on) {
-    // ★ 进入编辑模式时建立历史**基线**（= 当前状态）。
-    //   否则第一次 commitHistory 只会把 lastSnap 从 null 填成"操作后"的状态，
-    //   没留下"操作前"可回退 —— 表现为**第一个操作永远撤不掉**
-    //   （真实反馈：插入一段文字后 Ctrl+Z 没反应）。
-    // ★ 这里**不要清空历史** —— 历史应当跨「进出编辑模式」保留。
-    //   否则退出编辑模式再进来，之前做的操作就全撤不掉了（真实反馈：
-    //   "不退出编辑模式能撤销，退出后就不行"）。
-    //   只在基线缺失时补一次（首次操作时 ensureHistoryBaseline 也会兜底）。
     if (lastSnap === null) lastSnap = takeSnapshot();
     syncHistoryButtons();
     refreshPagePanel();
@@ -1254,17 +1026,11 @@ export function currentColor() {
   return el && el.value ? el.value : '#111111';
 }
 
-/* --------------------------------------------------------------------------
-   初始化
-   -------------------------------------------------------------------------- */
 
 export function bindEditUI() {
   if (bound) return;
   bound = true;
 
-  // 中文字体（@font-face，约 10MB）是异步加载的。预览文字的**基线偏移**
-  // 依赖字体度量：字体没就绪时按兜底字体算，会与导出差一点。加载完成后
-  // 重绘一次，让预览的字体与基线位置都对齐到导出。
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => { if (editState.on) repaintEdits(); });
   }
@@ -1300,7 +1066,6 @@ export function bindEditUI() {
 
   els.btnExportPdf && els.btnExportPdf.addEventListener('click', exportPdf);
 
-  // ---- 涂黑 ----
   els.btnRedactPdf && els.btnRedactPdf.addEventListener('click',
     openRedactConfirm);
   els.redactCancel && els.redactCancel.addEventListener('click',
@@ -1309,19 +1074,16 @@ export function bindEditUI() {
     closeRedactConfirm();
     redactPdf();
   });
-  // 点遮罩空白处也可取消（但绝不默认确认）
   els.redactConfirm && els.redactConfirm.addEventListener('click', (e) => {
     if (e.target === els.redactConfirm) closeRedactConfirm();
   });
 
-  // ---- 原位替换 ----
   els.btnReplacePdf && els.btnReplacePdf.addEventListener('click', replacePdf);
 
   syncRedactCount();
   syncReplaceCount();
 }
 
-/* 更新涂黑区域计数显示 */
 export function syncRedactCount() {
   const el = els.redactCount;
   if (!el) return;
@@ -1331,13 +1093,6 @@ export function syncRedactCount() {
   if (btn) btn.disabled = n === 0;
 }
 
-/*
-  打开二次确认框。
-
-  确认框里把要删的区域摊开列清楚（哪几页、几处），
-  让人有机会发现"我框错页了"。这是不可逆操作，
-  宁可多一步确认，也不要让人事后才发现删错了。
-*/
 function openRedactConfirm() {
   const regions = redactRegions();
   if (!regions.length) {
@@ -1345,14 +1100,12 @@ function openRedactConfirm() {
     return;
   }
   if (!els.redactConfirm) {
-    // 兜底：万一对话框元素缺失，退回原生确认
     if (confirm(`确定永久删除 ${regions.length} 处涂黑区域内的文字？`)) {
       redactPdf();
     }
     return;
   }
 
-  // 按页归组统计
   const byPage = {};
   regions.forEach(r => {
     byPage[r.page] = (byPage[r.page] || 0) + 1;
@@ -1372,15 +1125,6 @@ function closeRedactConfirm() {
   if (els.redactConfirm) els.redactConfirm.hidden = true;
 }
 
-/* --------------------------------------------------------------------------
-   改段落（Stage B）：把某一段改成新文字，服务端重新折行 + 页内下移
-   --------------------------------------------------------------------------
-
-   和「导出 PDF」是两条路：
-     · 导出 = 叠加式，不动原文；
-     · 改段落 = 真正替换原文文字并重排，所以只产出新文件（原文件绝不写回）。
-   溢出页底时服务端返回 400，这里把原因原样抛给用户 —— 静默截断是最糟的。
-   -------------------------------------------------------------------------- */
 export async function reflowParagraph(page, para, text, orig, pageText) {
   if (!state.filePath) {
     toast('请先打开一个文档', 1600);
@@ -1397,8 +1141,6 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
     const r = await fetch('/api/reflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // orig = 这段的原文：文档没有 ToUnicode 时，服务端靠它按字对齐
-      // 反推"字符 -> 字码"映射（否则解不出字，也没法把新字写回去）。
       body: JSON.stringify({ path: state.filePath, page, para, text,
                              orig: orig || null,
                              page_text: pageText || null }),
@@ -1409,7 +1151,7 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
       try {
         const j = await r.json();
         if (j.error) msg = j.error;
-      } catch (e) { /* 忽略解析失败 */ }
+      } catch (e) {  }
       toast(msg, 8000);
       return false;
     }
@@ -1419,7 +1161,7 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
     let name = `${state.fileName}-改段落.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
-      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+      try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
     const url = URL.createObjectURL(blob);
@@ -1443,11 +1185,9 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
     let msg = `已重排并另存：${name}`;
     if (lb && la && lb !== la) msg += `（${lb} 行 → ${la} 行）`;
     else if (la) msg += `（${la} 行）`;
-    // 跨页了要说清楚：用户会想知道"我改一段怎么动了后面的页"
     if (nPages > 1) msg += `，跨 ${nPages} 页续排`;
     if (nNew > 0) msg += `，新增 ${nNew} 页`;
     if (fb) {
-      // 回退字体的字形和原文不一样 —— 必须让用户知道，否则会以为"排版坏了"
       msg += `　⚠ 这些字用了替代字体，字形会与原文不同：${fb}`;
       toast(msg, 9000);
     } else {

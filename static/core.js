@@ -1,7 +1,3 @@
-/* ==========================================================================
-   共享核心：状态、DOM 引用、通用工具
-   被 app.js 与 annot.js 共同引用，避免循环依赖
-   ========================================================================== */
 
 import * as pdfjsLib from '/static/vendor/pdf.min.mjs';
 
@@ -9,12 +5,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdf.worker.min.mjs';
 
 export { pdfjsLib };
 
-/* 调试开关：控制台执行 __PDFVIEW_DEBUG__ = true 即可打印标注/渲染日志 */
 if (typeof window !== 'undefined' && window.__PDFVIEW_DEBUG__ === undefined) {
   window.__PDFVIEW_DEBUG__ = false;
 }
 
-/* 全局状态 */
 export const state = {
   pdf: null,
   filePath: null,
@@ -33,9 +27,9 @@ export const state = {
   searchHitsByPage: new Map(),
   hitIndex: -1,
   outlinMap: new Map(),
-  viewMode: 'single',   // single | double
+  viewMode: 'single',   
   annotMode: false,
-  bookmarks: new Set(), // 页码书签
+  bookmarks: new Set(), 
 };
 
 export const els = {};
@@ -83,7 +77,6 @@ export function hideLoading() {
   if (els.loading) els.loading.classList.add('hide');
 }
 
-/* 统一的 fetch 封装 */
 export async function api(url, opts = {}) {
   const init = { method: opts.method || 'GET' };
   if (opts.body !== undefined) {

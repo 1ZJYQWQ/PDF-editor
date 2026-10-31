@@ -1,32 +1,10 @@
-/* ==========================================================================
-   标注模块
-   --------------------------------------------------------------------------
-   核心设计：用「内容锚点」而不是屏幕坐标来记录标注位置。
-
-   锚点结构：
-     {
-       page: 1,              // 页码，从 1 开始
-       itemIndex: 12,        // 该页 textContent.items 的下标
-       charStart: 3,         // item 内的字符起始偏移
-       charEnd: 18           // item 内的字符结束偏移（不含）
-     }
-
-   这样无论缩放、旋转、换设备，标注都能精确贴回原文。
-   渲染时再用当前视口矩阵把锚点换算成屏幕矩形。
-   ========================================================================== */
 
 import { state, els, api, toast, uid, escapeHtml } from '/static/core.js';
 
-/* --------------------------------------------------------------------------
-   状态
-   -------------------------------------------------------------------------- */
 
 export const annState = {
   docId: null,
-  items: [],          // 我们自己加的标注（可编辑、可保存）
-  // PDF 文件自带的注释（/Annots）：**只读**。
-  // 单独放一份，避免混进 items 被当成自己的标注保存回 sidecar。
-  // 结构 { eid, page, type, color, contents, quadPoints, rect }
+  items: [],          
   ext: [],
   filter: 'all',
   activeId: null,
@@ -34,14 +12,11 @@ export const annState = {
 
 let saveTimer = null;
 
-/* --------------------------------------------------------------------------
-   持久化
-   -------------------------------------------------------------------------- */
 
 export async function loadAnnotations(docId) {
   annState.docId = docId;
   annState.items = [];
-  annState.ext = [];        // 换文档必须清空：ext 是按当前文件解析出来的
+  annState.ext = [];        
   annState.activeId = null;
   if (!docId) { renderAnnotList(); return; }
   try {
@@ -54,7 +29,6 @@ export async function loadAnnotations(docId) {
   repaintAnnotations();
 }
 
-/* 保存（防抖，避免频繁写盘） */
 export function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(doSave, 400);
@@ -76,14 +50,7 @@ export async function doSave() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   创建标注：从选区提取锚点
-   -------------------------------------------------------------------------- */
 
-/**
- * 把当前 DOM 选区转换成若干锚点。
- * 选区可能跨多个 span（也就跨多个 textContent item），所以返回数组。
- */
 export function selectionToAnchors() {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -91,7 +58,6 @@ export function selectionToAnchors() {
   const range = sel.getRangeAt(0);
   if (!range.toString().trim()) return null;
 
-  // 找到选区所属的页面
   let node = range.startContainer;
   let pageEl = null;
   while (node && node !== document.body) {
@@ -103,7 +69,6 @@ export function selectionToAnchors() {
   const rec = state.pages[parseInt(pageEl.dataset.page, 10) - 1];
   if (!rec || !rec.textContent) return null;
 
-  // 反查：span -> item 下标（兼容新旧文字层结构）
   const byItem = buildSpanItemMap(rec);
   const spanItems = new Map();
   for (const [itemIndex, span] of byItem) spanItems.set(span, itemIndex);
@@ -131,7 +96,6 @@ export function selectionToAnchors() {
   }
   if (!parts.length) return null;
 
-  // 取原文快照
   const text = parts.map(p => {
     const it = rec.textContent.items[p.itemIndex];
     return (it && it.str ? it.str : '').slice(p.charStart, p.charEnd);
@@ -140,15 +104,8 @@ export function selectionToAnchors() {
   return { page: rec.num, parts, text };
 }
 
-/*
-  建立「item 下标 -> span」映射。
-
-  新版文字层在 span 上写了 data-item-index，直接读即可；
-  但如果页面是旧版构建的（没有该属性），或属性只覆盖了一部分，
-  则对缺失的部分按「span 顺序对应非空 item」推断补全。
-*/
 export function buildSpanItemMap(rec) {
-  const map = new Map();                       // itemIndex -> span
+  const map = new Map();                       
   if (!rec || !rec.textLayer) return map;
 
   const allSpans = [...rec.textLayer.querySelectorAll('span')];
@@ -163,7 +120,6 @@ export function buildSpanItemMap(rec) {
     indexed.add(span);
   }
 
-  // 补全：没有 itemIndex 的 span 按顺序对应到「还没被占用的非空 item」
   const missing = allSpans.filter(s => !indexed.has(s));
   if (missing.length && rec.textContent && rec.textContent.items) {
     const used = new Set(map.keys());
@@ -177,26 +133,13 @@ export function buildSpanItemMap(rec) {
   return map;
 }
 
-/*
-  计算「某个边界点」在 span 内对应的字符偏移。
-
-  边界点可能落在三种位置：
-    1. container 本身就是 span（offset 是子节点下标）
-    2. container 是某个文本节点（offset 是节点内字符下标）
-    3. container 是 span 内的 mark 元素
-
-  span 内部结构可能被搜索高亮的 mark 切碎，
-  所以统一用 TreeWalker 遍历文本节点，边累加长度边判断。
-*/
 function offsetWithin(span, container, offset) {
-  // 情况 1：container 就是 span，offset 是「第几个子节点」
   if (container === span) {
     let count = 0;
     let idx = 0;
     const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     let n;
     while ((n = walker.nextNode())) {
-      // 找出这个文本节点是其父链上第几个「顶层子节点」
       let top = n;
       while (top.parentNode && top.parentNode !== span) top = top.parentNode;
       const topIndex = [...span.childNodes].indexOf(top);
@@ -206,26 +149,22 @@ function offsetWithin(span, container, offset) {
     return count;
   }
 
-  // 情况 2 / 3：container 是文本节点或 mark 元素
   let count = 0;
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
   let n;
   while ((n = walker.nextNode())) {
     if (n === container) {
-      // 文本节点：offset 是节点内字符下标
       return count + offset;
     }
     count += n.textContent.length;
   }
 
-  // container 是元素（mark），用 offset 作为子节点下标近似处理
   if (container.nodeType === 1 && span.contains(container)) {
     let acc = 0;
     const w2 = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     let n2;
     while ((n2 = w2.nextNode())) {
       if (container.contains(n2)) {
-        // 该元素内的第 offset 个子节点之前的长度
         let inner = 0;
         for (let i = 0; i < offset && i < container.childNodes.length; i++) {
           inner += container.childNodes[i].textContent.length;
@@ -239,9 +178,6 @@ function offsetWithin(span, container, offset) {
   return count;
 }
 
-/* --------------------------------------------------------------------------
-   添加 / 编辑 / 删除
-   -------------------------------------------------------------------------- */
 
 export function addAnnotation(sel, type, color, note = '') {
   const item = {
@@ -257,9 +193,7 @@ export function addAnnotation(sel, type, color, note = '') {
   annState.items.push(item);
   scheduleSave();
   renderAnnotList();
-  // 立即把标注画到页面上（不等防抖，也不依赖滚动等外部触发）
   repaintAnnotations();
-  // 双保险：若目标页存在但本轮没画出来，下一帧再补一次
   requestAnimationFrame(() => {
     const rec = state.pages[item.page - 1];
     if (rec && rec.rendered) {
@@ -291,9 +225,6 @@ export function removeAnnotation(id) {
   updateProgressMarkers();
 }
 
-/* --------------------------------------------------------------------------
-   渲染：把锚点换算成屏幕矩形并绘制
-   -------------------------------------------------------------------------- */
 
 const TYPE_LABEL = {
   highlight: '高亮', underline: '下划线', wavy: '波浪线',
@@ -313,17 +244,6 @@ export function repaintAnnotations() {
   return painted;
 }
 
-/* --------------------------------------------------------------------------
-   读取 PDF 自带的注释（/Annots）—— 只读显示
-   --------------------------------------------------------------------------
-
-   为什么借 pdf.js 的 getAnnotations()：各家写出 /Annots 的姿势差别很大
-   （QuadPoints 顺序、坐标翻转、颜色空间、外观流），pdf.js 已经把这些抹平了，
-   自己解析容易在某种文件上翻车。
-
-   只读：这些注释属于原文件，我们不修改、也不参与保存；
-   在层里的 div 加 pointer-events:none，避免抢走下面文字的选择与点击。
-   -------------------------------------------------------------------------- */
 
 const _EXT_TYPES = {
   Highlight: 'highlight',
@@ -343,7 +263,7 @@ export async function loadPagePdfAnnots(rec) {
     const page = await state.pdf.getPage(rec.num);
     list = await page.getAnnotations({ intent: 'display' });
   } catch (e) {
-    return;                     // 读不出来不影响正常阅读
+    return;                     
   }
 
   const out = [];
@@ -360,12 +280,9 @@ export async function loadPagePdfAnnots(rec) {
     });
   }
 
-  // ★ 外部注释也要进「标注」列表（只读）。
-  //   只画线不进列表的话：用户看不到备注内容、不知道一共几条、
-  //   也没法点它跳到对应页 —— 体感就是"这个文件我看不到注释"。
   out.forEach((o, i) => { o.eid = `ext-${rec.num}-${i}`; });
   annState.ext = (annState.ext || [])
-    .filter(x => x.page !== rec.num)          // 同页替换，避免重复叠加
+    .filter(x => x.page !== rec.num)          
     .concat(out);
   rec.pdfAnnots = out;
 
@@ -384,7 +301,6 @@ export async function loadPagePdfAnnots(rec) {
   }
 }
 
-/* PDF 坐标 -> 屏幕像素（走 viewport，自动处理缩放与旋转） */
 function bboxPx(vp, x0, y0, x1, y1) {
   const a = vp.convertToViewportPoint([x0, y0]);
   const b = vp.convertToViewportPoint([x1, y1]);
@@ -396,14 +312,12 @@ function bboxPx(vp, x0, y0, x1, y1) {
   };
 }
 
-/* 一条外部注释 -> 若干屏幕矩形 */
 function extBoxes(ex, vp) {
   const out = [];
   if (typeof vp.convertToViewportPoint !== 'function') return out;
 
   const qp = ex.quadPoints;
   if (qp && qp.length >= 8) {
-    // 每 8 个数是一个四边形（左上/右上/左下/右下），转成包围盒
     for (let i = 0; i + 7 < qp.length; i += 8) {
       const xs = [qp[i], qp[i + 2], qp[i + 4], qp[i + 6]];
       const ys = [qp[i + 1], qp[i + 3], qp[i + 5], qp[i + 7]];
@@ -422,7 +336,6 @@ function extBoxes(ex, vp) {
 }
 
 export function paintPageAnnotations(rec) {
-  // 清掉旧层
   const old = rec.wrap.querySelector('.annot-layer');
   if (old) old.remove();
 
@@ -433,13 +346,11 @@ export function paintPageAnnotations(rec) {
   const layer = document.createElement('div');
   layer.className = 'annot-layer';
 
-  // item 下标 -> span（兼容新旧两种文字层结构）
   const spanByItem = buildSpanItemMap(rec);
 
   const dbg = { total: mine.length, noSpan: 0, noRect: 0, drawn: 0 };
 
   for (const an of mine) {
-    // 区域框选：直接用相对坐标渲染
     if (an.type === 'box' && an.rect) {
       const el = document.createElement('div');
       el.className = 'an an-box';
@@ -456,7 +367,6 @@ export function paintPageAnnotations(rec) {
       continue;
     }
 
-    // 文本类标注：逐 part 换算矩形
     const rects = [];
     for (const part of (an.parts || [])) {
       const span = spanByItem.get(part.itemIndex);
@@ -467,10 +377,6 @@ export function paintPageAnnotations(rec) {
       for (const r of rs) rects.push(r);
     }
 
-    // ★ 先把同一行里首尾相接的矩形合并成一条，再逐个画。
-    //   文字层是「一个 item 一个 span」，一条标注常常横跨几十个 span；
-    //   逐段画会得到一串有缝、高低不齐的小线段（下划线看着像拼的），
-    //   相邻段重叠处还会叠成双线。合并后每行只有一条连续段。
     for (const r of mergeLineRuns(rects)) {
       const el = document.createElement('div');
       el.className = 'an an-' + an.type;
@@ -493,8 +399,6 @@ export function paintPageAnnotations(rec) {
     }
   }
 
-  // ---- PDF 自带的注释：只读显示 ----
-  // 这些属于原文件，我们只画出来、不参与编辑/保存。
   if (ext.length && rec.viewport) {
     for (const ex of ext) {
       const boxes = mergeLineRuns(extBoxes(ex, rec.viewport));
@@ -506,7 +410,7 @@ export function paintPageAnnotations(rec) {
         el.style.width = r.width + 'px';
         el.style.height = r.height + 'px';
         el.style.color = ex.color;
-        el.dataset.id = ex.eid;          // 供列表点击后定位/高亮
+        el.dataset.id = ex.eid;          
         if (ex.contents) el.title = ex.contents;
         if (ex.eid === annState.activeId) el.classList.add('active');
         layer.appendChild(el);
@@ -515,7 +419,6 @@ export function paintPageAnnotations(rec) {
     }
   }
 
-  // 只要能画出东西就挂上去
   if (dbg.drawn > 0 || layer.childElementCount) {
     rec.wrap.appendChild(layer);
   }
@@ -530,14 +433,6 @@ export function paintPageAnnotations(rec) {
   }
 }
 
-/**
- * 求某个字符区间在 span 内对应的矩形列表。
- *
- * 优先用 Range.getClientRects() —— 它能正确处理跨行文本。
- * 但它有个坑：span 上如果有 transform（我们给文字层加了 scaleX 对齐），
- * 返回的矩形可能为空或不准。所以这里加了兜底：
- * 取不到就用 span 自身的矩形 + 字符比例推算。
- */
 function charRects(span, start, end) {
   const textLen = (span.dataset.orig !== undefined
     ? span.dataset.orig : span.textContent).length;
@@ -549,16 +444,13 @@ function charRects(span, start, end) {
   if (!pageEl) return [];
   const pageRect = pageEl.getBoundingClientRect();
 
-  // ---- 方案 A：Range 精确取矩形（支持跨行） ----
   const rects = rectsViaRange(span, start, end, pageRect);
   if (rects.length) return rects;
 
-  // ---- 方案 B：兜底，按比例切分 span 的矩形 ----
   return rectsViaRatio(span, start, end, textLen, pageRect);
 }
 
 function rectsViaRange(span, start, end, pageRect) {
-  // 建立「字符下标 -> (文本节点, 节点内偏移)」映射
   const map = [];
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
   let n;
@@ -606,18 +498,6 @@ function rectsViaRatio(span, start, end, textLen, pageRect) {
   }];
 }
 
-/**
- * 把标注矩形按行合并成连续段。
- *
- * 为什么需要：文字层是「一个 item 一个 span」（中文一行常被切成十几个），
- * 一条标注会拿到很多首尾相接的小矩形。逐个画出来的下划线/删除线是
- * 一串有缝、高低不齐的小线段，重叠处还会叠成双线（用户反馈「不精致」）。
- *
- * 规则：
- *  1. top 相近的算同一行（容差按字高比例，避免把两行并成一行）；
- *  2. 同一行内按 left 排序，间隔 ≤1.6px 就并成一条（吃掉亚像素缝）；
- *  3. 同一行统一 top/bottom —— 底线取该行最低的那条，线才不会高低跳。
- */
 function mergeLineRuns(rects) {
   if (!rects || !rects.length) return [];
   const sorted = [...rects].sort((a, b) => a.top - b.top || a.left - b.left);
@@ -662,22 +542,9 @@ function mergeLineRuns(rects) {
   return out;
 }
 
-/* --------------------------------------------------------------------------
-   导出：把批注换算成 PDF 用户空间（左下原点、y 向上）的矩形
-   --------------------------------------------------------------------------
-
-   为什么不复用屏幕矩形：屏幕矩形依赖当前缩放和窗口，而且只对"已渲染"的页
-   有效。这里直接从 pdf.js 的 textContent 里算 —— 每条 part 记的是
-   (itemIndex, charStart, charEnd)，item.transform 里就带着 PDF 坐标，
-   所以不需要页面被渲染，也不需要知道缩放比例。
-
-   产出结构交给后端 pdfannot.py 写 /Annots：
-     [{ page, type, rects: [[x0,y0,x1,y1], ...], color, note }]
-   -------------------------------------------------------------------------- */
 
 const _tcCache = new Map();
 
-/* 取某页的 textContent（优先用已缓存的，未渲染的页才现取） */
 async function pageTextItems(pageNum) {
   if (_tcCache.has(pageNum)) return _tcCache.get(pageNum);
   const rec = state.pages[pageNum - 1];
@@ -696,26 +563,23 @@ async function pageTextItems(pageNum) {
   }
 }
 
-/* item 内的字符区间 -> PDF 矩形 */
 function itemRectPdf(item, start, end) {
   const t = item.transform || [1, 0, 0, 1, 0, 0];
-  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;   // 字号（PDF 点）
+  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;   
   const len = (item.str || '').length || 1;
   const w = Math.abs(item.width || 0);
   const s = Math.max(0, Math.min(start, len));
   const e = Math.max(s, Math.min(end, len));
   const x = t[4];
   const y = t[5];
-  // 基线在 y，字身向上一个字号
   return [x + (s / len) * w, y, x + (e / len) * w, y + h];
 }
 
-/* 页面尺寸（PDF 用户空间） */
 async function pageGeom(pageNum) {
   if (!state.pdf) return null;
   try {
     const page = await state.pdf.getPage(pageNum);
-    const v = page.view;                     // [x0, y0, x1, y1]
+    const v = page.view;                     
     return { x0: v[0], y0: v[1], x1: v[2], y1: v[3],
              W: v[2] - v[0], H: v[3] - v[1] };
   } catch (e) {
@@ -731,7 +595,6 @@ export async function annotationsToPdfItems() {
     const color = an.color || '#f59e0b';
     const note = an.note || '';
 
-    // 区域框：存的是相对页面的百分比（左上原点），换回 PDF 坐标
     if (an.type === 'box' && an.rect) {
       const g = await pageGeom(an.page);
       if (!g) continue;
@@ -774,9 +637,6 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/* --------------------------------------------------------------------------
-   侧栏列表
-   -------------------------------------------------------------------------- */
 
 export function renderAnnotList() {
   const box = els.annotList;
@@ -786,7 +646,6 @@ export function renderAnnotList() {
   const ext = annState.ext || [];
   const filt = annState.filter;
 
-  // 统一成同一种"卡片视图模型"，两类只在来源标记上不同
   const view = [
     ...mine.map(a => ({
       id: a.id, page: a.page, type: a.type, color: a.color,
@@ -803,7 +662,6 @@ export function renderAnnotList() {
   const list = filt === 'all' ? view : view.filter(a => a.type === filt);
   const nAll = view.length;
 
-  // 计数：只统计"自己的"会让人以为 PDF 自带的没读到，所以显示总数
   els.annotCount.textContent = nAll ? `${list.length}/${nAll}` : '';
 
   if (!list.length) {
@@ -841,13 +699,9 @@ export function renderAnnotList() {
   });
 }
 
-/* 由 bindNavHelpers 注入：翻页 / 渲染某页。
-   用"注入变量"而不是直接 import app.js —— 那边已经 import 了本模块，
-   反向引用会形成循环依赖（表现为某个导出变 undefined）。 */
 let goToPageForAnnot = () => {};
 let renderPageForAnnot = () => {};
 
-/* 翻到某页并把某个标注元素滚到视野中间（自己的标注与 PDF 自带的共用） */
 function revealAnnot(page, id) {
   if (page !== state.currentPage) goToPageForAnnot(page);
 
@@ -878,7 +732,6 @@ export function focusAnnotation(id) {
   revealAnnot(an.page, id);
 }
 
-/** 定位到 PDF 自带的注释（只读）：只做「翻页 + 滚到可见 + 高亮」 */
 export function focusExt(eid) {
   const ex = (annState.ext || []).find(x => x.eid === eid);
   if (!ex) return;
@@ -891,9 +744,6 @@ export function bindNavHelpers(goToPage, renderPage) {
   renderPageForAnnot = renderPage;
 }
 
-/* --------------------------------------------------------------------------
-   进度条上的标注标记
-   -------------------------------------------------------------------------- */
 
 export function updateProgressMarkers() {
   const box = els.progressMarkers;
@@ -902,7 +752,6 @@ export function updateProgressMarkers() {
   if (!state.pageCount) return;
 
   const seen = new Set();
-  // 进度条上也要标出 PDF 自带的注释，否则用户不知道哪几页有东西
   const allMark = [
     ...(annState.items || []),
     ...(annState.ext || []).map(x => ({ page: x.page, type: x.type, color: x.color })),

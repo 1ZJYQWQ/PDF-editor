@@ -1,28 +1,4 @@
-/* ==========================================================================
-   纯几何与数据变换 —— 不依赖 state / DOM / pdf.js
 
-   为什么单独成文件
-     前端原来所有几何计算都和 state、DOM 缠在一起，于是：
-       ① 没法在 node 里单测 —— core.js 顶部 import 了 pdf.js（浏览器包），
-          一 import 就把整条链拖进来
-       ② 坐标换算这种最容易写错的地方，只能靠肉眼验
-
-     这里只放**纯函数**：不读全局、不碰 DOM、同样的输入必然同样的结果。
-     所以可以用 node 直接跑测试（见 ../webtest.mjs）。
-     `edit.js` 里保留同名函数，但只负责读 state/DOM 再转调这里
-     —— **调用点一处都不用改，行为完全不变**。
-
-   ★ 关键约定：PDF 坐标原点在**左下角、y 轴向上**，屏幕原点在左上、y 轴向下。
-     所以转换必须「**先翻转再乘尺寸**」：
-         pdfY = pageHeight * (1 - (ny + nh))
-     这是整个前端最容易写错的一行。
-
-   注：`static/package.json` 里声明了 "type":"module"，
-   好让 node 把这里的 .js 当 ES Module 读（浏览器侧不受影响）。
-   ========================================================================== */
-
-/* 屏幕坐标 -> 页面内归一化坐标（0~1）
-   用归一化而不是绝对 PDF 点，好处是**缩放后完全不用改数据**。 */
 export function screenToNorm(clientX, clientY, left, top, rw, rh) {
   return {
     x: (clientX - left) / (rw || 1),
@@ -31,7 +7,6 @@ export function screenToNorm(clientX, clientY, left, top, rw, rh) {
   };
 }
 
-/* 归一化 -> 屏幕像素（相对页面左上角） */
 export function normToScreen(nx, ny, nw, nh, rw, rh) {
   return {
     left: nx * rw,
@@ -41,17 +16,15 @@ export function normToScreen(nx, ny, nw, nh, rw, rh) {
   };
 }
 
-/* 归一化 -> PDF 点 */
 export function normToPdf(nx, ny, nw, nh, pw, ph) {
   return {
     x: nx * pw,
-    y: ph * (1 - ny - nh),        // ★ 先翻转，再乘尺寸
+    y: ph * (1 - ny - nh),        
     w: nw * pw,
     h: nh * ph,
   };
 }
 
-/* PDF 点 -> 归一化 */
 export function pdfToNorm(x, y, w, h, pw, ph) {
   if (!pw || !ph) return { x: 0, y: 0, w: 0, h: 0 };
   return {
@@ -62,7 +35,6 @@ export function pdfToNorm(x, y, w, h, pw, ph) {
   };
 }
 
-/* 点到线段的距离（命中直线用） */
 export function distToSegment(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
@@ -73,19 +45,8 @@ export function distToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/* 线的命中容差（归一化单位） */
 export const HIT_LINE_TOL = 0.012;
 
-/*
-  命中测试：从后往前找（后画的在上面）。
-
-  nx/ny 是**页面内归一化坐标**；getSize(pageNum) 返回该页的 PDF 尺寸。
-  返回命中的对象，没有则 null。
-
-  ★ 文字对象的数据里 w/h = 0 —— 它是「锚点」不是矩形（对应 PDF 的 Td）。
-    所以它的可点范围由**渲染时量出来的盒子** `o._box`（归一化）给出，
-    见 edit.js 的 paintPageEdits()。没有 _box 时文字点不中（与旧行为一致）。
-*/
 export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   const mine = objects.filter(o => o.page === pageNum);
   for (let i = mine.length - 1; i >= 0; i--) {
@@ -116,20 +77,11 @@ export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   return null;
 }
 
-/*
-  导出负载里的对象列表（纯部分：不读全局状态）。
-
-  ★ **涂黑对象不参与普通导出。**
-    普通导出是叠加式的，删不掉底层文字；让涂黑框走这条路，用户会拿到
-    「看着是黑块、文字其实还在」的文件 —— 正是要避免的涂黑事故。
-    涂黑必须走 /api/redact。
-*/
 export function payloadObjects(objects) {
   return objects
     .filter(o => o.kind !== 'redact' && o.kind !== 'replace')
     .map(o => {
       const out = { ...o };
-      // 内部字段不下发：_norm/_box 是渲染缓存，id 是本地标识
       delete out._norm;
       delete out._box;
       delete out.id;
@@ -142,7 +94,6 @@ export function payloadObjects(objects) {
     });
 }
 
-/* 有没有实质编辑内容（用于「还没有任何编辑内容」的提示） */
 export function hasAnyEdit(payload) {
   if (payload.objects && payload.objects.length > 0) return true;
   const p = payload.pages || {};
@@ -153,14 +104,6 @@ export function hasAnyEdit(payload) {
   return false;
 }
 
-/*
-  拖动位移换算：**屏幕像素位移 → PDF 点的位移量**。
-
-  ★ y 轴方向相反：屏幕往下拖（dyScreen > 0）在 PDF 里是 y **减小**。
-    这是整个拖动逻辑里最容易写错的一个符号，所以独立成纯函数并单测。
-
-  rw/rh = 页面在屏幕上的尺寸；pw/ph = 页面的 PDF 尺寸。
-*/
 export function dragDeltaToPdf(dxScreen, dyScreen, rw, rh, pw, ph) {
   return {
     dx: (dxScreen / (rw || 1)) * pw,
@@ -168,13 +111,6 @@ export function dragDeltaToPdf(dxScreen, dyScreen, rw, rh, pw, ph) {
   };
 }
 
-/*
-  把位移应用到对象的原始坐标上，返回新坐标。
-
-  传 orig 而不是就地累加：**每一帧都从原始位置算**，
-  这样不会有累积误差，也不会因为中途一次事件丢失而漂移。
-  线对象（有 x2/y2）的两个端点一起动。
-*/
 export function movedPosition(orig, d) {
   const out = { x: orig.x + d.dx, y: orig.y + d.dy };
   if (orig.x2 !== undefined && orig.x2 !== null) {
@@ -184,70 +120,37 @@ export function movedPosition(orig, d) {
   return out;
 }
 
-/*
-  按角拖动缩放矩形。
-
-  orig: { x, y, w, h }  —— PDF 坐标（原点左下、y 向上）
-  corner: 'nw' | 'ne' | 'sw' | 'se'
-  d: { dx, dy }         —— PDF 坐标系位移（来自 dragDeltaToPdf）
-
-  原则：**对角固定** —— 拖某个角时，对面的角保持不动。
-  返回 { x, y, w, h }，宽高不小于 MIN（避免拖成负尺寸）。
-
-  ★ PDF 的 y 轴向上，所以 corner 里的 n/s 是按**屏幕观感**命名的：
-    n（上边）在 PDF 里是 y + h 那一侧。用 n/s/e/w 而不是 y 大/y 小，
-    是为了让调用方（按屏幕四角）读起来不绕。
-  ★ 与 movedPosition 一样，每帧都从 **原始值**算，不做累加。
-*/
 export function resizedRect(orig, corner, d) {
   const MIN = 6;
-  const east = corner.indexOf('e') >= 0;    // 拖东侧（右边界）
-  const north = corner.indexOf('n') >= 0;   // 拖北侧（上边界 = y+h）
+  const east = corner.indexOf('e') >= 0;    
+  const north = corner.indexOf('n') >= 0;   
 
   let x = orig.x, y = orig.y, w = orig.w, h = orig.h;
 
   if (east) {
-    w = w + d.dx;                 // 右边界动，左边固定
+    w = w + d.dx;                 
   } else {
-    x = x + d.dx;                 // 左边界动，右边固定
+    x = x + d.dx;                 
     w = w - d.dx;
   }
   if (north) {
-    h = h + d.dy;                 // 上边界（y+h）动，下边固定
+    h = h + d.dy;                 
   } else {
-    y = y + d.dy;                 // 下边界动，上边固定
+    y = y + d.dy;                 
     h = h - d.dy;
   }
 
-  // 最小尺寸保护：保持"对面那条边"不动
   if (w < MIN) {
     w = MIN;
-    if (!east) x = orig.x + orig.w - MIN;    // 拖左边：右边固定
+    if (!east) x = orig.x + orig.w - MIN;    
   }
   if (h < MIN) {
     h = MIN;
-    if (!north) y = orig.y + orig.h - MIN;   // 拖下边：上边固定
+    if (!north) y = orig.y + orig.h - MIN;   
   }
   return { x, y, w, h };
 }
 
-/*
-  ★ 文字对象的盒子必须**按内容自适应**，绝不能当成矩形给固定宽高。
-
-  为什么单独抽成一个函数（而不是就地写几行样式）：
-    数据层里文字只有**锚点**（w/h = 0，对应 PDF 的 Td + Tj），不是矩形。
-    渲染时先按矩形算宽高就会得到 1×1 的盒子，再叠加 `.ed-text` 的
-    `overflow: hidden`，整段文字被裁得一干二净 ——
-    表现是「对象建出来了（面板提示有未保存的改动），页面上却一片空白」。
-    这个 bug 真实发生过，而且因为**没有报错**，查了很久。
-
-    抽成函数是为了**可测**：这条不变量靠几何纯函数守不住，
-    只能在测试里断言"没把宽高写成 1px"。谁改回去，测试立刻红。
-
-  white-space 用 pre 而不是 pre-wrap：
-    导出时换行是**拆成多个 Tj**（按显式 \n 拆），从不自动折行；
-    预览若自动折行，长文本的观感就和导出对不上。
-*/
 export function makeTextBoxAuto(el) {
   el.style.width = 'auto';
   el.style.height = 'auto';
@@ -256,17 +159,6 @@ export function makeTextBoxAuto(el) {
   return el;
 }
 
-/*
-  按宽度贪心折行（纯函数，可在 node 里单测）。
-  measure(str) 由调用方注入（浏览器用 canvas 实测字符宽度；测试传假函数），
-  所以这里不依赖 DOM。
-
-  为什么折行要写**显式 \n**，而不是交给 CSS pre-wrap：
-    导出时换行是"按 \n 拆成多个 Tj"，从不自动折行；
-    若预览用 pre-wrap 自动折行，长文本的观感就和导出对不上。
-    把 \n 显式写进文本，预览(pre) 与导出(拆\n) 吃的是**同一串 \n**，
-    因此永远一致 —— 这是 makeTextBoxAuto 那条铁律的正确解法。
-*/
 export function wrapText(text, measure, maxWidth) {
   const src = String(text == null ? '' : text);
   if (!(maxWidth > 0) || typeof measure !== 'function') return src;
@@ -293,16 +185,6 @@ export function wrapText(text, measure, maxWidth) {
   return out.join('\n');
 }
 
-/*
-  把已折行的 lines 按「页高 - 上下边距」分页，返回每页排版 [{ page, y, lines }]。
-  y = 该页首行**基线**（PDF 坐标）。纯函数，可在 node 里单测。
-
-  规则（对齐用户要求）：
-    - 第一页从 firstBaseline 开始；后续页从内容区顶部开始。
-    - 从点击基线向下**填满本页内容区**，排不下的行**续下一页**（真正的折叠到下一页）。
-      绝不"整块上移贴合页底"——那样会把该翻页的内容硬塞进一页、还挤进页脚。
-    - 仅当首行基线低于内容底边时把它夹到内容底边（防吞字），其余照常续页。
-*/
 export function paginateText(lines, opts) {
   const { page, firstBaseline, pageW, pageH, size } = opts;
   const marginTop = opts.marginTop != null ? opts.marginTop : Math.max(18, pageH * 0.04);
@@ -310,8 +192,8 @@ export function paginateText(lines, opts) {
   const lineH = size * 1.25;
   const asc = size * 0.80;
   const desc = size * 0.20;
-  const topMost = (pageH - marginTop) - asc;   // 允许的最高基线
-  const botMost = marginBot + desc;            // 允许的最低基线
+  const topMost = (pageH - marginTop) - asc;   
+  const botMost = marginBot + desc;            
   const perPage = Math.max(1, Math.floor((topMost - botMost) / lineH) + 1);
 
   const arr = (lines && lines.length) ? lines : [''];

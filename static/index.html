@@ -9,9 +9,7 @@
 </head>
 <body>
 
-<!-- ======================== 工具栏 ======================== -->
 <div class="toolbar">
-  <!-- 左侧：可横向滚动的功能组。按钮再多也不会把右侧的导出挤掉 -->
   <div class="tb-scroll">
   <div class="tb-group">
     <button class="btn" id="btnSidebar" title="收起/展开侧边栏 (S)">
@@ -24,7 +22,6 @@
 
   <div class="tb-sep"></div>
 
-  <!-- 翻页 -->
   <div class="tb-group" id="navGroup" hidden>
     <button class="btn" id="btnFirst" title="第一页 (Home)">
       <svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="5" y2="19"/><path d="M19 5l-9 7 9 7z"/></svg>
@@ -44,7 +41,6 @@
 
   <div class="tb-sep" id="navSep" hidden></div>
 
-  <!-- 缩放 -->
   <div class="tb-group" id="zoomGroup" hidden>
     <button class="btn" id="btnZoomOut" title="缩小 (Ctrl -)">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.2" y1="16.2" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
@@ -69,7 +65,6 @@
 
   <div class="tb-sep" id="zoomSep" hidden></div>
 
-  <!-- 旋转 / 其他 -->
   <div class="tb-group" id="toolGroup" hidden>
     <button class="btn" id="btnRotate" title="顺时针旋转 (R)">
       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
@@ -84,7 +79,6 @@
 
   <div class="tb-sep" id="toolGroupSep" hidden></div>
 
-  <!-- 标注工具 -->
   <div class="tb-group" id="annotGroup" hidden>
     <button class="btn" id="btnAnnotMode" title="标注模式 (A) — 开启后可直接框选区域">
       <svg viewBox="0 0 24 24"><path d="M4 20l4-1 10-10a2.5 2.5 0 0 0-3.5-3.5L4.5 15.5z"/><path d="M14 7l3 3"/></svg>
@@ -101,7 +95,6 @@
 
   <div class="tb-sep" id="annotSep" hidden></div>
 
-  <!-- 编辑工具 -->
   <div class="tb-group" id="editGroup" hidden>
     <button class="btn" id="btnEditMode" title="进入编辑模式 (E)">
       <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="13" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="10" y2="17"/></svg>
@@ -111,7 +104,6 @@
 
   <div class="tb-sep" id="editSep" hidden></div>
 
-  <!-- 视图模式 -->
   <div class="tb-group" id="viewGroup" hidden>
     <button class="btn" id="btnViewSingle" title="单页视图" class="on">
       <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2"/></svg>
@@ -129,7 +121,6 @@
 
   <div class="tb-spacer"></div>
 
-  <!-- 搜索 -->
   <div class="search-wrap" id="searchWrap">
     <svg class="search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.2" y1="16.2" x2="21" y2="21"/></svg>
     <input type="text" class="search-input" id="searchInput" placeholder="搜索文档…" autocomplete="off">
@@ -149,13 +140,8 @@
 
   </div>
 
-  <!-- 右侧：文件操作常驻，不参与滚动 —— 导出/打印永远点得到 -->
   <div class="tb-fixed">
   <div class="tb-group" id="fileGroup" hidden>
-    <!-- 统一导出出口：**不依赖编辑/标注模式**，任何时候都能把
-         编辑对象 + 页面改动 + 批注一次性导出成新 PDF。
-         放在工具栏而不是编辑侧栏里 —— 侧栏只在编辑模式出现，
-         而标注模式与编辑互斥，用户加完批注就找不到导出了。 -->
     <button class="btn" id="btnExportTop"
       title="导出为新的 PDF — 含编辑内容、页面改动与批注（Ctrl+S）">
       <svg viewBox="0 0 24 24">
@@ -167,13 +153,11 @@
       <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 17h12v4H6z"/></svg>
     </button>
   </div>
-  </div><!-- /tb-fixed -->
-</div><!-- /toolbar -->
+  </div>
+</div>
 
-<!-- ======================== 主体 ======================== -->
 <div class="main">
 
-  <!-- 侧边栏 -->
   <aside class="sidebar" id="sidebar">
     <div class="side-tabs">
       <button class="side-tab on" data-tab="thumbs">缩略图</button>
@@ -204,14 +188,12 @@
     </div>
   </aside>
 
-  <!-- 阅读区 -->
   <div class="viewer" id="viewer" tabindex="0">
     <div class="progress-bar" id="progressBar" hidden>
       <div class="progress-fill" id="progressFill"></div>
       <div class="progress-markers" id="progressMarkers"></div>
     </div>
     <div class="pages empty" id="pages">
-      <!-- 欢迎页 / 页面容器 -->
     </div>
     <div class="loading hide" id="loading">
       <div class="spinner"></div>
@@ -219,7 +201,6 @@
     </div>
     <div class="toast" id="toast"></div>
 
-    <!-- 右侧栏：编辑 + 页面管理（进入编辑模式时展开） -->
     <aside class="edit-drawer" id="sidePanel" hidden>
       <div class="sp-resizer" id="spResizer"
         title="拖动调整侧栏宽度（双击恢复默认）"></div>
@@ -233,7 +214,6 @@
       </div>
       <div class="sp-scroll">
 
-      <!-- 改段落：点段落时在这里展开（不再浮在页面上，避免"不随页面滚动"） -->
       <div class="para-edit" id="paraEdit" hidden>
         <div class="para-head">
           <span class="para-chip" id="paraPage">第 1 页</span>
@@ -342,7 +322,6 @@
       </div>
     </div>
 
-      <!-- 页面管理 -->
       <div class="page-panel" id="pagePanel">
         <div class="pp-head">页面管理</div>
         <div class="pp-body" id="pageListBody"></div>
@@ -351,7 +330,6 @@
       </div>
     </aside>
 
-    <!-- 文字输入浮层 -->
     <div class="text-input-pop" id="textPop" hidden>
       <textarea class="tip-textarea" id="tipText" rows="3"
         placeholder="输入要添加的文字…（可多行）"></textarea>
@@ -365,7 +343,6 @@
       </div>
     </div>
 
-    <!-- 原位替换文字输入浮层 -->
     <div class="text-input-pop" id="replaceTextPop" hidden>
       <textarea class="tip-textarea" id="replaceText" rows="3"
         placeholder="输入要替换成的新文字…（可多行）"></textarea>
@@ -376,7 +353,6 @@
       </div>
     </div>
 
-    <!-- 编辑对象操作条（选中对象时出现在其附近） -->
     <div class="obj-bar" id="objBar" hidden>
       <span class="ob-name" id="objBarName">对象</span>
       <button class="ob-btn" id="objBarFront" title="置顶">置顶</button>
@@ -384,7 +360,6 @@
       <button class="ob-btn danger" id="objBarDel" title="删除该对象">删除</button>
     </div>
 
-    <!-- 涂黑二次确认（不可逆操作，必须显式确认） -->
     <div class="confirm-mask" id="redactConfirm" hidden>
       <div class="confirm-box">
         <div class="cb-head danger">
@@ -413,7 +388,6 @@
       </div>
     </div>
 
-    <!-- 划词浮动菜单 -->
     <div class="sel-menu" id="selMenu" hidden>
       <button class="sm-btn" data-act="highlight" data-color="#fbbf24" title="高亮（黄）">
         <span class="sm-swatch" style="background:#fbbf24"></span>高亮
@@ -436,7 +410,6 @@
       </button>
     </div>
 
-    <!-- 标注气泡（编辑笔记） -->
     <div class="annot-pop" id="annotPop" hidden>
       <div class="ap-head">
         <span class="ap-tag" id="apTag">高亮</span>

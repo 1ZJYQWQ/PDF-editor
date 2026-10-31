@@ -1,22 +1,3 @@
-"""
-PDF 查看器 —— 代码自检脚本
-
-改完前端代码后跑一遍，能在交给人测之前抓出大部分低级错误：
-  1. 语法错误（ES Module 解析）
-  2. 未定义标识符（漏 import、拼错名字）
-  3. import/export 不匹配（从模块导入未导出的符号）
-  4. JS 里引用的 DOM id 在 HTML 中不存在
-  5. hidden 属性失效（CSS 类选择器声明了 display，会盖掉 UA 的 [hidden]）
-  6. 文字盒被裁（.ed-text 有 overflow: hidden → 文字锚点盒看不见）
-
-第 5 项是 Firefox 专属坑：HTML 规范里 [hidden] 只在 UA 样式表里声明
-display:none，优先级低于任何类选择器。Chrome 对 [hidden] 有特殊豁免所以
-看不出来，Firefox 严格按层叠规则走，于是 .xxx { display: flex } 会让
-hidden 属性完全失效、元素常驻显示。
-
-用法：
-  python check.py
-"""
 
 import os
 import re
@@ -122,11 +103,9 @@ def collect_defined(src):
                     d.add(n)
     for m in re.findall(r'import\s+([A-Za-z_$][\w$]*)\s+from', src):
         d.add(m)
-    # import * as ns from '...'
     for m in re.findall(r'import\s*\*\s*as\s+([A-Za-z_$][\w$]*)', src):
         d.add(m)
 
-    # 回调参数：items.forEach((it, i) => ...) / .map(x => ...) / for (const [a,b] of ...)
     for params in re.findall(r'for\s*\(\s*(?:const|let|var)\s*\[([^\]]+)\]', src):
         for x in params.split(','):
             n = x.strip()
@@ -137,10 +116,8 @@ def collect_defined(src):
             n = x.strip()
             if re.fullmatch(r'[A-Za-z_$][\w$]*', n):
                 d.add(n)
-    # 单参数箭头：x => ... / (a, b) => ...
     for m in re.findall(r'[,(]\s*([A-Za-z_$][\w$]*)\s*,\s*[A-Za-z_$][\w$]*\s*[,)]\s*=>', src):
         d.add(m)
-    # 常见的回调形如 xxx.forEach(name =>  / xxx.map(name =>
     for m in re.findall(r'(?<![\w.$])([A-Za-z_$][\w$]*)\s*=>', src):
         d.add(m)
     return d
@@ -175,7 +152,6 @@ def find_imports(src):
 
 
 def run_syntax_check(node_exe, results):
-    """用 Node 的 SourceTextModule 做语法解析。"""
     script = os.path.join(BASE, ".syntax_check.mjs")
     with open(script, "w", encoding="utf-8") as fp:
         fp.write(
@@ -199,7 +175,7 @@ def run_syntax_check(node_exe, results):
         for line in (r.stdout or "").splitlines():
             if line.startswith("OK ") or line.startswith("FAIL "):
                 results.append(line)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         results.append(f"SKIP 语法检查（无法调用 Node: {exc}）")
     finally:
         try:
@@ -212,12 +188,10 @@ def main():
     results = []
     problems = 0
 
-    # --- 1. 语法 ---
     node_exe = next((n for n in NODE_CANDIDATES
                      if n == "node" or os.path.isfile(n)), "node")
     run_syntax_check(node_exe, results)
 
-    # --- 2. 未定义标识符 ---
     srcs = {}
     for f in FILES:
         srcs[f] = open(os.path.join(STATIC, f), encoding="utf-8").read()
@@ -234,7 +208,6 @@ def main():
         else:
             results.append(f"OK   {f} 标识符检查通过")
 
-    # --- 3. import / export 匹配 ---
     exports_map = {f"/static/{f}": find_exports(srcs[f]) for f in FILES}
     for f in FILES:
         for names, mod in find_imports(srcs[f]):
@@ -249,7 +222,6 @@ def main():
                 results.append(f"FAIL {f} 从 {mod} 导入未导出: {', '.join(miss)}")
     results.append("OK   import/export 匹配检查通过")
 
-    # --- 4. DOM id 存在性 ---
     html = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
     html_ids = set(re.findall(r'id="([^"]+)"', html))
     for f in FILES:
@@ -263,23 +235,19 @@ def main():
             results.append(f"FAIL {f} 引用不存在的 DOM id: {', '.join(missing)}")
     results.append("OK   DOM id 检查通过")
 
-    # --- 5. hidden 属性失效 ---
     css_path = os.path.join(STATIC, "style.css")
     css = open(css_path, encoding="utf-8").read()
     css = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
 
-    # 有全局兜底 [hidden] { display: none !important } 就不再担心
     has_backstop = bool(re.search(
         r'\[hidden\][^{]*\{[^}]*display\s*:\s*none\s*!important', css))
 
-    # 收集「带 hidden 属性的元素」上的所有 class
     hidden_classes = set()
     for tag in re.findall(r'<[^>]*\bhidden\b[^>]*>', html):
         m = re.search(r'class="([^"]*)"', tag)
         if m:
             hidden_classes |= set(m.group(1).split())
 
-    # 找 CSS 里给这些类声明了 display 的规则
     risky = []
     for cls in sorted(hidden_classes):
         for body in re.findall(
@@ -299,12 +267,6 @@ def main():
     else:
         results.append("OK   hidden 属性检查通过")
 
-    # --- 6. 文字盒不能被裁（.ed-text 不许有 overflow: hidden）---
-    # 教训来源：文字对象在数据层是**锚点**（w/h = 0，对应 PDF 的 Td），
-    # 渲染时若按矩形给固定宽高会得到 1×1 的盒子；再叠加 overflow: hidden，
-    # 整段文字被裁得干干净净 —— 表现是「对象建出来了（面板提示有未保存的
-    # 改动），页面上却一片空白」，而且**不报错**，很难查。
-    # 修法见 geom.js 的 makeTextBoxAuto()（那边有单测守着）。
     ed_text_bodies = re.findall(r"\.ed-text\s*\{([^}]*)\}", css)
     bad_crop = [b for b in ed_text_bodies
                 if re.search(r"overflow\s*:\s*hidden", b)]
@@ -316,7 +278,6 @@ def main():
     else:
         results.append("OK   文字盒裁剪检查通过（.ed-text 未设 overflow: hidden）")
 
-    # --- 输出 ---
     print("=" * 56)
     print("  PDF 查看器 代码自检")
     print("=" * 56)

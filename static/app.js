@@ -1,7 +1,3 @@
-/* ==========================================================================
-   PDF Viewer - 主逻辑
-   基于 pdf.js，支持：连续滚动、缩放、旋转、缩略图、目录、全文搜索、标注
-   ========================================================================== */
 
 import {
   pdfjsLib, state, els, cacheEls, $, uid, escapeHtml, debounce,
@@ -24,24 +20,18 @@ import {
   undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
 } from '/static/edit.js';
 
-// 纯几何（可单测）—— 拖动位移、按角缩放与坐标换算
 import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } from '/static/geom.js';
 
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
 
-/* --------------------------------------------------------------------------
-   工具
-   -------------------------------------------------------------------------- */
 
-/* 计算页面在给定缩放下的显示尺寸 */
 function pageSizeAt(page, scale) {
   const vp = page.getViewport({ scale, rotation: state.rotation });
   return { width: vp.width, height: vp.height };
 }
 
-/* 根据模式计算合适的缩放值 */
 async function computeScale(mode) {
   if (!state.pdf) return 1;
   const page = await state.pdf.getPage(1);
@@ -65,7 +55,6 @@ async function computeScale(mode) {
   return parseFloat(mode) || 1;
 }
 
-/* 阅读位置记忆 */
 function posKey() {
   return LS_PREFIX + 'pos:' + (state.docId || state.fileName);
 }
@@ -81,7 +70,7 @@ function savePosition() {
       viewMode: state.viewMode,
       t: Date.now(),
     }));
-  } catch (e) { /* 隐私模式下可能失败，忽略 */ }
+  } catch (e) {  }
 }
 
 function readPosition() {
@@ -91,7 +80,6 @@ function readPosition() {
   } catch (e) { return null; }
 }
 
-/* 书签 */
 function bookmarkKey() {
   return LS_PREFIX + 'bm:' + (state.docId || state.fileName);
 }
@@ -106,7 +94,7 @@ function loadBookmarks() {
 function saveBookmarks() {
   try {
     localStorage.setItem(bookmarkKey(), JSON.stringify([...state.bookmarks]));
-  } catch (e) { /* ignore */ }
+  } catch (e) {  }
 }
 
 function toggleBookmark() {
@@ -117,7 +105,6 @@ function toggleBookmark() {
   saveBookmarks();
   updateProgressMarkers();
   updateBookmarkBtn();
-  // ★ 「目录」面板里也列着「我的书签」，加/删后重建一次目录
   buildOutline();
 }
 
@@ -127,9 +114,6 @@ function updateBookmarkBtn() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   文档加载
-   -------------------------------------------------------------------------- */
 
 async function loadPdfFromPath(path, name, docId) {
   showLoading('正在打开文档…');
@@ -172,7 +156,6 @@ async function loadPdfFromFile(file) {
   try {
     const buf = await file.arrayBuffer();
     const task = pdfjsLib.getDocument({ data: buf });
-    // 本地文件用文件名+大小生成同样的指纹规则
     const id = await localDocId(file);
     await openDocument(task, file.name.replace(/\.pdf$/i, ''), id, null);
   } catch (err) {
@@ -182,7 +165,6 @@ async function loadPdfFromFile(file) {
   }
 }
 
-/* 本地文件的指纹：与服务端规则保持一致（文件名|大小） */
 async function localDocId(file) {
   const raw = `${file.name}|${file.size}`;
   const buf = new TextEncoder().encode(raw);
@@ -197,8 +179,6 @@ async function openDocument(task, name, docId, path) {
   state.fileName = name || '未命名文档';
   state.docId = docId;
   state.filePath = path || null;
-  // 换文档时段落缓存必须清空：段落号是"按当前文件排版"算出来的，
-  // 拿旧文件的段落号去改新文件，轻则报错，重则改错段。
   paraCache.clear();
   closeParaPop();
   state.pageCount = pdf.numPages;
@@ -214,7 +194,6 @@ async function openDocument(task, name, docId, path) {
   els.pageInput.max = pdf.numPages;
   els.pageInput.value = 1;
 
-  // 恢复上次阅读进度
   const saved = readPosition();
   state.rotation = (saved && saved.rotation) || 0;
   state.viewMode = (saved && saved.viewMode) || 'single';
@@ -223,30 +202,23 @@ async function openDocument(task, name, docId, path) {
   state.scale = await computeScale(state.scaleMode);
   els.zoomSelect.value = state.scaleMode;
 
-  // 显示需要文档的控件
   ['navGroup', 'navSep', 'zoomGroup', 'zoomSep', 'toolGroup', 'toolGroupSep',
    'annotGroup', 'annotSep', 'editGroup', 'editSep',
    'viewGroup', 'searchSep', 'fileGroup']
     .forEach(id => { els[id] && (els[id].hidden = false); });
   if (els.progressBar) els.progressBar.hidden = false;
 
-  // ★ 打开文档时退出编辑模式 —— 避免从上一次残留的编辑态进来
   if (editState.on) setEditMode(false);
   loadBookmarks();
   await buildPages();
-  syncBlankPages();     // 恢复上次的插入页（若有）
+  syncBlankPages();     
   setupObserver();
 
-  // ★ 侧边栏内容：缩略图 + 目录。
-  //   这两个函数**此前从未被调用** —— 于是侧边栏的「缩略图」「目录」
-  //   从打开文档起就是空的（既有 bug，不是本轮引入）。
   buildThumbs();
   buildOutline();
 
-  // 加载标注
   await loadAnnotations(state.docId);
 
-  // 加载编辑数据与页面尺寸信息
   await loadEdits(state.docId);
   if (state.filePath) {
     try {
@@ -258,7 +230,6 @@ async function openDocument(task, name, docId, path) {
       editState.pageInfo = [];
     }
   } else {
-    // 本地文件没有服务端路径，用 pdf.js 自己的视口尺寸兜底
     editState.pageInfo = [];
   }
   repaintEdits();
@@ -267,7 +238,6 @@ async function openDocument(task, name, docId, path) {
   updateProgressMarkers();
   hideLoading();
 
-  // 跳回上次位置
   if (saved && saved.page > 1 && saved.page <= pdf.numPages) {
     goToPage(saved.page);
     toast(`已回到第 ${saved.page} 页`, 1800);
@@ -279,17 +249,14 @@ async function openDocument(task, name, docId, path) {
   updateProgress();
 }
 
-/* 关闭当前文档，回到欢迎页 */
 function closeDocument() {
-  // ★ 回主页必须把**编辑模式**也收掉 —— 否则它会一直开着，
-  //   下次打开文件就"自动进入编辑模式"、还带着上一次的编辑对象。
   setEditMode(false);
   editState.objects = [];
   editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
   editState.dirty = false;
   if (state.observer) { state.observer.disconnect(); state.observer = null; }
   stopAutoScroll();
-  if (state.pdf) { try { state.pdf.destroy(); } catch (e) { /* noop */ } }
+  if (state.pdf) { try { state.pdf.destroy(); } catch (e) {  } }
   Object.assign(state, {
     pdf: null, filePath: null, fileName: '', docId: null, pageCount: 0,
     currentPage: 1, pages: [], searchHits: [], searchHitsByPage: new Map(),
@@ -316,9 +283,6 @@ function closeDocument() {
   renderWelcome();
 }
 
-/* --------------------------------------------------------------------------
-   页面构建与渲染
-   -------------------------------------------------------------------------- */
 
 async function buildPages() {
   const container = els.pages;
@@ -357,27 +321,13 @@ async function buildPages() {
   container.appendChild(frag);
 }
 
-/*
-  同步「插入的空白页」到视图。
-
-  背景：插入的空白页原本**只在导出时**生成，前端视图里看不到 ——
-  用户点了「末尾插入空白页」后看不到任何变化，以为没生效（真实反馈）。
-
-  这里把它作为**虚拟空白页**追加到容器末尾（UI 只提供"末尾插入"），
-  并更新总页数，做到所见即所得。
-
-  为什么追加 DOM 而不重建整本：重建要重新 getPage 渲染所有位图，
-  对几十页的文档代价太大；空白页本身是纯白，追加即可。
-*/
 function syncBlankPages() {
   if (!els.pages) return;
   const inserts = (editState.pages && editState.pages.insert) || [];
   const need = inserts.length;
 
-  // 现有的空白页 rec（带 blank 标记）
   const blanks = state.pages.filter(r => r.blank);
 
-  // 多了就去掉（从末尾开始）
   for (let i = blanks.length - 1; i >= need; i--) {
     const rec = blanks[i];
     rec.wrap.remove();
@@ -385,15 +335,10 @@ function syncBlankPages() {
     if (idx >= 0) state.pages.splice(idx, 1);
   }
 
-  // 尺寸沿用第一页的实际显示尺寸，保证观感一致
   const first = els.pages.querySelector(':scope > .page:not(.blank)');
   const w = (first && first.offsetWidth) || 595;
   const h = (first && first.offsetHeight) || 842;
 
-  // 少了就补：空白页做成**完整的页 rec**（含 canvas / text-layer）。
-  // ★ 关键 —— 编辑操作是基于 state.pages 的（pageAt/hitTest 都遍历它），
-  //   只追加一个裸 DOM 的话，空白页上**画不了任何东西**（真实反馈）。
-  //   做成 rec 后，它和普通页一样能被命中、能挂编辑层。
   for (let i = blanks.length; i < need; i++) {
     const num = state.pageCount + i + 1;
     const wrap = document.createElement('div');
@@ -416,16 +361,13 @@ function syncBlankPages() {
     });
   }
 
-  // 总页数把插入页算进去
   const total = state.pageCount + need;
   if (els.pageInput) els.pageInput.max = total;
   if (els.pageTotal) els.pageTotal.textContent = '/ ' + total;
 
-  // 编辑模式下：为空白页补上编辑层并重画对象
   if (editState.on) repaintEdits();
 }
 
-// 编辑层改动页面结构后，通过事件通知这里同步
 document.addEventListener('pdf:pages-changed', syncBlankPages);
 
 function setupObserver() {
@@ -450,11 +392,9 @@ function setupObserver() {
   for (const rec of state.pages) state.observer.observe(rec.wrap);
 }
 
-/* 渲染单页：位图 + 文字层 */
 async function renderPage(rec) {
   if (rec.rendered || rec.rendering) return;
 
-  // 限制并发：同时最多 3 页在渲染
   if (state.renderQueue.size >= 3) return;
   state.renderQueue.add(rec.num);
   rec.rendering = true;
@@ -463,7 +403,6 @@ async function renderPage(rec) {
     const page = await state.pdf.getPage(rec.num);
     const viewport = page.getViewport({ scale: state.scale, rotation: state.rotation });
 
-    // 计算画布分辨率，受像素上限约束
     const outputScale = window.devicePixelRatio || 1;
     let cssW = viewport.width, cssH = viewport.height;
     let pxW = Math.floor(cssW * outputScale);
@@ -477,7 +416,6 @@ async function renderPage(rec) {
       effScale = outputScale * ratio;
     }
 
-    // 尺寸同步到容器
     rec.wrap.style.width = Math.floor(cssW) + 'px';
     rec.wrap.style.height = Math.floor(cssH) + 'px';
 
@@ -499,12 +437,10 @@ async function renderPage(rec) {
     await task.promise;
     rec.task = null;
 
-    // ---- 文字层 ----
     const textContent = await page.getTextContent();
     rec.textContent = textContent;
     buildTextLayer(rec, textContent, viewport);
 
-    // 读取该页 PDF 自带的注释（/Annots）——异步，读完自己重绘那一层
     loadPagePdfAnnots(rec);
 
     rec.wrap.classList.remove('pending');
@@ -513,19 +449,14 @@ async function renderPage(rec) {
     rec.rendering = false;
     state.renderQueue.delete(rec.num);
 
-    // 若该页存在搜索命中，渲染完成后即时补上高亮
     const hitOnPage = state.searchHitsByPage.get(rec.num - 1);
     if (hitOnPage) {
       for (const hit of hitOnPage) paintHitsOnPage(rec, hit);
       markCurrentHit();
     }
 
-    // 标注层
     paintPageAnnotations(rec);
-    // 编辑层
     paintPageEdits(rec);
-    // 页面重渲染后对象位置会变，操作条要跟着重定位
-    // （只在本页有选中对象时才需要）
     if (objBarId) {
       const sel = editState.objects.find(o => o.id === objBarId);
       if (sel && sel.page === rec.num) showObjBar(rec, sel);
@@ -533,7 +464,6 @@ async function renderPage(rec) {
   } catch (err) {
     rec.rendering = false;
     state.renderQueue.delete(rec.num);
-    // 取消渲染不算错误
     if (err?.name !== 'RenderingCancelledException' && !String(err).includes('cancel')) {
       console.warn(`第 ${rec.num} 页渲染失败：`, err);
       rec.wrap.classList.remove('pending');
@@ -542,15 +472,12 @@ async function renderPage(rec) {
   }
 }
 
-/* 构建可选中 / 可搜索的文字层 */
 function buildTextLayer(rec, textContent, viewport) {
   const layer = rec.textLayer;
   layer.innerHTML = '';
 
-  // 给每个 item 打上原始下标，span 会记住它
   textContent.items.forEach((it, i) => { it.__idx = i; });
 
-  // 用一个隐藏画布测量文本宽度，避免依赖 DOM 布局（未插入时测量恒为 0）
   const measureCtx = (rec._measureCanvas ||= document.createElement('canvas')).getContext('2d');
   const frag = document.createDocumentFragment();
 
@@ -563,31 +490,20 @@ function buildTextLayer(rec, textContent, viewport) {
 
     const span = document.createElement('span');
     span.textContent = item.str;
-    // 显式记录所属的 item 下标 —— 后续取锚点、画标注都靠它，
-    // 不再依赖 DOM 顺序推断，避免被搜索高亮等操作打乱。
     span.dataset.itemIndex = String(item.__idx);
     span.style.left = tx[4] + 'px';
     span.style.top = (tx[5] - fontHeight) + 'px';
     span.style.fontSize = fontHeight + 'px';
     span.style.fontFamily = 'sans-serif';
 
-    // 原文字形宽度（PDF 坐标 -> 屏幕像素）
     const targetW = item.width * viewport.scale;
 
-    // ★ 纯空白 item 不拉伸。
-    //   pdf.js 会用 str=' ' 的 item 表示「字间的大间隙」，它的 width 横跨
-    //   整段（实测该文档一行的空白 item 宽 100+ px）。文字层靠 scaleX 把
-    //   字符拉到原宽，这一条就被拉成一条覆盖整行的透明盒子 —— 用户一选中，
-    //   它和真正的文字叠在一起，同一选区出现「有深有浅」的重叠色块。
-    //   空白没有字形，保持自然宽度即可：照样能复制出空格，也不会画出横跨
-    //   整行的色带。
     const isBlank = !item.str.trim();
     if (fontHeight > 0 && targetW > 0 && !isBlank) {
       measureCtx.font = `${fontHeight}px sans-serif`;
       const naturalW = measureCtx.measureText(item.str).width;
       if (naturalW > 0.01) {
         const ratio = targetW / naturalW;
-        // 只在明显偏离时才缩放，避免亚像素级抖动
         if (Math.abs(ratio - 1) > 0.01) {
           span.style.transformOrigin = '0 0';
           span.style.transform = `scaleX(${ratio.toFixed(4)})`;
@@ -604,7 +520,6 @@ function buildTextLayer(rec, textContent, viewport) {
   layer.appendChild(frag);
 }
 
-/* 更新当前页码显示（取视口中心最近的页） */
 function updateCurrentPage() {
   if (!state.pages.length) return;
   const viewerRect = els.viewer.getBoundingClientRect();
@@ -627,7 +542,6 @@ function updateCurrentPage() {
   }
 }
 
-/* 更新顶部进度条 */
 function updateProgress() {
   if (!els.progressFill || !state.pageCount) return;
   const v = els.viewer;
@@ -636,9 +550,6 @@ function updateProgress() {
   els.progressFill.style.width = (ratio * 100) + '%';
 }
 
-/* --------------------------------------------------------------------------
-   缩放 / 旋转
-   -------------------------------------------------------------------------- */
 
 async function applyScale(mode, anchor) {
   if (!state.pdf) return;
@@ -646,7 +557,6 @@ async function applyScale(mode, anchor) {
   state.scaleMode = mode;
   state.scale = await computeScale(mode);
 
-  // 记录锚点，缩放后回到同一位置
   if (!anchor) {
     const viewerRect = els.viewer.getBoundingClientRect();
     anchor = {
@@ -661,9 +571,8 @@ async function applyScale(mode, anchor) {
 }
 
 async function rebuildAtNewScale(anchor) {
-  // 停止所有进行中的渲染
   for (const rec of state.pages) {
-    if (rec.task) { try { rec.task.cancel(); } catch (e) { /* noop */ } rec.task = null; }
+    if (rec.task) { try { rec.task.cancel(); } catch (e) {  } rec.task = null; }
   }
   state.renderQueue.clear();
 
@@ -684,7 +593,6 @@ async function rebuildAtNewScale(anchor) {
     }
   }
 
-  // 恢复锚点位置
   if (anchor) {
     requestAnimationFrame(() => {
       const rec = state.pages[anchor.page - 1];
@@ -693,7 +601,6 @@ async function rebuildAtNewScale(anchor) {
         rec.wrap.offsetHeight * Math.min(Math.max(anchor.ratio, 0), 1) -
         els.viewer.clientHeight / 2;
       els.viewer.scrollTop = Math.max(0, target);
-      // 立即渲染锚点页及邻近页
       for (let d = -1; d <= 1; d++) {
         const r = state.pages[anchor.page - 1 + d];
         if (r) renderPage(r);
@@ -707,7 +614,6 @@ function rotate() {
   if (!state.pdf) return;
   state.rotation = (state.rotation + 90) % 360;
   applyScale(state.scaleMode === 'auto' ? 'auto' : state.scaleMode);
-  // ★ 缩略图是按 state.rotation 渲染的，旋转后必须重建（buildThumbs 会清缓存）
   buildThumbs();
   toast(`旋转 ${state.rotation}°`, 1200);
 }
@@ -718,9 +624,6 @@ function toggleInvert() {
   els.btnDark.classList.toggle('on', state.invert);
 }
 
-/* --------------------------------------------------------------------------
-   视图模式：单页 / 双栏
-   -------------------------------------------------------------------------- */
 
 async function applyViewMode(mode, silent = false) {
   state.viewMode = mode;
@@ -730,7 +633,6 @@ async function applyViewMode(mode, silent = false) {
   els.pages.classList.toggle('double', mode === 'double');
 
   if (state.pdf && !silent) {
-    // 切换视图后重新计算缩放并重建页面
     state.scale = await computeScale(state.scaleMode);
     await buildPages();
     setupObserver();
@@ -740,12 +642,9 @@ async function applyViewMode(mode, silent = false) {
   }
 }
 
-/* --------------------------------------------------------------------------
-   自动滚动
-   -------------------------------------------------------------------------- */
 
 let autoScrollRAF = null;
-let autoScrollSpeed = 0.55;   // 像素 / 帧
+let autoScrollSpeed = 0.55;   
 
 function startAutoScroll() {
   if (autoScrollRAF) { stopAutoScroll(); return; }
@@ -775,9 +674,6 @@ function stopAutoScroll() {
   els.btnScrollPlay && els.btnScrollPlay.classList.remove('scrolling');
 }
 
-/* --------------------------------------------------------------------------
-   跳页
-   -------------------------------------------------------------------------- */
 
 function goToPage(num, smooth = false) {
   if (!state.pdf) return;
@@ -796,18 +692,12 @@ function goToPage(num, smooth = false) {
   updateThumbActive();
 }
 
-/* --------------------------------------------------------------------------
-   缩略图
-   -------------------------------------------------------------------------- */
 
 let thumbObserver = null;
 
 async function buildThumbs() {
   const box = els.thumbList;
   box.innerHTML = '';
-  // ★ 缩略图 DOM 刚被清空重建，缓存必须同步清掉 ——
-  //   否则切换文档后，"第 N 页已渲染"的记忆还在，编号相同的缩略图
-  //   会被直接跳过，表现为新文档缩略图大片空白。
   thumbCache.clear();
   if (!state.pdf) return;
   if (thumbObserver) thumbObserver.disconnect();
@@ -824,18 +714,13 @@ async function buildThumbs() {
   }
   box.appendChild(frag);
 
-  // 缩略图本身也懒加载
   thumbObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
       const n = parseInt(e.target.dataset.page, 10);
-      // ★ 只有**渲染成功**才解除观察。
-      //   此前是无条件 unobserve —— 一旦某页渲染失败（该页字体异常，
-      //   或被快速滚动取消渲染），它就再也得不到重试机会，缩略图永久
-      //   定格为空白：即"缩略图偶尔发癫"的根因。
       renderThumb(n)
         .then(ok => { if (ok) thumbObserver.unobserve(e.target); })
-        .catch(() => { /* 保留观察，下次进入视野再试 */ });
+        .catch(() => {  });
     }
   }, { root: els.sideBody, rootMargin: '200px 0px' });
 
@@ -845,7 +730,6 @@ async function buildThumbs() {
 const thumbCache = new Map();
 
 async function renderThumb(num) {
-  // 返回 true = 已渲染/无需再渲染（可解除观察）；false = 失败（保留观察重试）
   if (!state.pdf || thumbCache.has(num)) return true;
   const btn = els.thumbList.querySelector(`.thumb[data-page="${num}"]`);
   if (!btn) return false;
@@ -878,7 +762,6 @@ async function renderThumb(num) {
     holder.appendChild(canvas);
     return true;
   } catch (err) {
-    // ★ 失败**不**写入 thumbCache —— 这样它下次进入视野时会被重试
     if (err && err.name !== 'RenderingCancelledException') {
       console.warn('缩略图渲染失败（下次可见时重试）', num, err);
     }
@@ -901,9 +784,6 @@ function updateThumbActive() {
   }
 }
 
-/* --------------------------------------------------------------------------
-   目录
-   -------------------------------------------------------------------------- */
 
 async function buildOutline() {
   const box = els.outlineList;
@@ -911,16 +791,12 @@ async function buildOutline() {
   state.outlinMap = new Map();
   if (!state.pdf) return;
 
-  // ★ 先渲染「我的书签」（用户用「本页加书签」/ B 键加的阅读书签）。
-  //   它和 PDF 自带目录是**两个来源** —— 之前面板只显示 PDF 目录，
-  //   所以加完书签在「目录」里看不到任何变化（真实反馈）。
   renderMyBookmarks(box);
 
   let outline = null;
   try { outline = await state.pdf.getOutline(); } catch (e) { outline = null; }
 
   if (!outline || !outline.length) {
-    // 没有 PDF 目录时：若已有「我的书签」，就不再显示"无目录"的空提示
     if (!state.bookmarks.size) {
       const div = document.createElement('div');
       div.className = 'outline-empty';
@@ -937,7 +813,6 @@ async function buildOutline() {
   box.appendChild(frag);
 }
 
-/* 把阅读书签渲染进目录面板（复用 .outline-item 样式，点击跳页） */
 function renderMyBookmarks(box) {
   const pages = [...state.bookmarks].sort((a, b) => a - b);
   if (!pages.length) return;
@@ -971,7 +846,6 @@ async function resolveDestPage(dest) {
     }
     if (!ref) return null;
     if (ref[0] && typeof ref[0] === 'object') {
-      // 显式页面引用
       const idx = await state.pdf.getPageIndex(ref[0]);
       return idx + 1;
     }
@@ -1013,21 +887,7 @@ async function buildOutlineNode(item, depth) {
   return btn;
 }
 
-/* --------------------------------------------------------------------------
-   搜索
-   -------------------------------------------------------------------------- */
 
-/*
-  搜索模型说明
-  ------------
-  遍历每页的 textContent.items，拼成完整字符串（并记录每个字符所属的 item
-  与 item 内偏移）。匹配后为每个命中生成一条记录：
-
-    { pageIndex, pageNum, seq, parts: [{ itemIndex, start, end, isFirst }] }
-
-  seq 是全局序号，与界面上的「第 N / M 处」以及 mark 元素一一对应，
-  从而保证计数、跳转索引、高亮三者严格一致。
-*/
 
 async function runSearch(keyword) {
   clearSearchHighlights();
@@ -1061,7 +921,6 @@ async function runSearch(keyword) {
     }
     if (!textContent || !textContent.items.length) continue;
 
-    // 拼接全文，同时记录字符 -> (itemIndex, charInItem)
     const pieces = [];
     const charMap = [];
     for (let ii = 0; ii < textContent.items.length; ii++) {
@@ -1076,7 +935,6 @@ async function runSearch(keyword) {
 
     let at = lower.indexOf(q);
     while (at !== -1) {
-      // 把 [at, at+q.length) 的字符区间按 item 切成若干段
       const parts = [];
       let cur = null;
       for (let c = at; c < at + q.length; c++) {
@@ -1122,7 +980,6 @@ async function runSearch(keyword) {
   }
 }
 
-/* 恢复某个 span 的原始文本（去掉其中所有 mark） */
 function restoreSpan(span) {
   if (span.dataset.orig !== undefined) {
     span.textContent = span.dataset.orig;
@@ -1130,11 +987,9 @@ function restoreSpan(span) {
   }
 }
 
-/* 清除所有页面的搜索高亮 */
 function clearSearchHighlights() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
-    // 兜底：清掉可能残留的 mark
     rec.textLayer.querySelectorAll('mark.hl').forEach(m => {
       const sp = m.closest('span');
       if (sp) restoreSpan(sp);
@@ -1145,17 +1000,14 @@ function clearSearchHighlights() {
   state.hitIndex = -1;
 }
 
-/* 文字层 span 顺序与「非空 item」顺序严格对应 */
 function findSpanForItem(rec, itemIndex) {
   if (!rec || !rec.textLayer) return null;
   return rec.textLayer.querySelector(`span[data-item-index="${itemIndex}"]`);
 }
 
-/* 在单个页面上绘制一条命中的高亮 */
 function paintHitsOnPage(rec, hit) {
   if (!rec || !rec.rendered) return;
 
-  // 同一 item 内的多段合并处理：按 itemIndex 分组
   const byItem = new Map();
   hit.parts.forEach((p, idx) => {
     if (!byItem.has(p.itemIndex)) byItem.set(p.itemIndex, []);
@@ -1168,7 +1020,6 @@ function paintHitsOnPage(rec, hit) {
     const orig = span.dataset.orig !== undefined ? span.dataset.orig : span.textContent;
     span.dataset.orig = orig;
 
-    // 从后往前替换，避免前面的插入影响后面的偏移
     let html = escapeHtml(orig);
     [...segs].sort((a, b) => b.start - a.start).forEach(seg => {
       const inner = escapeHtml(orig.slice(seg.start, seg.end));
@@ -1181,7 +1032,6 @@ function paintHitsOnPage(rec, hit) {
   }
 }
 
-/* 把高亮写入所有已渲染页面 */
 function applySearchHighlight() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
@@ -1192,7 +1042,6 @@ function applySearchHighlight() {
   markCurrentHit();
 }
 
-/* 高亮当前命中项 */
 function markCurrentHit() {
   document.querySelectorAll('.text-layer mark.cur').forEach(m => m.classList.remove('cur'));
   if (state.hitIndex < 0 || !state.searchHits.length) return;
@@ -1203,7 +1052,6 @@ function markCurrentHit() {
   if (mark) mark.classList.add('cur');
 }
 
-/* 跳转到第 index 个命中 */
 function gotoHit(index) {
   const n = state.searchHits.length;
   if (!n) return;
@@ -1217,7 +1065,6 @@ function gotoHit(index) {
 
   if (!rec.rendered) renderPage(rec);
 
-  // 等页面渲染完再定位（最多轮询 2 秒）
   let tries = 0;
   const locate = () => {
     const mark = rec.textLayer.querySelector(`mark.hl[data-seq="${hit.seq}"]`);
@@ -1238,7 +1085,6 @@ function gotoHit(index) {
     if (tries < 20) {
       setTimeout(locate, 100);
     } else {
-      // 兜底：直接滚到该页
       goToPage(hit.pageNum, true);
       markCurrentHit();
     }
@@ -1246,15 +1092,12 @@ function gotoHit(index) {
   locate();
 }
 
-/* --------------------------------------------------------------------------
-   划词菜单与标注交互
-   -------------------------------------------------------------------------- */
 
-let pendingSel = null;   // 暂存选区锚点（已固化的快照）
-let popAnnotId = null;   // 气泡正在编辑的标注
+let pendingSel = null;   
+let popAnnotId = null;   
 let currentAnnotColor = 'yellow';
 let currentAnnotColorHex = '#fbbf24';
-let menuBusy = false;    // 正在操作浮动菜单，期间的 selectionchange 一律忽略
+let menuBusy = false;    
 
 let selMenuTimer = null;
 
@@ -1263,75 +1106,51 @@ function hideSelMenu() {
   if (els.selMenu) els.selMenu.hidden = true;
 }
 
-/*
-  定位划词菜单。
-
-  难点：rect 是「整个选区的外接矩形」。若选区跨行、跨页，或首行滚出视口，
-  外接矩形的 top / bottom 会离实际想贴的位置很远，直接用它会把菜单
-  推出可视区（表现为「飞到页面顶端、点不到」）。
-
-  所以这里：
-    1. 优先用选区「第一行」的矩形作为锚点（getClientRects 的第一个）；
-    2. 上、下两个候选位置都算出来，选一个真正能放下的；
-    3. 最后无条件把结果钳制进 viewer 可视区，保证永远点得到。
-*/
 function showSelMenu(rect) {
   const menu = els.selMenu;
   if (!menu) return;
   menu.hidden = false;
 
-  // 先量尺寸。此刻虽已取消隐藏，但布局可能尚未刷新，
-  // offsetWidth 会返回 0 —— 用 getBoundingClientRect 更可靠，
-  // 仍为 0 时（极罕见）退回估算值。
   const box = menu.getBoundingClientRect();
   const mw = box.width || menu.offsetWidth || 300;
   const mh = box.height || menu.offsetHeight || 34;
 
   const vr = els.viewer.getBoundingClientRect();
 
-  // 菜单是 .viewer 内的 absolute 元素，坐标基准是 viewer 的「内容区原点」，
-  // 而 rect / vr 都是视口坐标。两者相差一个滚动量，必须补上，
-  // 否则页面滚得越远、菜单偏得越离谱（表现为往上飞出可视区）。
   const sx = els.viewer.scrollLeft;
   const sy = els.viewer.scrollTop;
 
-  // 选区相对 viewer 内容区的坐标
   const selLeft = rect.left - vr.left + sx;
   const selTop = rect.top - vr.top + sy;
   const selBottom = rect.bottom - vr.top + sy;
 
-  // 可视窗口（相对内容区）的上下边界
   const viewTop = sy + 6;
   const viewBottom = sy + vr.height - 6;
 
-  const GAP = 8;      // 与选区的间距
-  const EDGE = 6;     // 与 viewer 边缘的最小留白
+  const GAP = 8;      
+  const EDGE = 6;     
 
-  // 水平：以选区中心对齐，再钳制在可视区内（左右边界都用内容区坐标）
   const minLeft = sx + EDGE;
   const maxLeft = sx + Math.max(EDGE, vr.width - mw - EDGE);
   let left = selLeft + rect.width / 2 - mw / 2;
   left = Math.min(Math.max(left, minLeft), maxLeft);
 
-  // 垂直：优先放选区上方；上方放不下则放下方。
-  // 两个位置都不理想时，钳制进可视窗口（宁可压住文字，也不能点不到）。
   const above = selTop - mh - GAP;
   const below = selBottom + GAP;
 
   let top;
   if (above >= viewTop) {
-    top = above;                                   // 上方放得下，首选上方
+    top = above;                                   
   } else if (below + mh <= viewBottom) {
-    top = below;                                   // 上方不够，下方放得下
+    top = below;                                   
   } else {
-    top = Math.min(Math.max(above, viewTop), viewBottom - mh);  // 强行钳制
+    top = Math.min(Math.max(above, viewTop), viewBottom - mh);  
   }
   top = Math.min(Math.max(top, viewTop), viewBottom - mh);
 
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
 
-  // 兜底：菜单弹出后一段时间内无操作，自动收起，避免遮挡正文
   if (selMenuTimer) clearTimeout(selMenuTimer);
   selMenuTimer = setTimeout(() => {
     if (menuBusy) return;
@@ -1340,17 +1159,13 @@ function showSelMenu(rect) {
   }, 6000);
 }
 
-/* 监听选区变化 */
 function onSelectionChange() {
-  // 正在点浮动菜单/气泡时不处理，否则会把菜单误关掉
   if (menuBusy) return;
 
-  // 编辑模式下不弹划词菜单 —— 此时鼠标是"画笔"，不是"选择文字"
   if (editState.on) return;
 
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) {
-    // 选区消失：菜单如果还开着，只有在没有待处理锚点时才关
     if (!pendingSel) hideSelMenu();
     return;
   }
@@ -1360,51 +1175,40 @@ function onSelectionChange() {
   const range = sel.getRangeAt(0);
   if (!els.viewer.contains(range.commonAncestorContainer)) { hideSelMenu(); return; }
 
-  // 固化锚点快照 —— 后面即使选区被清空，这份数据依然有效
   const anchors = selectionToAnchors();
   if (!anchors) { hideSelMenu(); return; }
   pendingSel = anchors;
 
-  // 菜单定位用「选区第一行」的矩形，而不是整个选区的外接矩形。
-  // 跨行/跨页选区的外接矩形会把底部拉到很远，导致菜单飞出可视区。
   let anchorRect = null;
   try {
     const rects = range.getClientRects();
     if (rects && rects.length) {
       const first = rects[0];
-      // 取首行矩形，但水平范围用整段选区，横向居中更符合直觉
       const whole = range.getBoundingClientRect();
       anchorRect = {
         left: whole.left, width: whole.width,
         top: first.top, bottom: first.bottom,
       };
     }
-  } catch (e) { /* 忽略，回退到下面的兜底 */ }
+  } catch (e) {  }
   showSelMenu(anchorRect || range.getBoundingClientRect());
 }
 
-/* 收尾：隐藏菜单、清空待处理锚点、清除浏览器选区 */
 function finishMenuAction() {
   hideSelMenu();
   pendingSel = null;
-  try { window.getSelection()?.removeAllRanges(); } catch (e) { /* ignore */ }
+  try { window.getSelection()?.removeAllRanges(); } catch (e) {  }
 }
 
-/* --------------------------------------------------------------------------
-   编辑模式：拖拽绘制
-   -------------------------------------------------------------------------- */
 
-let dragState = null;      // { rec, page, start, tool, color }  绘制新对象
-let moveState = null;      // 拖动已有对象：{ id, startX/Y, orig, rec, rw/rh, pw/ph }
-let resizeState = null;    // 缩放已有对象：{ id, corner, startX/Y, orig, rec, rw/rh, pw/ph }
-let textPopInfo = null;    // 文字输入浮层的上下文
-let objBarId = null;       // 操作条当前绑定的对象 id
+let dragState = null;      
+let moveState = null;      
+let resizeState = null;    
+let textPopInfo = null;    
+let objBarId = null;       
 
-/* 拖动的最小位移阈值（屏幕像素）—— 小于它就当"点击"，不当"拖动"。
-   没有阈值的话，手抖一个像素也会把对象挪走。 */
 const MOVE_THRESHOLD = 3;
 
-/* 找出坐标落在哪一页上 */
 function pageAt(clientX, clientY) {
   for (const rec of state.pages) {
     const r = rec.wrap.getBoundingClientRect();
@@ -1416,9 +1220,6 @@ function pageAt(clientX, clientY) {
   return null;
 }
 
-/* 选中对象后弹出的操作条：删除 / 置顶 / 置底。
-   放在这里而不是像原来那样弹 confirm() —— 原生对话框会打断操作流，
-   而且它在 Firefox 里会冻结渲染，既丑又慢。 */
 function showObjBar(rec, obj) {
   const bar = els.objBar;
   if (!bar) return;
@@ -1430,11 +1231,6 @@ function showObjBar(rec, obj) {
   if (els.objBarName) els.objBarName.textContent = names[obj.kind] || '对象';
   objBarId = obj.id;
 
-  // 贴在对象上方；对象太靠上就翻到下方。
-  // ★ 锚点必须从**对象自己的数据**算，不要依赖 obj._norm ——
-  //   那只是「避免反复换算」的渲染缓存，位置一变就被作废
-  //   （见 edit.js 的 updateObject）。依赖它的话，拖动过的对象
-  //   会让操作条跑回页面角落。
   const r = rec.wrap.getBoundingClientRect();
   const ps = pageSize(obj.page);
   const p = pdfToNorm(obj.x, obj.y, obj.w || 0, obj.h || 0,
@@ -1469,17 +1265,6 @@ function hideObjBar() {
   if (els.objBar) els.objBar.hidden = true;
 }
 
-/*
-  双击对象 → 编辑内容。
-
-  目前只支持**文字对象**（改文字 + 字号）—— 文字是唯一「内容可变」的对象；
-  图形对象要改只能删了重画，那是另一套交互，先不做。
-
-  为什么限定「选择工具」：文字工具单击就会弹出输入框，
-  再叠一层双击语义会互相打架。
-
-  没有这一步的后果：**打错一个字就得删掉重打**，位置也白定了。
-*/
 function onEditDoubleClick(e) {
   if (!editState.on || editState.tool !== 'select') return;
   if (!e.target.closest('.page')) return;
@@ -1491,20 +1276,11 @@ function onEditDoubleClick(e) {
     e.preventDefault();
     openTextPop(rec, e.clientX, e.clientY, obj);
   } else if (obj.kind === 'replace') {
-    // 双击替换框 → 改要替换成的新文字
     e.preventDefault();
     openReplacePop(obj, e.clientX, e.clientY);
   }
 }
 
-/* 编辑层的鼠标按下 */
-/**
- * 标注模式开关（唯一入口）。
- *
- * ★ 与编辑模式**互斥**：进入标注一定要退出编辑 —— 否则右侧编辑栏还开着，
- *   而标注的划词菜单/气泡又浮在上面，用户分不清自己在哪个模式里操作。
- * 状态、按钮高亮、viewer 上的 class 三样必须一起改，别只改一样。
- */
 function setAnnotMode(on, silent = false) {
   const next = !!on;
   if (state.annotMode === next) return;
@@ -1512,7 +1288,7 @@ function setAnnotMode(on, silent = false) {
   if (els.btnAnnotMode) els.btnAnnotMode.classList.toggle('on', next);
   if (els.viewer) els.viewer.classList.toggle('annot-mode', next);
 
-  if (next && editState.on) setEditMode(false);   // 标注优先：顺手收起编辑
+  if (next && editState.on) setEditMode(false);   
 
   if (!silent) {
     toast(next ? '标注模式：拖拽可框选区域（已退出编辑）' : '已退出标注模式', 1600);
@@ -1523,9 +1299,6 @@ function onEditMouseDown(e) {
   if (!editState.on || !editState.tool) return;
   if (e.button !== 0) return;
 
-  // 缩放手柄：优先于落笔/选择。
-  // 手柄在 .page 内部（也匹配 closest('.page')），必须在那道判据之前
-  // 拦下来，否则点手柄会被当成「选中/落笔」。
   const handle = e.target.closest('.ed-handle');
   if (handle) {
     if (editState.tool !== 'select') return;
@@ -1551,18 +1324,8 @@ function onEditMouseDown(e) {
     return;
   }
 
-  // 落笔必须发生在**页面内容**上。
-  // 编辑 UI（工具面板 / 文字输入框 / 对象操作条 / 页面管理 / 涂黑确认框）
-  // 全都是 #viewer 的后代，它们的 mousedown 会一路冒泡到这里。
-  // 不排除的话，点「确定」会被当成一次新的落笔，而落点恰好在按钮处：
-  // 于是原地又弹出一个空输入框、已输入的文字被静默清空；同时 click 因
-  // 按钮已隐藏而根本不会派发 —— "确定"就永远不生效。
-  // 对象操作条（置顶/置底/删除）和工具面板的按钮同理会被吃掉。
-  // 用 closest('.page') 一次排除全部浮层，比逐个列举容器类名更不容易漏
-  // （onBoxDown 用的就是同一条判据）。
   if (!e.target.closest('.page')) return;
 
-  // 文字输入浮层开着时，先关掉它
   closeTextPop();
 
   const rec = pageAt(e.clientX, e.clientY);
@@ -1570,15 +1333,12 @@ function onEditMouseDown(e) {
 
   const tool = editState.tool;
 
-  // ★ 段落工具：点一下就改这一段（不需要拖框），所以在这里直接拦下。
   if (tool === 'para') {
     e.preventDefault();
     openParaPop(rec, e.clientX, e.clientY);
     return;
   }
 
-  // 选择工具：点中对象则选中并弹出操作条，点空白则取消选中。
-  // 命中对象时同时进入「可拖动」状态 —— 移动超过阈值才算拖动。
   if (tool === 'select') {
     const obj = hitTest(rec, e.clientX, e.clientY);
     editState.selectedId = obj ? obj.id : null;
@@ -1592,8 +1352,6 @@ function onEditMouseDown(e) {
         rec,
         startX: e.clientX,
         startY: e.clientY,
-        // 记**原始坐标**：每一帧都从它算位移，不做累加 ——
-        // 累加会累积浮点误差，中途丢一帧事件还会永久漂移
         orig: { x: obj.x, y: obj.y, x2: obj.x2, y2: obj.y2 },
         rw: r.width,
         rh: r.height,
@@ -1607,10 +1365,8 @@ function onEditMouseDown(e) {
 
   e.preventDefault();
 
-  // 选中别的对象时，开始绘制前先收起操作条
   hideObjBar();
 
-  // 文字工具：单击即弹出输入框（不需要拖）
   if (tool === 'text') {
     openTextPop(rec, e.clientX, e.clientY);
     return;
@@ -1626,13 +1382,6 @@ function onEditMouseDown(e) {
   document.body.classList.add('dragging-edit');
 }
 
-/*
-  拖动已有对象。
-
-  位移换算（含 y 轴翻转）交给 geom.js 的纯函数，这里只管阈值与副作用。
-  ★ 位置每帧都从**原始坐标**重算，不在上一帧的结果上累加 ——
-    累加会累积误差，中途丢一帧事件还会永久漂移。
-*/
 function dragMoveObject(e) {
   const st = moveState;
   const dxs = e.clientX - st.startX;
@@ -1640,17 +1389,16 @@ function dragMoveObject(e) {
 
   if (!st.moved) {
     if (Math.abs(dxs) < MOVE_THRESHOLD && Math.abs(dys) < MOVE_THRESHOLD) {
-      return;                    // 还没超过阈值：仍算「点击」，不算拖动
+      return;                    
     }
     st.moved = true;
-    hideObjBar();                // 拖动时收起操作条，免得挡视线
+    hideObjBar();                
   }
 
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
   updateObject(st.id, movedPosition(st.orig, d));
 }
 
-/* 拖角缩放：几何换算交给 geom.js 的 resizedRect（可单测） */
 function dragResizeObject(e) {
   const st = resizeState;
   const dxs = e.clientX - st.startX;
@@ -1659,7 +1407,6 @@ function dragResizeObject(e) {
   updateObject(st.id, resizedRect(st.orig, st.corner, d));
 }
 
-/* 拖拽中：实时预览 */
 function onEditMouseMove(e) {
   if (resizeState) { dragResizeObject(e); return; }
   if (moveState) { dragMoveObject(e); return; }
@@ -1673,7 +1420,6 @@ function onEditMouseMove(e) {
     : makeRectObject(rec, page, start, { x: e.clientX, y: e.clientY },
                      tool, opts);
 
-  // 转成归一化坐标供渲染（避免反复换算导致抖动）
   if (tool === 'line') {
     temp._norm = {
       x: temp.x / pageSize(page).width,
@@ -1695,24 +1441,21 @@ function onEditMouseMove(e) {
   paintPageEdits(rec);
 }
 
-/* 拖拽结束：落成一个对象 */
 function onEditMouseUp(e) {
-  // 缩放已有对象：坐标在拖动过程中已写回，这里只收尾
   if (resizeState) {
     const st = resizeState;
     resizeState = null;
     const obj = editState.objects.find(o => o.id === st.id);
-    if (obj) showObjBar(st.rec, obj);   // 操作条贴回对象旁边
+    if (obj) showObjBar(st.rec, obj);   
     toast('已缩放', 900);
     return;
   }
-  // 拖动已有对象：坐标在拖动过程中已经写回了，这里只收尾
   if (moveState) {
     const st = moveState;
     moveState = null;
     if (st.moved) {
       const obj = editState.objects.find(o => o.id === st.id);
-      if (obj) showObjBar(st.rec, obj);   // 把操作条贴回对象旁边
+      if (obj) showObjBar(st.rec, obj);   
       toast('已移动', 900);
     }
     return;
@@ -1725,7 +1468,6 @@ function onEditMouseUp(e) {
   const dx = Math.abs(e.clientX - start.x);
   const dy = Math.abs(e.clientY - start.y);
 
-  // 太小的一拖当作误操作，忽略（避免点一下就留个碎点）
   if (tool !== 'line' && dx < 4 && dy < 4) {
     editState.tempShape = null;
     paintPageEdits(rec);
@@ -1748,13 +1490,10 @@ function onEditMouseUp(e) {
 
   editState.tempShape = null;
   const created = addObject(obj);
-  // ★ 画完自动切到「选择」工具并选中它 —— 这样四角缩放手柄立刻出现，
-  //   用户能马上调整大小/位置；否则得手动切工具才看得到手柄（易被当成"没做"）。
   setTool('select');
   editState.selectedId = created.id;
   showObjBar(rec, created);
   repaintEdits();
-  // 替换：框完立刻弹输入框让用户填新文字（和「文字」工具单击弹框一个思路）
   if (tool === 'replace') {
     toast('已框选替换区域，请输入要替换成的新文字', 2600);
     openReplacePop(created, e.clientX, e.clientY);
@@ -1762,8 +1501,6 @@ function onEditMouseUp(e) {
   }
   const label = { whiteout: '涂白', rect: '矩形', ellipse: '椭圆',
                   line: '直线', redact: '涂黑区域' }[tool] || '对象';
-  // 涂黑只标记区域，真正的销毁在点「涂黑并另存为」时发生 ——
-  // 这里提示一下，免得用户以为已经删掉了
   if (tool === 'redact') {
     toast('已标记涂黑区域，点「涂黑并另存为…」才会真正删除文字', 3200);
   } else {
@@ -1771,19 +1508,10 @@ function onEditMouseUp(e) {
   }
 }
 
-/* ---- 文字输入浮层 ---- */
 
-/* --------------------------------------------------------------------------
-   改段落：点一下段落 -> 服务端给出该页段落模型 -> 命中哪段改哪段
-   --------------------------------------------------------------------------
 
-   ★ 段落坐标是 PDF 坐标（左下原点），而点击是屏幕坐标 —— 中间要翻一次 y。
-     这里**不缓存正文文字**，只缓存"哪一段在什么位置"，因为它会随文件变化失效；
-     真正提交时服务端会重新解析一遍，前端算的段落号只是"指个路"。
-   -------------------------------------------------------------------------- */
-
-let paraPopInfo = null;             // { page, para }
-const paraCache = new Map();        // `${path}|${page}` -> [{index,x0,y0,x1,y1,...}]
+let paraPopInfo = null;             
+const paraCache = new Map();        
 
 async function fetchParagraphs(page) {
   const key = `${state.filePath}|${page}`;
@@ -1792,7 +1520,7 @@ async function fetchParagraphs(page) {
   const r = await fetch('/api/paragraphs?' + q.toString());
   if (!r.ok) {
     let msg = `取段落失败 (${r.status})`;
-    try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) { /* 忽略 */ }
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {  }
     throw new Error(msg);
   }
   const data = await r.json();
@@ -1801,7 +1529,6 @@ async function fetchParagraphs(page) {
   return list;
 }
 
-/* 单个 textContent item 的 PDF 坐标框（左下原点） */
 function itemRectPdf(item) {
   const t = item.transform || [1, 0, 0, 1, 0, 0];
   const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
@@ -1809,23 +1536,6 @@ function itemRectPdf(item) {
   return [t[4], t[5], t[4] + w, t[5] + h];
 }
 
-/*
-  用 pdf.js 的文字现算某段的原文。
-
-  为什么需要：有些 PDF 的字体没有 /ToUnicode，服务端解不出字（text 为空），
-  但浏览器里 pdf.js 是能解出来的（用户能选中、能复制）。
-  把这段文字按「字形位置落在段落框内」取出来，回传给服务端，
-  它就能按字对齐反推"字符 -> 字码"，等价于补上一张 ToUnicode 反表。
-*/
-/**
- * 把 [{y, x, str}] 按行拼回文本，**行间用 \n**。
- *
- * 之前是 `map(str).join('')` —— 整页/整段的换行全丢了：
- *   ① 段落编辑器里看到的是"一长串"，看不出原来有几行（真实反馈）；
- *   ② 原样提交时，服务端拿到的是没有行边界的文字，
- *      只能按宽度重新折行 → 断行点跟原文不同，"什么都没改，排版却变了"。
- * 判同行的容差取 3pt：正文行距通常 14~28pt，3pt 不会把两行并成一行。
- */
 function joinItemsByLines(picked) {
   if (!picked.length) return '';
   picked.sort((a, b) => (b.y - a.y) || (a.x - b.x));
@@ -1870,7 +1580,6 @@ function paragraphTextFromDom(rec, box) {
     }
   }
   if (!picked.length) return '';
-  // 行从上到下、行内从左到右，**行间必须保留 \n**
   return joinItemsByLines(picked);
 }
 
@@ -1883,7 +1592,7 @@ async function openParaPop(rec, clientX, clientY) {
   const ny = (clientY - r.top) / r.height;
   const { width: pw, height: ph } = pageSize(rec.num);
   const px = nx * pw;
-  const py = ph * (1 - ny);          // 屏幕(y 向下) -> PDF(y 向上)
+  const py = ph * (1 - ny);          
 
   let list;
   try {
@@ -1893,7 +1602,6 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
-  // 命中判定：点在段落的包围盒里（含 2pt 容差，行间空隙也点得中）
   const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
                              py >= p.y0 - 2 && py <= p.y1 + 2);
   if (!hit) {
@@ -1901,8 +1609,6 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
-  // 服务端解不出原文（字体没有 ToUnicode）时，用浏览器里的文字补上，
-  // 并把这份原文一起提交 —— 服务端靠它反推字符映射。
   let paraText = hit.text || '';
   let usedDom = false;
   if (!paraText && rec.textContent) {
@@ -1917,10 +1623,7 @@ async function openParaPop(rec, clientX, clientY) {
   paraPopInfo = {
     page: rec.num,
     para: hit.index,
-    // 只在"服务端解不出来"时才需要原文/整页文字，正常文档不必传
     orig: usedDom ? paraText : null,
-    // 整页文字：把字符映射的覆盖范围扩到整页，
-    // 这样新写的字只要这一页出现过，就还能沿用源字体
     pageText: usedDom ? pageTextFromDom(rec) : null,
   };
   if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
@@ -1936,9 +1639,6 @@ async function openParaPop(rec, clientX, clientY) {
   if (!box) return;
   box.hidden = false;
 
-  // 编辑器现在住在右侧栏里：**不做视口定位**。
-  // 之前是 fixed 浮层，页面一滚它就和要改的那段脱开（真实反馈）；
-  // 放进侧栏后滚动只动 PDF，编辑器原地不动，也不会盖住正文。
   box.scrollIntoView({ block: 'nearest' });
   els.paraText && els.paraText.focus();
 }
@@ -1946,7 +1646,6 @@ async function openParaPop(rec, clientX, clientY) {
 function updateParaCount() {
   if (!els.paraCount) return;
   const t = (els.paraText && els.paraText.value) || '';
-  // 按"非空白字符"计数：中文里空格多半是排版产物，算进去反而误导
   const n = [...t.replace(/\s/g, '')].length;
   els.paraCount.textContent = `${n} 字`;
 }
@@ -1976,9 +1675,6 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   const vr = els.viewer.getBoundingClientRect();
   const r = rec.wrap.getBoundingClientRect();
 
-  // 记住落点（归一化），确定时用它定位。
-  // editing 非空 = 在**修改已有的文字对象**（双击进入），
-  // 此时只改内容与字号，位置保持原样。
   textPopInfo = {
     rec,
     page: rec.num,
@@ -1988,14 +1684,11 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   };
 
   pop.hidden = false;
-  // 新建时用默认值；修改时**带出原值** —— 否则一打开就把原文清空了
   if (els.tipText) els.tipText.value = editing ? (editing.text || '') : '';
   if (els.tipSize) {
     els.tipSize.value = String(editing ? (editing.size || 14) : 14);
   }
 
-  // fixed 定位：直接用**视口坐标**（clientX/clientY）。
-  // 减去 viewer 偏移是 absolute 的写法，滚动后会让弹窗错位。
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -2010,15 +1703,10 @@ function openTextPop(rec, clientX, clientY, editing = null) {
 function closeTextPop() {
   if (els.textPop) els.textPop.hidden = true;
   textPopInfo = null;
-  // ★ 把焦点从输入框移开。否则「刚插入完文字」时焦点还落在（已隐藏的）
-  //   tipText 上，全局快捷键的 typing 保护会把 Ctrl+Z 当成"输入框内撤销"、
-  //   直接跳过编辑撤销 —— 表现为「形状能撤销、设的字不能」（真实反馈）。
   if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
 
-/* ---------- 文字排版：折行 + 跨页 ---------- */
 
-/* 内容区边距 —— 底边距特意比顶边距大，让文字排在页脚之上 */
 function textMargins(pageW, pageH) {
   return {
     mX: Math.max(12, pageW * 0.025),
@@ -2027,7 +1715,6 @@ function textMargins(pageW, pageH) {
   };
 }
 
-/* 该页渲染宽度 / 页面宽 = px 每 PDF pt（未渲染时按 1:1 兜底） */
 function pageElScale(pageNum) {
   const W = pageSize(pageNum).width || 595;
   const rec = (state.pages || []).find(r => r.num === pageNum);
@@ -2035,7 +1722,6 @@ function pageElScale(pageNum) {
   return (px || W) / W;
 }
 
-/* canvas 测量器：字体栈必须与 .ed-text / 导出一致 */
 let _textMeasureCtx = null;
 function makeMeasurer(sizePdf, scale) {
   try {
@@ -2046,7 +1732,6 @@ function makeMeasurer(sizePdf, scale) {
   } catch (e) { return () => 0; }
 }
 
-/* 折行 + 分页：返回 [{ page, y, lines }] */
 function layoutText(text, page, xPdf, firstBaseline, size) {
   const { width: W, height: H } = pageSize(page);
   const { mX, mTop, mBot } = textMargins(W, H);
@@ -2059,7 +1744,6 @@ function layoutText(text, page, xPdf, firstBaseline, size) {
   });
 }
 
-/* 确保第 num 页存在（不够就末尾插空白页） */
 function ensurePageExists(num) {
   let guard = 0;
   while (state.pages.length < num && guard++ < 500) {
@@ -2067,7 +1751,6 @@ function ensurePageExists(num) {
   }
 }
 
-/* 把排版结果落成文字对象（跨多页 → 多个对象，撤销会合并成一步） */
 function placeTextPlacements(placements, common) {
   for (const pl of placements) {
     ensurePageExists(pl.page);
@@ -2091,7 +1774,6 @@ function confirmTextPop() {
   const size = parseFloat(els.tipSize && els.tipSize.value) || 14;
   const { page, nx, ny, editingId } = textPopInfo;
 
-  // ★ 修改已有的文字对象：以它原有的锚点(x,y)为起点重新排版，位置不动。
   if (editingId) {
     if (!txt) {
       toast('文字不能为空。要删掉这段文字，请用选择工具删掉对象', 2600);
@@ -2143,9 +1825,8 @@ function confirmTextPop() {
   toast(pages > 1 ? `已添加文字（跨 ${pages} 页）` : '已添加文字', 1100);
 }
 
-/* ---- 原位替换文字输入浮层 ---- */
 
-let replacePopInfo = null;   // 替换文字输入浮层的上下文
+let replacePopInfo = null;   
 
 function openReplacePop(obj, clientX, clientY) {
   const pop = els.replaceTextPop;
@@ -2156,7 +1837,6 @@ function openReplacePop(obj, clientX, clientY) {
   pop.hidden = false;
   if (els.replaceText) els.replaceText.value = obj.text || '';
 
-  // fixed 定位：直接用视口坐标（clientX/clientY），与文字浮层一致
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -2171,8 +1851,6 @@ function openReplacePop(obj, clientX, clientY) {
 function closeReplacePop() {
   if (els.replaceTextPop) els.replaceTextPop.hidden = true;
   replacePopInfo = null;
-  // ★ 把焦点从输入框移开，避免刚确认完焦点还落在（已隐藏的）输入框上，
-  //   全局快捷键的 typing 保护会把接下来的快捷键当成"输入框内操作"。
   if (els.replaceText && document.activeElement === els.replaceText) els.replaceText.blur();
 }
 
@@ -2189,7 +1867,6 @@ function confirmReplacePop() {
   toast('已设置替换文字', 1100);
 }
 
-/* 应用标注：sel 为已固化的选区快照 */
 function applyAnnotation(sel, type, color) {
   if (!sel || !sel.parts || !sel.parts.length) {
     toast('选区已失效，请重新选择文字', 1800);
@@ -2197,7 +1874,6 @@ function applyAnnotation(sel, type, color) {
   }
 
   if (type === 'note') {
-    // 笔记：先建一条高亮，再打开气泡写内容
     const an = addAnnotation(sel, 'highlight', color || currentAnnotColorHex, '');
     setTimeout(() => openAnnotPop(an.id), 60);
     return;
@@ -2209,7 +1885,6 @@ function applyAnnotation(sel, type, color) {
   toast(`已添加${label}`, 1100);
 }
 
-/* 打开标注气泡 */
 function openAnnotPop(id) {
   const an = annState.items.find(a => a.id === id);
   if (!an) return;
@@ -2220,16 +1895,12 @@ function openAnnotPop(id) {
   els.apText.textContent = an.text || '（区域标注）';
   els.apNote.value = an.note || '';
 
-  // 定位到标注附近
   const rec = state.pages[an.page - 1];
   const el = rec && rec.wrap.querySelector(`.an[data-id="${id}"]`);
   const vr = els.viewer.getBoundingClientRect();
   const pop = els.annotPop;
   pop.hidden = false;
 
-  // fixed 定位：直接用**视口坐标**。
-  // 原来（absolute）用视口坐标却没补滚动量，页面一滚动气泡就错位到
-  // 视口外，紧接着的 apNote.focus() 会把页面滚回顶端（真实反馈）。
   const pw = pop.offsetWidth || 306;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -2257,9 +1928,6 @@ function closeAnnotPop() {
   popAnnotId = null;
 }
 
-/* --------------------------------------------------------------------------
-   框选区域标注
-   -------------------------------------------------------------------------- */
 
 let boxStart = null;
 let boxEl = null;
@@ -2341,9 +2009,6 @@ function onBoxDown(e) {
   document.addEventListener('mouseup', up);
 }
 
-/* --------------------------------------------------------------------------
-   欢迎页 / 文件选择
-   -------------------------------------------------------------------------- */
 let serverFiles = [];
 
 async function renderWelcome() {
@@ -2467,7 +2132,6 @@ function paintFileList() {
 }
 
 async function pickServerDir() {
-  // 浏览器拿不到真实路径，让用户手输；服务端会校验存在性
   const dir = prompt('请输入要扫描的文件夹完整路径：\n例如 D:\\我的PDF', '');
   if (!dir) return;
   showLoading('正在扫描目录…');
@@ -2497,12 +2161,8 @@ async function handleLocalFile(file) {
   await loadPdfFromFile(file);
 }
 
-/* --------------------------------------------------------------------------
-   事件绑定
-   -------------------------------------------------------------------------- */
 
 function bindToolbar() {
-  // ---- 标注：颜色选择 ----
   els.colorPicker.querySelectorAll('.color-dot').forEach(dot => {
     dot.addEventListener('click', () => {
       els.colorPicker.querySelectorAll('.color-dot').forEach(d => d.classList.remove('on'));
@@ -2512,25 +2172,18 @@ function bindToolbar() {
     });
   });
 
-  // ---- 标注模式开关 ----
   els.btnAnnotMode.addEventListener('click', () => {
     setAnnotMode(!state.annotMode);
   });
 
-  // 进入编辑模式时自动退出标注（edit.js 广播，见那边的注释）
   document.addEventListener('pdf:edit-on', () => setAnnotMode(false, true));
 
-  // ---- 视图模式 ----
   els.btnViewSingle.addEventListener('click', () => applyViewMode('single'));
   els.btnViewDouble.addEventListener('click', () => applyViewMode('double'));
   els.btnScrollPlay.addEventListener('click', startAutoScroll);
 
-  // ---- 书签 ----
   els.btnBookmark.addEventListener('click', toggleBookmark);
 
-  // ---- 划词菜单 ----
-  // 关键：在容器上用捕获阶段拦住 mousedown 的默认行为，
-  // 否则浏览器会先清空选区，pendingSel 之外的现场全部失效。
   const guardMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2564,19 +2217,17 @@ function bindToolbar() {
       }
 
       const color = act === 'highlight' ? currentAnnotColorHex : btn.dataset.color;
-      const sel = pendingSel;   // 先把快照取出来
-      finishMenuAction();       // 立刻收起菜单、解除选区
+      const sel = pendingSel;   
+      finishMenuAction();       
       applyAnnotation(sel, act, color);
     });
   });
 
-  // 菜单内的 mousedown 视为「正在操作菜单」
   els.selMenu.addEventListener('mousedown', () => {
     menuBusy = true;
     setTimeout(() => { menuBusy = false; }, 300);
   }, true);
 
-  // ---- 标注气泡 ----
   els.annotPop.addEventListener('mousedown', guardMenu, true);
   els.annotPop.addEventListener('mouseup', (e) => e.stopPropagation(), true);
   els.annotPop.addEventListener('mousedown', () => {
@@ -2595,7 +2246,6 @@ function bindToolbar() {
     closeAnnotPop();
   });
   els.apCancel.addEventListener('click', () => {
-    // 若笔记是空的（新建的笔记标注），取消时一并删除
     const an = annState.items.find(a => a.id === popAnnotId);
     if (an && !an.note && !an.text) removeAnnotation(popAnnotId);
     closeAnnotPop();
@@ -2605,7 +2255,6 @@ function bindToolbar() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); els.apSave.click(); }
   });
 
-  // ---- 标注筛选 ----
   els.annotFilter.querySelectorAll('.af-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       els.annotFilter.querySelectorAll('.af-chip').forEach(c => c.classList.remove('on'));
@@ -2615,7 +2264,6 @@ function bindToolbar() {
     });
   });
 
-  // ---- 点击标注元素 ----
   els.pages.addEventListener('click', (e) => {
     const an = e.target.closest('.an');
     if (an) {
@@ -2625,10 +2273,8 @@ function bindToolbar() {
     }
   });
 
-  // ---- 框选 ----
   els.viewer.addEventListener('mousedown', onBoxDown);
 
-  // ---- 导出笔记 ----
   els.annotActions.hidden = false;
   els.btnExportMd.addEventListener('click', () => {
     if (!state.docId) { toast('请先打开文档'); return; }
@@ -2649,28 +2295,22 @@ function bindToolbar() {
     setTimeout(() => URL.revokeObjectURL(a.href), 3000);
   });
 
-  // ---- 点击空白处收起菜单 ----
   document.addEventListener('mousedown', (e) => {
     if (menuBusy) return;
 
-    // 点在浮动菜单上：交给菜单自己的处理
     if (!els.selMenu.hidden && els.selMenu.contains(e.target)) return;
 
-    // 点在标注气泡上：同理
     if (!els.annotPop.hidden && els.annotPop.contains(e.target)) return;
 
-    // 点其他位置：立即收起划词菜单并作废锚点
     if (!els.selMenu.hidden) {
       hideSelMenu();
       pendingSel = null;
     }
 
-    // 点在文本层上准备重新选择，不关气泡（可能想接着编辑）
     const onText = !!e.target.closest('.text-layer');
     const onAnnot = !!e.target.closest('.an');
 
     if (!els.annotPop.hidden && !onText && !onAnnot) {
-      // 点空白处等同保存
       if (popAnnotId) {
         const an = annState.items.find(a => a.id === popAnnotId);
         if (an) {
@@ -2685,10 +2325,8 @@ function bindToolbar() {
     }
   });
 
-  // ---- 选区监听 ----
   document.addEventListener('selectionchange', debounce(onSelectionChange, 90));
 
-  // ---- 进度条点击跳转 ----
   els.progressBar.addEventListener('click', (e) => {
     const r = els.progressBar.getBoundingClientRect();
     const ratio = (e.clientX - r.left) / r.width;
@@ -2696,7 +2334,6 @@ function bindToolbar() {
     v.scrollTop = ratio * (v.scrollHeight - v.clientHeight);
   });
 
-  // 窗口失焦、切走标签页时收起菜单
   window.addEventListener('blur', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   });
@@ -2704,7 +2341,6 @@ function bindToolbar() {
     if (document.hidden && !els.selMenu.hidden) hideSelMenu();
   });
 
-  // 按 Esc 也可以收起（已有全局快捷键处理，这里补一个直接绑定）
   els.viewer.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !els.selMenu.hidden) {
       hideSelMenu();
@@ -2712,7 +2348,6 @@ function bindToolbar() {
     }
   });
 
-  // 涂黑确认框：Esc 一律视为取消（绝不默认确认不可逆操作）
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (els.redactConfirm && !els.redactConfirm.hidden) {
@@ -2721,24 +2356,19 @@ function bindToolbar() {
     }
   });
 
-  // 缩放/旋转等会改变布局的操作后，菜单位置就失效了，直接收起
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
       if (el) el.addEventListener('click', () => hideSelMenu());
     });
 
-  // ---- 编辑模式 ----
   bindEditUI();
 
-  // 编辑层的事件：都挂在 viewer 上，用 pageAt 判断落在哪页
   els.viewer.addEventListener('mousedown', onEditMouseDown);
-  // 双击文字对象 → 修改内容。没有它，打错一个字只能删掉重打。
   els.viewer.addEventListener('dblclick', onEditDoubleClick);
   window.addEventListener('mousemove', onEditMouseMove);
   window.addEventListener('mouseup', onEditMouseUp);
 
-  // 文字浮层
   if (els.tipOk) els.tipOk.addEventListener('click', confirmTextPop);
   if (els.tipCancel) els.tipCancel.addEventListener('click', closeTextPop);
   if (els.tipText) {
@@ -2749,7 +2379,6 @@ function bindToolbar() {
       }
     });
   }
-  // 点浮层外区域关闭（文字浮层 + 对象操作条）
   document.addEventListener('mousedown', (e) => {
     if (els.objBar && !els.objBar.hidden && !els.objBar.contains(e.target)) {
       hideObjBar();
@@ -2759,7 +2388,6 @@ function bindToolbar() {
     closeTextPop();
   }, true);
 
-  // 原位替换浮层
   if (els.replaceOk) els.replaceOk.addEventListener('click', confirmReplacePop);
   if (els.replaceCancel) els.replaceCancel.addEventListener('click', closeReplacePop);
   if (els.replaceText) {
@@ -2770,46 +2398,36 @@ function bindToolbar() {
       }
     });
   }
-  // 点击浮层外区域关闭（替换文字浮层）
   document.addEventListener('mousedown', (e) => {
     if (!els.replaceTextPop || els.replaceTextPop.hidden) return;
     if (els.replaceTextPop.contains(e.target)) return;
     closeReplacePop();
   }, true);
 
-  // 改段落浮层
   if (els.paraOk) els.paraOk.addEventListener('click', confirmParaPop);
   if (els.paraCancel) els.paraCancel.addEventListener('click', closeParaPop);
   if (els.paraText) {
     els.paraText.addEventListener('input', updateParaCount);
     els.paraText.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeParaPop(); }
-      // Ctrl+Enter 提交（多行文本框里 Enter 要能正常换行）
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault(); confirmParaPop();
       }
     });
   }
 
-  // 右侧编辑栏：收起按钮 + Esc
   if (els.sideClose) {
     els.sideClose.addEventListener('click', () => setEditMode(false));
   }
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
 
-    // ★ Esc 的"权限"要让给临时浮层：段落/文字/替换气泡、**标注气泡**、
-    //   **划词菜单**、涂黑二次确认，任何一个开着都先归它们处理。
-    //   之前只判了前三个 —— 结果在标注气泡里按 Esc，侧栏也被一起关掉。
     const overlays = [
       els.paraEdit, els.textPop, els.replaceTextPop,
       els.annotPop, els.selMenu, els.redactConfirm,
     ];
     if (overlays.some(p => p && !p.hidden)) return;
 
-    // ★ 事件来源也要看：在气泡/输入框里按 Esc 时，气泡自己的处理器会先把
-    //   自己 hidden=true，冒泡到我这里时"看起来已经没有浮层了" —— 于是侧栏
-    //   被一起关掉。按来源排除掉这一类，才真的让位给标注/输入。
     const tgt = e.target;
     if (tgt && tgt.closest &&
         tgt.closest('.text-input-pop, .annot-pop, input, textarea')) return;
@@ -2820,32 +2438,29 @@ function bindToolbar() {
     }
   });
 
-  // 改段落编辑区：× 只收起这块，不退出编辑模式
   if (els.paraFold) {
     els.paraFold.addEventListener('click', closeParaPop);
   }
 
-  // ---- 侧栏宽度：可拖拽 + 记忆 + 双击复位 ----
   const DW_KEY = LS_PREFIX + 'drawerW';
   const setDrawerW = (px, persist = true) => {
     const w = Math.max(240, Math.min(620, Math.round(px)));
     document.documentElement.style.setProperty('--drawer-w', w + 'px');
-    if (persist) { try { localStorage.setItem(DW_KEY, String(w)); } catch (e) { /* 忽略 */ } }
+    if (persist) { try { localStorage.setItem(DW_KEY, String(w)); } catch (e) {  } }
   };
   try {
     const saved = parseInt(localStorage.getItem(DW_KEY) || '', 10);
     if (saved >= 240 && saved <= 620) setDrawerW(saved, false);
-  } catch (e) { /* 忽略 */ }
+  } catch (e) {  }
 
   if (els.spResizer) {
     let dragging = false;
     els.spResizer.addEventListener('pointerdown', (e) => {
       dragging = true;
       els.spResizer.classList.add('dragging');
-      try { els.spResizer.setPointerCapture(e.pointerId); } catch (err) { /* 合成事件会抛 */ }
+      try { els.spResizer.setPointerCapture(e.pointerId); } catch (err) {  }
       e.preventDefault();
     });
-    // 监听 window 而不是拖拽条本身：鼠标甩出 7px 窄条时不能断
     window.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       setDrawerW(window.innerWidth - e.clientX);
@@ -2858,7 +2473,6 @@ function bindToolbar() {
     els.spResizer.addEventListener('dblclick', () => setDrawerW(300));
   }
 
-  // 编辑对象操作条
   if (els.objBarDel) {
     els.objBarDel.addEventListener('click', () => {
       if (objBarId == null) return;
@@ -2870,7 +2484,6 @@ function bindToolbar() {
   if (els.objBarFront) {
     els.objBarFront.addEventListener('click', () => {
       if (objBarId == null) return;
-      // 数组末尾即绘制在上层
       const i = editState.objects.findIndex(o => o.id === objBarId);
       if (i >= 0 && i < editState.objects.length - 1) {
         const [o] = editState.objects.splice(i, 1);
@@ -2893,10 +2506,8 @@ function bindToolbar() {
     });
   }
 
-  // ---- 页码/缩放等原有按钮 ----
   els.btnSidebar.addEventListener('click', () => {
     els.sidebar.classList.toggle('collapsed');
-    // 侧边栏开合后重新计算缩放
     setTimeout(() => {
       if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
     }, 220);
@@ -2928,10 +2539,6 @@ function bindToolbar() {
     els.zoomSelect.value = 'width';
   });
 
-  // ★ 统一导出出口（工具栏常驻）：
-  //   编辑对象 + 页面改动 + 批注 一次导出。
-  //   它不依赖任何模式 —— 标注模式与编辑互斥，若把出口放在编辑侧栏里，
-  //   用户加完批注就找不到导出了（真实反馈）。
   if (els.btnExportTop) {
     els.btnExportTop.addEventListener('click', () => {
       if (!state.pdf) { toast('请先打开一个文档', 1600); return; }
@@ -2950,7 +2557,6 @@ function bindToolbar() {
     });
   });
 
-  // 搜索
   const si = els.searchInput;
   si.addEventListener('input', debounce(() => {
     els.searchWrap.classList.toggle('has-text', si.value.length > 0);
@@ -2973,27 +2579,20 @@ function bindToolbar() {
   els.btnPrevHit.addEventListener('click', () => gotoHit(state.hitIndex - 1));
   els.btnNextHit.addEventListener('click', () => gotoHit(state.hitIndex + 1));
 
-  // 侧栏切换
   document.querySelectorAll('.side-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.side-tab').forEach(t => t.classList.toggle('on', t === tab));
       const key = tab.dataset.tab;
-      // ★ 三个面板都要 toggle —— 之前漏了 panelAnnots：点「标注」时
-      //   thumbs/outline 被关掉、annots 又从不打开，导致侧栏一片空白
-      //   （既有 bug，不是本轮引入）。
       $('panelThumbs').classList.toggle('on', key === 'thumbs');
       $('panelOutline').classList.toggle('on', key === 'outline');
       $('panelAnnots').classList.toggle('on', key === 'annots');
     });
   });
 
-  // 滚动时更新页码与进度，并收起划词菜单
   els.viewer.addEventListener('scroll', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   }, { passive: true });
 
-  // 缩放会改变页面尺寸，操作条位置随之失效 —— 直接收起
-  // （滚动不收起：对象还在原地，只是视口移动，用户可能正要点按钮）
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
@@ -3005,7 +2604,6 @@ function bindToolbar() {
     updateProgress();
   }, 60), { passive: true });
 
-  // Ctrl + 滚轮缩放
   els.viewer.addEventListener('wheel', (e) => {
     if (!state.pdf) return;
     if (e.ctrlKey || e.metaKey) {
@@ -3014,7 +2612,6 @@ function bindToolbar() {
     }
   }, { passive: false });
 
-  // 点击空白区域渲染邻近页
   els.viewer.addEventListener('click', (e) => {
     if (!state.pdf) return;
     const rec = e.target.closest('.page');
@@ -3024,7 +2621,6 @@ function bindToolbar() {
     }
   });
 
-  // 拖拽到阅读区也能打开
   ['dragover', 'drop'].forEach(ev => {
     document.addEventListener(ev, (e) => {
       if (ev === 'dragover') { e.preventDefault(); return; }
@@ -3034,17 +2630,12 @@ function bindToolbar() {
     });
   });
 
-  // 全局快捷键
-  // ★ Ctrl+S = 导出（统一出口的快捷键）。
-  //   必须**排在下面那个 typing 判断之前**：否则焦点在输入框里按 Ctrl+S
-  //   会走到浏览器默认的"保存网页"，把整个查看器存成 .htm。
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
     e.preventDefault();
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
     if (typing) {
-      // 输入框里还没确定的内容不会进导出 —— 提醒一句，别让用户以为存上了
       toast('请先完成当前输入（确定 / 取消）再导出', 2600);
       return;
     }
@@ -3057,7 +2648,6 @@ function bindToolbar() {
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
 
     if ((e.ctrlKey || e.metaKey) && !typing) {
-      // 编辑模式：撤销 / 重做 / 复制 / 粘贴 / 原地复制
       if (editState.on) {
         const k = e.key.toLowerCase();
         if (k === 'z') { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); return; }
@@ -3125,7 +2715,6 @@ function stepZoom(dir) {
   els.zoomSelect.value = String(target);
   const opt = [...els.zoomSelect.options].find(o => o.value === String(target));
   if (!opt) {
-    // 不在预设里则动态插入
     const o = new Option(Math.round(target * 100) + '%', String(target));
     els.zoomSelect.add(o);
     els.zoomSelect.value = String(target);
@@ -3133,14 +2722,10 @@ function stepZoom(dir) {
   applyScale(String(target));
 }
 
-/* 窗口尺寸变化时，若处于自适应模式则重算 */
 const onResize = debounce(() => {
   if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
 }, 220);
 
-/* --------------------------------------------------------------------------
-   初始化
-   -------------------------------------------------------------------------- */
 
 function cacheAllEls() {
   cacheEls([
@@ -3153,7 +2738,6 @@ function cacheAllEls() {
     'searchWrap', 'searchInput', 'searchClear', 'searchCount', 'searchNav',
     'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnExportTop',
     'btnPrint', 'filePicker',
-    // 新增
     'annotGroup', 'annotSep', 'btnAnnotMode', 'colorPicker',
     'viewGroup', 'btnViewSingle', 'btnViewDouble', 'btnScrollPlay',
     'btnBookmark',
@@ -3161,20 +2745,16 @@ function cacheAllEls() {
     'annotActions', 'btnExportMd', 'btnExportJson',
     'progressBar', 'progressFill', 'progressMarkers',
     'selMenu', 'annotPop', 'apTag', 'apText', 'apNote', 'apSave', 'apCancel', 'apDelete',
-    // 编辑模式
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
     'sidePanel', 'sideClose', 'sideTitle',
     'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
     'objBar', 'objBarName', 'objBarFront', 'objBarBack', 'objBarDel',
-    // 涂黑
     'btnRedactPdf', 'redactCount', 'redactConfirm', 'redactConfirmStats',
     'redactCancel', 'redactOk',
-    // 原位替换
     'btnReplacePdf', 'replaceCount', 'replaceTextPop', 'replaceText',
     'replaceCancel', 'replaceOk',
-    // 改段落（Stage B）
     'paraEdit', 'paraText', 'paraTip', 'paraPage', 'paraCount',
     'paraFold', 'spResizer',
     'paraCancel', 'paraOk',
@@ -3189,7 +2769,6 @@ async function init() {
   bindToolbar();
   window.addEventListener('resize', onResize);
 
-  // 离开页面前保存进度
   window.addEventListener('beforeunload', savePosition);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { savePosition(); doSave(); saveEdits(); }

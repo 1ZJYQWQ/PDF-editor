@@ -1,61 +1,21 @@
-"""字体骨架检查 —— 为「中文嵌入 + 子集化」做前置确认。
-
-用法：
-    python fontcheck.py <字体文件> [更多字体文件 ...]
-
-打印表目录与关键结论：
-
-  sfnt         TrueType(0x00010000) 还是 CFF 包装(OTTO)
-  glyf/CFF     轮廓存储方式 —— **只有 glyf 才做子集化**。
-               CFF 的 INDEX/charstring/subrs 是另一个量级的工程，
-               本项目明确不做。
-  fvar/gvar    是否可变字体。**PDF 阅读器不处理 gvar**，只渲染默认实例。
-  numGlyphs    字形总数（决定子集化后的规模）
-  cmap         覆盖的码位数，以及对样例汉字的映射结果
-  字重         笔画面宽 + ★ 默认实例在字重轴上的位置
-
-★ 为什么必须查「字重」
-    可变字体的 glyf 里存的是**默认实例**的轮廓，gvar 才是其余字重的增量。
-    PDF 阅读器不处理 gvar —— 所以默认实例是细体，嵌进去就是细体。
-    实测：NotoSansSC-VF 的 wght 默认是 100，直接嵌进 PDF 会渲染成发丝字。
-
-    判据是「默认实例在轴上的位置」（机械可判定），不是笔画粗细
-    （后者是启发式，会被衬线字的顿笔带偏 —— 踩过）。
-
-⚠ 笔画面宽只在**同风格族内**可比（衬线比衬线、无衬线比无衬线）。
-    跨风格比会把设计差异当成字重差异。
-
-cmap 解析共用 pdffont 的实现，避免两份代码漂移。
-"""
 import os
 import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import pdffont                                               # noqa: E402
+import pdffont                                               
 
-# 样例字符：ASCII + 常用汉字
 SAMPLES = "Aaz09中文测试你好世界涂层"
 
-# CJK 统一表意文字基本区
 CJK_LO, CJK_HI = 0x4E00, 0x9FFF
 
 
 def read_tables(data, base=0):
-    """读一个 sfnt 表目录，返回 (tag, {表名: (偏移, 长度)})。
-
-    共用 pdffont 的实现 —— 两份解析必然漂移。
-    """
     return data[base:base + 4], pdffont._read_table_dir(data, base)
 
 
 def cmap_with_formats(data, tables):
-    """cmap 映射 + 用到了哪些子表格式。
-
-    映射本身走 pdffont.parse_cmap；这里额外报告格式，
-    因为「用到 format 12」说明字体覆盖了 BMP 之外的码位。
-    """
     out = pdffont.parse_cmap(data, tables)
     used = set()
     if "cmap" in tables:
@@ -76,13 +36,6 @@ def cmap_with_formats(data, tables):
 
 
 def stroke_ratios(data, tables, cmap, upem):
-    """量一笔画字的**笔画面宽**（占 em 的百分比）。
-
-    「一」量包围盒高度、「丨」量包围盒宽度 —— 都是一笔画字的笔画厚度。
-    注意这是启发式：**衬线字的「一」带顿笔**，量到的是最粗处而非笔画
-    主体，会让衬线字显得比实际粗（我在这里误判过一次）。
-    所以它只作提示，真正的判据是 weight_axes()。
-    """
     if "glyf" not in tables or "loca" not in tables or "head" not in tables:
         return {}
     head = tables["head"][0]
@@ -117,7 +70,6 @@ def stroke_ratios(data, tables, cmap, upem):
 
 
 def weight_axes(data, tables):
-    """读 fvar，返回 [(轴名, min, default, max)]。"""
     if "fvar" not in tables:
         return []
     off = tables["fvar"][0]
@@ -195,7 +147,6 @@ def inspect(path):
     print("       其中 CJK 基本区(U+4E00-U+9FFF): %d / %d"
           % (cjk, CJK_HI - CJK_LO + 1))
 
-    # ---- 字重体检 ----
     upem = 1000
     if "head" in tables:
         try:
@@ -252,7 +203,6 @@ def inspect(path):
 
     print("表   : %s" % " ".join(sorted(tables)))
     print()
-    # 返回 1 表示「这个字体直接嵌入会有问题」，供脚本/CI 判据用
     return 1 if bad else 0
 
 

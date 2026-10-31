@@ -1013,17 +1013,21 @@ def _rewrite_text(data, killed, font_bytes=None):
             i += 1
             continue
 
-        if op.isalpha():
+        # ★ 走到这里一律是算子。判据必须和解释器逐字一致：
+        #   解释器用的是「排除法」—— 不是数组/字典/名字/字符串/数字的，
+        #   就都是算子关键字。
+        #   这里原本写的是 op.isalpha()，而 T* / B* / b* / f* / W* 这些
+        #   **合法的带星号算子**不是全字母 —— 只要文档里出现一个，后面的
+        #   op_index 就整体错一位，于是"要删的字形一个都命中不了"。
+        #   实测（2026-10-30）：一份 506 字形的真实文档，整页删除后
+        #   字形一个没少，文件反而变大（字符串被重排了一遍）。
+        if op == "Tf":
             # 切换字体时记下新的码宽（后续文字算子要用）
-            if op == "Tf":
-                cur_nb = _font_bytes_of(tokens, ops_start, i, font_bytes)
-            # 普通算子：原样输出（含其操作数）
-            _emit_range(out, tokens, ops_start, i + 1)
-            operand_start = None
-            op_index += 1
-        else:
-            if operand_start is None:
-                operand_start = i
+            cur_nb = _font_bytes_of(tokens, ops_start, i, font_bytes)
+        # 普通算子：原样输出（含其操作数）
+        _emit_range(out, tokens, ops_start, i + 1)
+        operand_start = None
+        op_index += 1
         i += 1
 
     # 收尾：剩余 token

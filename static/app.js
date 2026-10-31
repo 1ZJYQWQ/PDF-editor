@@ -12,20 +12,20 @@ import {
   annState, loadAnnotations, scheduleSave, doSave,
   selectionToAnchors, addAnnotation, updateAnnotation, removeAnnotation,
   repaintAnnotations, paintPageAnnotations, renderAnnotList, focusAnnotation,
-  updateProgressMarkers, bindNavHelpers,
+  updateProgressMarkers, bindNavHelpers, loadPagePdfAnnots,
 } from '/static/annot.js';
 
 import {
   editState, bindEditHelpers, bindEditUI, loadEdits, doSave as saveEdits,
   repaintEdits, paintPageEdits, setEditMode, setTool, currentColor,
   makeRectObject, makeLineObject, hitTest, removeObject, addObject,
-  updateObject, pageSize, screenToNorm, refreshPagePanel,
-  exportPdf, buildExportPayload, pdfToNorm,
+  updateObject, pageSize, screenToNorm, refreshPagePanel, insertBlank,
+  exportPdf, buildExportPayload, pdfToNorm, reflowParagraph,
   undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
 } from '/static/edit.js';
 
 // 纯几何（可单测）—— 拖动位移、按角缩放与坐标换算
-import { dragDeltaToPdf, movedPosition, resizedRect } from '/static/geom.js';
+import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } from '/static/geom.js';
 
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
@@ -197,6 +197,10 @@ async function openDocument(task, name, docId, path) {
   state.fileName = name || '未命名文档';
   state.docId = docId;
   state.filePath = path || null;
+  // 换文档时段落缓存必须清空：段落号是"按当前文件排版"算出来的，
+  // 拿旧文件的段落号去改新文件，轻则报错，重则改错段。
+  paraCache.clear();
+  closeParaPop();
   state.pageCount = pdf.numPages;
   state.rotation = 0;
   state.searchHits = [];
@@ -500,6 +504,9 @@ async function renderPage(rec) {
     rec.textContent = textContent;
     buildTextLayer(rec, textContent, viewport);
 
+    // 读取该页 PDF 自带的注释（/Annots）——异步，读完自己重绘那一层
+    loadPagePdfAnnots(rec);
+
     rec.wrap.classList.remove('pending');
     rec.wrap.removeAttribute('data-ph');
     rec.rendered = true;
@@ -566,7 +573,16 @@ function buildTextLayer(rec, textContent, viewport) {
 
     // 原文字形宽度（PDF 坐标 -> 屏幕像素）
     const targetW = item.width * viewport.scale;
-    if (fontHeight > 0 && targetW > 0) {
+
+    // ★ 纯空白 item 不拉伸。
+    //   pdf.js 会用 str=' ' 的 item 表示「字间的大间隙」，它的 width 横跨
+    //   整段（实测该文档一行的空白 item 宽 100+ px）。文字层靠 scaleX 把
+    //   字符拉到原宽，这一条就被拉成一条覆盖整行的透明盒子 —— 用户一选中，
+    //   它和真正的文字叠在一起，同一选区出现「有深有浅」的重叠色块。
+    //   空白没有字形，保持自然宽度即可：照样能复制出空格，也不会画出横跨
+    //   整行的色带。
+    const isBlank = !item.str.trim();
+    if (fontHeight > 0 && targetW > 0 && !isBlank) {
       measureCtx.font = `${fontHeight}px sans-serif`;
       const naturalW = measureCtx.measureText(item.str).width;
       if (naturalW > 0.01) {
@@ -1482,6 +1498,27 @@ function onEditDoubleClick(e) {
 }
 
 /* 编辑层的鼠标按下 */
+/**
+ * 标注模式开关（唯一入口）。
+ *
+ * ★ 与编辑模式**互斥**：进入标注一定要退出编辑 —— 否则右侧编辑栏还开着，
+ *   而标注的划词菜单/气泡又浮在上面，用户分不清自己在哪个模式里操作。
+ * 状态、按钮高亮、viewer 上的 class 三样必须一起改，别只改一样。
+ */
+function setAnnotMode(on, silent = false) {
+  const next = !!on;
+  if (state.annotMode === next) return;
+  state.annotMode = next;
+  if (els.btnAnnotMode) els.btnAnnotMode.classList.toggle('on', next);
+  if (els.viewer) els.viewer.classList.toggle('annot-mode', next);
+
+  if (next && editState.on) setEditMode(false);   // 标注优先：顺手收起编辑
+
+  if (!silent) {
+    toast(next ? '标注模式：拖拽可框选区域（已退出编辑）' : '已退出标注模式', 1600);
+  }
+}
+
 function onEditMouseDown(e) {
   if (!editState.on || !editState.tool) return;
   if (e.button !== 0) return;
@@ -1532,6 +1569,13 @@ function onEditMouseDown(e) {
   if (!rec) return;
 
   const tool = editState.tool;
+
+  // ★ 段落工具：点一下就改这一段（不需要拖框），所以在这里直接拦下。
+  if (tool === 'para') {
+    e.preventDefault();
+    openParaPop(rec, e.clientX, e.clientY);
+    return;
+  }
 
   // 选择工具：点中对象则选中并弹出操作条，点空白则取消选中。
   // 命中对象时同时进入「可拖动」状态 —— 移动超过阈值才算拖动。
@@ -1729,6 +1773,202 @@ function onEditMouseUp(e) {
 
 /* ---- 文字输入浮层 ---- */
 
+/* --------------------------------------------------------------------------
+   改段落：点一下段落 -> 服务端给出该页段落模型 -> 命中哪段改哪段
+   --------------------------------------------------------------------------
+
+   ★ 段落坐标是 PDF 坐标（左下原点），而点击是屏幕坐标 —— 中间要翻一次 y。
+     这里**不缓存正文文字**，只缓存"哪一段在什么位置"，因为它会随文件变化失效；
+     真正提交时服务端会重新解析一遍，前端算的段落号只是"指个路"。
+   -------------------------------------------------------------------------- */
+
+let paraPopInfo = null;             // { page, para }
+const paraCache = new Map();        // `${path}|${page}` -> [{index,x0,y0,x1,y1,...}]
+
+async function fetchParagraphs(page) {
+  const key = `${state.filePath}|${page}`;
+  if (paraCache.has(key)) return paraCache.get(key);
+  const q = new URLSearchParams({ path: state.filePath, page: String(page) });
+  const r = await fetch('/api/paragraphs?' + q.toString());
+  if (!r.ok) {
+    let msg = `取段落失败 (${r.status})`;
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) { /* 忽略 */ }
+    throw new Error(msg);
+  }
+  const data = await r.json();
+  const list = data.paragraphs || [];
+  paraCache.set(key, list);
+  return list;
+}
+
+/* 单个 textContent item 的 PDF 坐标框（左下原点） */
+function itemRectPdf(item) {
+  const t = item.transform || [1, 0, 0, 1, 0, 0];
+  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
+  const w = Math.abs(item.width || 0);
+  return [t[4], t[5], t[4] + w, t[5] + h];
+}
+
+/*
+  用 pdf.js 的文字现算某段的原文。
+
+  为什么需要：有些 PDF 的字体没有 /ToUnicode，服务端解不出字（text 为空），
+  但浏览器里 pdf.js 是能解出来的（用户能选中、能复制）。
+  把这段文字按「字形位置落在段落框内」取出来，回传给服务端，
+  它就能按字对齐反推"字符 -> 字码"，等价于补上一张 ToUnicode 反表。
+*/
+/**
+ * 把 [{y, x, str}] 按行拼回文本，**行间用 \n**。
+ *
+ * 之前是 `map(str).join('')` —— 整页/整段的换行全丢了：
+ *   ① 段落编辑器里看到的是"一长串"，看不出原来有几行（真实反馈）；
+ *   ② 原样提交时，服务端拿到的是没有行边界的文字，
+ *      只能按宽度重新折行 → 断行点跟原文不同，"什么都没改，排版却变了"。
+ * 判同行的容差取 3pt：正文行距通常 14~28pt，3pt 不会把两行并成一行。
+ */
+function joinItemsByLines(picked) {
+  if (!picked.length) return '';
+  picked.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+  const lines = [];
+  for (const it of picked) {
+    const cur = lines[lines.length - 1];
+    if (cur && Math.abs(it.y - cur.y) <= 3) {
+      cur.items.push(it);
+    } else {
+      lines.push({ y: it.y, items: [it] });
+    }
+  }
+  return lines
+    .map(l => l.items.sort((a, b) => a.x - b.x).map(i => i.str).join(''))
+    .join('\n');
+}
+
+function pageTextFromDom(rec) {
+  const tc = rec && rec.textContent;
+  if (!tc || !tc.items) return '';
+  const picked = [];
+  for (const it of tc.items) {
+    if (!it.str) continue;
+    const r = itemRectPdf(it);
+    picked.push({ y: r[1], x: r[0], str: it.str });
+  }
+  return joinItemsByLines(picked);
+}
+
+function paragraphTextFromDom(rec, box) {
+  const tc = rec && rec.textContent;
+  if (!tc || !tc.items) return '';
+  const picked = [];
+  for (const it of tc.items) {
+    if (!it.str) continue;
+    const r = itemRectPdf(it);
+    const cx = (r[0] + r[2]) / 2;
+    const cy = (r[1] + r[3]) / 2;
+    if (cx >= box.x0 - 2 && cx <= box.x1 + 2 &&
+        cy >= box.y0 - 2 && cy <= box.y1 + 2) {
+      picked.push({ y: r[1], x: r[0], str: it.str });
+    }
+  }
+  if (!picked.length) return '';
+  // 行从上到下、行内从左到右，**行间必须保留 \n**
+  return joinItemsByLines(picked);
+}
+
+async function openParaPop(rec, clientX, clientY) {
+  if (!state.filePath) { toast('请先打开一个文档', 1600); return; }
+
+  const r = rec.wrap.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const nx = (clientX - r.left) / r.width;
+  const ny = (clientY - r.top) / r.height;
+  const { width: pw, height: ph } = pageSize(rec.num);
+  const px = nx * pw;
+  const py = ph * (1 - ny);          // 屏幕(y 向下) -> PDF(y 向上)
+
+  let list;
+  try {
+    list = await fetchParagraphs(rec.num);
+  } catch (e) {
+    toast(e.message || '取段落失败', 3200);
+    return;
+  }
+
+  // 命中判定：点在段落的包围盒里（含 2pt 容差，行间空隙也点得中）
+  const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
+                             py >= p.y0 - 2 && py <= p.y1 + 2);
+  if (!hit) {
+    toast('这里没有可编辑的段落（点正文里的任意一行试试）', 2800);
+    return;
+  }
+
+  // 服务端解不出原文（字体没有 ToUnicode）时，用浏览器里的文字补上，
+  // 并把这份原文一起提交 —— 服务端靠它反推字符映射。
+  let paraText = hit.text || '';
+  let usedDom = false;
+  if (!paraText && rec.textContent) {
+    paraText = paragraphTextFromDom(rec, hit);
+    usedDom = !!paraText;
+  }
+  if (!paraText) {
+    toast('这篇文档的字体没有 ToUnicode，且没能解出这一段文字，暂时无法编辑', 4200);
+    return;
+  }
+
+  paraPopInfo = {
+    page: rec.num,
+    para: hit.index,
+    // 只在"服务端解不出来"时才需要原文/整页文字，正常文档不必传
+    orig: usedDom ? paraText : null,
+    // 整页文字：把字符映射的覆盖范围扩到整页，
+    // 这样新写的字只要这一页出现过，就还能沿用源字体
+    pageText: usedDom ? pageTextFromDom(rec) : null,
+  };
+  if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
+  if (els.paraTip) {
+    els.paraTip.textContent =
+      `第 ${hit.index + 1} 段 · ${hit.lines} 行 · 字号 ${hit.size}` +
+      (usedDom ? '　原文由页面文字补全' : '');
+  }
+  if (els.paraText) els.paraText.value = paraText;
+  updateParaCount();
+
+  const box = els.paraEdit;
+  if (!box) return;
+  box.hidden = false;
+
+  // 编辑器现在住在右侧栏里：**不做视口定位**。
+  // 之前是 fixed 浮层，页面一滚它就和要改的那段脱开（真实反馈）；
+  // 放进侧栏后滚动只动 PDF，编辑器原地不动，也不会盖住正文。
+  box.scrollIntoView({ block: 'nearest' });
+  els.paraText && els.paraText.focus();
+}
+
+function updateParaCount() {
+  if (!els.paraCount) return;
+  const t = (els.paraText && els.paraText.value) || '';
+  // 按"非空白字符"计数：中文里空格多半是排版产物，算进去反而误导
+  const n = [...t.replace(/\s/g, '')].length;
+  els.paraCount.textContent = `${n} 字`;
+}
+
+function closeParaPop() {
+  if (els.paraEdit) els.paraEdit.hidden = true;
+  paraPopInfo = null;
+}
+
+async function confirmParaPop() {
+  if (!paraPopInfo) return;
+  const txt = (els.paraText && els.paraText.value) || '';
+  if (!txt.trim()) {
+    toast('文字不能为空。要整段删掉，请用涂黑工具', 2600);
+    return;
+  }
+  const info = paraPopInfo;
+  const ok = await reflowParagraph(info.page, info.para, txt,
+                                   info.orig, info.pageText);
+  if (ok) closeParaPop();
+}
+
 function openTextPop(rec, clientX, clientY, editing = null) {
   const pop = els.textPop;
   if (!pop) return;
@@ -1776,22 +2016,106 @@ function closeTextPop() {
   if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
 
+/* ---------- 文字排版：折行 + 跨页 ---------- */
+
+/* 内容区边距 —— 底边距特意比顶边距大，让文字排在页脚之上 */
+function textMargins(pageW, pageH) {
+  return {
+    mX: Math.max(12, pageW * 0.025),
+    mTop: Math.max(18, pageH * 0.04),
+    mBot: Math.max(30, pageH * 0.08),
+  };
+}
+
+/* 该页渲染宽度 / 页面宽 = px 每 PDF pt（未渲染时按 1:1 兜底） */
+function pageElScale(pageNum) {
+  const W = pageSize(pageNum).width || 595;
+  const rec = (state.pages || []).find(r => r.num === pageNum);
+  const px = rec && rec.wrap ? rec.wrap.getBoundingClientRect().width : 0;
+  return (px || W) / W;
+}
+
+/* canvas 测量器：字体栈必须与 .ed-text / 导出一致 */
+let _textMeasureCtx = null;
+function makeMeasurer(sizePdf, scale) {
+  try {
+    if (!_textMeasureCtx) _textMeasureCtx = document.createElement('canvas').getContext('2d');
+    _textMeasureCtx.font =
+      `${Math.max(6, sizePdf * scale)}px Helvetica, Arial, "NotoSansSC", sans-serif`;
+    return (s) => _textMeasureCtx.measureText(s).width;
+  } catch (e) { return () => 0; }
+}
+
+/* 折行 + 分页：返回 [{ page, y, lines }] */
+function layoutText(text, page, xPdf, firstBaseline, size) {
+  const { width: W, height: H } = pageSize(page);
+  const { mX, mTop, mBot } = textMargins(W, H);
+  const scale = pageElScale(page);
+  const availPdf = Math.max(size, (W - mX) - xPdf);
+  const wrapped = wrapText(text, makeMeasurer(size, scale), availPdf * scale);
+  return paginateText(wrapped.split('\n'), {
+    page, firstBaseline, pageW: W, pageH: H, size,
+    marginX: mX, marginTop: mTop, marginBottom: mBot,
+  });
+}
+
+/* 确保第 num 页存在（不够就末尾插空白页） */
+function ensurePageExists(num) {
+  let guard = 0;
+  while (state.pages.length < num && guard++ < 500) {
+    insertBlank(state.pages.length - 1);
+  }
+}
+
+/* 把排版结果落成文字对象（跨多页 → 多个对象，撤销会合并成一步） */
+function placeTextPlacements(placements, common) {
+  for (const pl of placements) {
+    ensurePageExists(pl.page);
+    addObject({
+      page: pl.page,
+      kind: 'text',
+      x: common.x,
+      y: pl.y,
+      w: 0, h: 0,
+      text: pl.lines.join('\n'),
+      size: common.size,
+      font: common.font,
+      color: common.color,
+    });
+  }
+}
+
 function confirmTextPop() {
   if (!textPopInfo) return;
   const txt = (els.tipText && els.tipText.value || '').trim();
   const size = parseFloat(els.tipSize && els.tipSize.value) || 14;
-  const { rec, page, nx, ny, editingId } = textPopInfo;
+  const { page, nx, ny, editingId } = textPopInfo;
 
-  // ★ 修改**已有的**文字对象（双击进入）：只改内容与字号，**不动位置** ——
-  //   位置是用户当初落笔定的，改文字不该把它挪走。
-  //   行数变了也没关系：锚点是首行基线，多出来的行自然往下长。
+  // ★ 修改已有的文字对象：以它原有的锚点(x,y)为起点重新排版，位置不动。
   if (editingId) {
     if (!txt) {
-      // 这里不能静默关掉 —— 用户会以为改动生效了，其实没有
       toast('文字不能为空。要删掉这段文字，请用选择工具删掉对象', 2600);
       return;
     }
-    updateObject(editingId, { text: txt, size });
+    const cur = (editState.objects || []).find(o => o.id === editingId);
+    if (!cur) { updateObject(editingId, { text: txt, size }); closeTextPop(); return; }
+
+    const { width: W, height: H } = pageSize(cur.page);
+    const { mX } = textMargins(W, H);
+    const minWrap = Math.max(size * 4, W * 0.12);
+    const xPdf = Math.min(Math.max(cur.x || mX, mX), Math.max(mX, (W - mX) - minWrap));
+    const placements = layoutText(txt, cur.page, xPdf, cur.y || 0, size);
+
+    if (placements.length === 1 && placements[0].page === cur.page) {
+      updateObject(editingId, {
+        text: placements[0].lines.join('\n'), size, x: xPdf, y: placements[0].y,
+      });
+    } else {
+      removeObject(editingId);
+      placeTextPlacements(placements, {
+        x: xPdf, size, font: cur.font || 'Helvetica', color: cur.color || currentColor(),
+      });
+    }
     closeTextPop();
     toast('已更新文字', 1100);
     return;
@@ -1799,28 +2123,24 @@ function confirmTextPop() {
 
   if (!txt) { closeTextPop(); return; }
 
-  const { width, height } = pageSize(page);
+  const { width: W, height: H } = pageSize(page);
+  const { mX } = textMargins(W, H);
 
-  // 文字锚点：(nx, ny) 是落点（相对页面左上角的归一化坐标）。
-  // PDF 的 Td 定位的是**基线**，且 y 轴向上，
-  // 所以要把落点沿 y 向下偏移一行高度，再整体翻转。
   const lineH = size * 1.25;
+  const firstBaseline = H * (1 - ny) - lineH;
 
-  addObject({
-    page,
-    kind: 'text',
-    x: nx * width,
-    y: height * (1 - ny) - lineH,
-    w: 0,
-    h: 0,
-    text: txt,
-    size,
-    font: 'Helvetica',
-    color: currentColor(),
+  const minWrap = Math.max(size * 4, W * 0.12);
+  let xPdf = nx * W;
+  xPdf = Math.min(Math.max(xPdf, mX), Math.max(mX, (W - mX) - minWrap));
+
+  const placements = layoutText(txt, page, xPdf, firstBaseline, size);
+  placeTextPlacements(placements, {
+    x: xPdf, size, font: 'Helvetica', color: currentColor(),
   });
 
   closeTextPop();
-  toast('已添加文字', 1100);
+  const pages = placements.length ? placements[placements.length - 1].page - page + 1 : 1;
+  toast(pages > 1 ? `已添加文字（跨 ${pages} 页）` : '已添加文字', 1100);
 }
 
 /* ---- 原位替换文字输入浮层 ---- */
@@ -2194,11 +2514,11 @@ function bindToolbar() {
 
   // ---- 标注模式开关 ----
   els.btnAnnotMode.addEventListener('click', () => {
-    state.annotMode = !state.annotMode;
-    els.btnAnnotMode.classList.toggle('on', state.annotMode);
-    els.viewer.classList.toggle('annot-mode', state.annotMode);
-    toast(state.annotMode ? '标注模式：拖拽可框选区域' : '已退出标注模式', 1500);
+    setAnnotMode(!state.annotMode);
   });
+
+  // 进入编辑模式时自动退出标注（edit.js 广播，见那边的注释）
+  document.addEventListener('pdf:edit-on', () => setAnnotMode(false, true));
 
   // ---- 视图模式 ----
   els.btnViewSingle.addEventListener('click', () => applyViewMode('single'));
@@ -2457,6 +2777,87 @@ function bindToolbar() {
     closeReplacePop();
   }, true);
 
+  // 改段落浮层
+  if (els.paraOk) els.paraOk.addEventListener('click', confirmParaPop);
+  if (els.paraCancel) els.paraCancel.addEventListener('click', closeParaPop);
+  if (els.paraText) {
+    els.paraText.addEventListener('input', updateParaCount);
+    els.paraText.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeParaPop(); }
+      // Ctrl+Enter 提交（多行文本框里 Enter 要能正常换行）
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault(); confirmParaPop();
+      }
+    });
+  }
+
+  // 右侧编辑栏：收起按钮 + Esc
+  if (els.sideClose) {
+    els.sideClose.addEventListener('click', () => setEditMode(false));
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+
+    // ★ Esc 的"权限"要让给临时浮层：段落/文字/替换气泡、**标注气泡**、
+    //   **划词菜单**、涂黑二次确认，任何一个开着都先归它们处理。
+    //   之前只判了前三个 —— 结果在标注气泡里按 Esc，侧栏也被一起关掉。
+    const overlays = [
+      els.paraEdit, els.textPop, els.replaceTextPop,
+      els.annotPop, els.selMenu, els.redactConfirm,
+    ];
+    if (overlays.some(p => p && !p.hidden)) return;
+
+    // ★ 事件来源也要看：在气泡/输入框里按 Esc 时，气泡自己的处理器会先把
+    //   自己 hidden=true，冒泡到我这里时"看起来已经没有浮层了" —— 于是侧栏
+    //   被一起关掉。按来源排除掉这一类，才真的让位给标注/输入。
+    const tgt = e.target;
+    if (tgt && tgt.closest &&
+        tgt.closest('.text-input-pop, .annot-pop, input, textarea')) return;
+
+    if (els.sidePanel && !els.sidePanel.hidden) {
+      e.preventDefault();
+      setEditMode(false);
+    }
+  });
+
+  // 改段落编辑区：× 只收起这块，不退出编辑模式
+  if (els.paraFold) {
+    els.paraFold.addEventListener('click', closeParaPop);
+  }
+
+  // ---- 侧栏宽度：可拖拽 + 记忆 + 双击复位 ----
+  const DW_KEY = LS_PREFIX + 'drawerW';
+  const setDrawerW = (px, persist = true) => {
+    const w = Math.max(240, Math.min(620, Math.round(px)));
+    document.documentElement.style.setProperty('--drawer-w', w + 'px');
+    if (persist) { try { localStorage.setItem(DW_KEY, String(w)); } catch (e) { /* 忽略 */ } }
+  };
+  try {
+    const saved = parseInt(localStorage.getItem(DW_KEY) || '', 10);
+    if (saved >= 240 && saved <= 620) setDrawerW(saved, false);
+  } catch (e) { /* 忽略 */ }
+
+  if (els.spResizer) {
+    let dragging = false;
+    els.spResizer.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      els.spResizer.classList.add('dragging');
+      try { els.spResizer.setPointerCapture(e.pointerId); } catch (err) { /* 合成事件会抛 */ }
+      e.preventDefault();
+    });
+    // 监听 window 而不是拖拽条本身：鼠标甩出 7px 窄条时不能断
+    window.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      setDrawerW(window.innerWidth - e.clientX);
+    });
+    window.addEventListener('pointerup', () => {
+      if (!dragging) return;
+      dragging = false;
+      els.spResizer.classList.remove('dragging');
+    });
+    els.spResizer.addEventListener('dblclick', () => setDrawerW(300));
+  }
+
   // 编辑对象操作条
   if (els.objBarDel) {
     els.objBarDel.addEventListener('click', () => {
@@ -2526,6 +2927,17 @@ function bindToolbar() {
     applyScale('width');
     els.zoomSelect.value = 'width';
   });
+
+  // ★ 统一导出出口（工具栏常驻）：
+  //   编辑对象 + 页面改动 + 批注 一次导出。
+  //   它不依赖任何模式 —— 标注模式与编辑互斥，若把出口放在编辑侧栏里，
+  //   用户加完批注就找不到导出了（真实反馈）。
+  if (els.btnExportTop) {
+    els.btnExportTop.addEventListener('click', () => {
+      if (!state.pdf) { toast('请先打开一个文档', 1600); return; }
+      exportPdf();
+    });
+  }
 
   els.btnPrint.addEventListener('click', () => {
     if (!state.pdf) return;
@@ -2623,6 +3035,23 @@ function bindToolbar() {
   });
 
   // 全局快捷键
+  // ★ Ctrl+S = 导出（统一出口的快捷键）。
+  //   必须**排在下面那个 typing 判断之前**：否则焦点在输入框里按 Ctrl+S
+  //   会走到浏览器默认的"保存网页"，把整个查看器存成 .htm。
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
+    e.preventDefault();
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
+    if (typing) {
+      // 输入框里还没确定的内容不会进导出 —— 提醒一句，别让用户以为存上了
+      toast('请先完成当前输入（确定 / 取消）再导出', 2600);
+      return;
+    }
+    if (!state.pdf) return;
+    exportPdf();
+  });
+
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
@@ -2663,11 +3092,7 @@ function bindToolbar() {
         e.preventDefault(); startAutoScroll(); break;
       case 'Escape':
         hideSelMenu(); closeAnnotPop();
-        if (state.annotMode) {
-          state.annotMode = false;
-          els.btnAnnotMode.classList.remove('on');
-          els.viewer.classList.remove('annot-mode');
-        }
+        if (state.annotMode) setAnnotMode(false, true);
         break;
       case 'r': case 'R': rotate(); break;
       case 'd': case 'D': toggleInvert(); break;
@@ -2726,8 +3151,8 @@ function cacheAllEls() {
     'zoomGroup', 'zoomSep', 'btnZoomOut', 'zoomSelect', 'btnZoomIn',
     'toolGroup', 'toolGroupSep', 'btnRotate', 'btnDark', 'btnFitWidth',
     'searchWrap', 'searchInput', 'searchClear', 'searchCount', 'searchNav',
-    'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnPrint',
-    'filePicker',
+    'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnExportTop',
+    'btnPrint', 'filePicker',
     // 新增
     'annotGroup', 'annotSep', 'btnAnnotMode', 'colorPicker',
     'viewGroup', 'btnViewSingle', 'btnViewDouble', 'btnScrollPlay',
@@ -2738,6 +3163,7 @@ function cacheAllEls() {
     'selMenu', 'annotPop', 'apTag', 'apText', 'apNote', 'apSave', 'apCancel', 'apDelete',
     // 编辑模式
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
+    'sidePanel', 'sideClose', 'sideTitle',
     'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
@@ -2748,6 +3174,10 @@ function cacheAllEls() {
     // 原位替换
     'btnReplacePdf', 'replaceCount', 'replaceTextPop', 'replaceText',
     'replaceCancel', 'replaceOk',
+    // 改段落（Stage B）
+    'paraEdit', 'paraText', 'paraTip', 'paraPage', 'paraCount',
+    'paraFold', 'spResizer',
+    'paraCancel', 'paraOk',
   ]);
   els.sideBody = document.querySelector('.side-body');
 }

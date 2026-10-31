@@ -255,3 +255,81 @@ export function makeTextBoxAuto(el) {
   el.style.whiteSpace = 'pre';
   return el;
 }
+
+/*
+  按宽度贪心折行（纯函数，可在 node 里单测）。
+  measure(str) 由调用方注入（浏览器用 canvas 实测字符宽度；测试传假函数），
+  所以这里不依赖 DOM。
+
+  为什么折行要写**显式 \n**，而不是交给 CSS pre-wrap：
+    导出时换行是"按 \n 拆成多个 Tj"，从不自动折行；
+    若预览用 pre-wrap 自动折行，长文本的观感就和导出对不上。
+    把 \n 显式写进文本，预览(pre) 与导出(拆\n) 吃的是**同一串 \n**，
+    因此永远一致 —— 这是 makeTextBoxAuto 那条铁律的正确解法。
+*/
+export function wrapText(text, measure, maxWidth) {
+  const src = String(text == null ? '' : text);
+  if (!(maxWidth > 0) || typeof measure !== 'function') return src;
+  const out = [];
+  for (const para of src.split('\n')) {
+    if (para === '') { out.push(''); continue; }
+    let line = '';
+    for (const ch of para) {
+      if (line === '' || measure(line + ch) <= maxWidth) {
+        line += ch;
+        continue;
+      }
+      const sp = line.lastIndexOf(' ');
+      if (sp > 0) {
+        out.push(line.slice(0, sp));
+        line = line.slice(sp + 1) + ch;
+      } else {
+        out.push(line);
+        line = ch;
+      }
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/*
+  把已折行的 lines 按「页高 - 上下边距」分页，返回每页排版 [{ page, y, lines }]。
+  y = 该页首行**基线**（PDF 坐标）。纯函数，可在 node 里单测。
+
+  规则（对齐用户要求）：
+    - 第一页从 firstBaseline 开始；后续页从内容区顶部开始。
+    - 从点击基线向下**填满本页内容区**，排不下的行**续下一页**（真正的折叠到下一页）。
+      绝不"整块上移贴合页底"——那样会把该翻页的内容硬塞进一页、还挤进页脚。
+    - 仅当首行基线低于内容底边时把它夹到内容底边（防吞字），其余照常续页。
+*/
+export function paginateText(lines, opts) {
+  const { page, firstBaseline, pageW, pageH, size } = opts;
+  const marginTop = opts.marginTop != null ? opts.marginTop : Math.max(18, pageH * 0.04);
+  const marginBot = opts.marginBottom != null ? opts.marginBottom : Math.max(30, pageH * 0.08);
+  const lineH = size * 1.25;
+  const asc = size * 0.80;
+  const desc = size * 0.20;
+  const topMost = (pageH - marginTop) - asc;   // 允许的最高基线
+  const botMost = marginBot + desc;            // 允许的最低基线
+  const perPage = Math.max(1, Math.floor((topMost - botMost) / lineH) + 1);
+
+  const arr = (lines && lines.length) ? lines : [''];
+  const out = [];
+  let i = 0, pageNo = page, firstPage = true;
+  while (i < arr.length) {
+    const remaining = arr.length - i;
+    let fb = firstPage ? firstBaseline : topMost;
+    if (!(fb <= topMost)) fb = topMost;
+    if (fb < botMost) fb = botMost;
+    let take = Math.floor((fb - botMost) / lineH) + 1;
+    if (take < 1) take = 1;
+    if (take > perPage) take = perPage;
+    if (take > remaining) take = remaining;
+    out.push({ page: pageNo, y: fb, lines: arr.slice(i, i + take) });
+    i += take;
+    firstPage = false;
+    pageNo += 1;
+  }
+  return out;
+}

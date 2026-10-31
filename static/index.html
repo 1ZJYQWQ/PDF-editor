@@ -11,6 +11,8 @@
 
 <!-- ======================== 工具栏 ======================== -->
 <div class="toolbar">
+  <!-- 左侧：可横向滚动的功能组。按钮再多也不会把右侧的导出挤掉 -->
+  <div class="tb-scroll">
   <div class="tb-group">
     <button class="btn" id="btnSidebar" title="收起/展开侧边栏 (S)">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
@@ -145,12 +147,28 @@
 
   <div class="tb-sep" id="searchSep" hidden></div>
 
+  </div>
+
+  <!-- 右侧：文件操作常驻，不参与滚动 —— 导出/打印永远点得到 -->
+  <div class="tb-fixed">
   <div class="tb-group" id="fileGroup" hidden>
+    <!-- 统一导出出口：**不依赖编辑/标注模式**，任何时候都能把
+         编辑对象 + 页面改动 + 批注一次性导出成新 PDF。
+         放在工具栏而不是编辑侧栏里 —— 侧栏只在编辑模式出现，
+         而标注模式与编辑互斥，用户加完批注就找不到导出了。 -->
+    <button class="btn" id="btnExportTop"
+      title="导出为新的 PDF — 含编辑内容、页面改动与批注（Ctrl+S）">
+      <svg viewBox="0 0 24 24">
+        <path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 20h16"/>
+      </svg>
+      <span class="lbl">导出</span>
+    </button>
     <button class="btn" id="btnPrint" title="打印">
       <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 17h12v4H6z"/></svg>
     </button>
   </div>
-</div>
+  </div><!-- /tb-fixed -->
+</div><!-- /toolbar -->
 
 <!-- ======================== 主体 ======================== -->
 <div class="main">
@@ -201,8 +219,39 @@
     </div>
     <div class="toast" id="toast"></div>
 
-    <!-- 编辑工具面板 -->
-    <div class="edit-palette" id="editPalette" hidden>
+    <!-- 右侧栏：编辑 + 页面管理（进入编辑模式时展开） -->
+    <aside class="edit-drawer" id="sidePanel" hidden>
+      <div class="sp-resizer" id="spResizer"
+        title="拖动调整侧栏宽度（双击恢复默认）"></div>
+      <div class="sp-head">
+        <span class="sp-title" id="sideTitle">编辑</span>
+        <button class="sp-close" id="sideClose" title="收起侧栏（Esc）">
+          <svg viewBox="0 0 24 24">
+            <path d="M6 6l12 12M18 6L6 18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sp-scroll">
+
+      <!-- 改段落：点段落时在这里展开（不再浮在页面上，避免"不随页面滚动"） -->
+      <div class="para-edit" id="paraEdit" hidden>
+        <div class="para-head">
+          <span class="para-chip" id="paraPage">第 1 页</span>
+          <span class="para-tip" id="paraTip">段落</span>
+          <button class="para-fold" id="paraFold" title="收起">×</button>
+        </div>
+        <textarea class="tip-textarea" id="paraText" rows="8"
+          placeholder="修改这一段文字…（会自动重新折行，后面的内容跟着移动）"></textarea>
+        <div class="tip-foot">
+          <span class="para-hint" id="paraCount">0 字</span>
+          <span class="ep-gap"></span>
+          <span class="para-hint">Ctrl + Enter</span>
+          <button class="tip-btn" id="paraCancel">取消</button>
+          <button class="tip-btn primary" id="paraOk">重排并另存为</button>
+        </div>
+      </div>
+
+      <div class="edit-palette" id="editPalette">
       <div class="ep-row">
         <span class="ep-label">工具</span>
         <button class="ep-tool" data-tool="select" title="选择 / 删除对象">
@@ -245,6 +294,14 @@
           </svg>
           <em>替换</em>
         </button>
+        <button class="ep-tool" data-tool="para"
+          title="改段落 — 点一下段落改文字，自动重新折行、后面的内容跟着移动（另存为新文件）">
+          <svg viewBox="0 0 24 24">
+            <path d="M5 6h14M5 11h9M5 16h14" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <em>段落</em>
+        </button>
       </div>
 
       <div class="ep-row">
@@ -257,7 +314,8 @@
         <button class="ep-btn" id="btnEditUndo" title="撤销（Ctrl+Z）">撤销</button>
         <button class="ep-btn" id="btnEditRedo" title="重做（Ctrl+Y）">重做</button>
         <button class="ep-btn" id="btnEditClear" title="清空全部编辑对象">清空</button>
-        <button class="ep-btn primary" id="btnExportPdf" title="导出为新的 PDF 文件">导出 PDF</button>
+        <button class="ep-btn primary" id="btnExportPdf"
+          title="导出 PDF — 与工具栏「导出」是同一个出口：含编辑、页面改动与批注（原文件不改动）">导出 PDF</button>
         <span class="edit-hint" id="editSaveHint"></span>
       </div>
 
@@ -284,11 +342,14 @@
       </div>
     </div>
 
-    <!-- 页面管理面板 -->
-    <div class="page-panel" id="pagePanel" hidden>
-      <div class="pp-head">页面管理</div>
-      <div class="pp-body" id="pageListBody"></div>
-    </div>
+      <!-- 页面管理 -->
+      <div class="page-panel" id="pagePanel">
+        <div class="pp-head">页面管理</div>
+        <div class="pp-body" id="pageListBody"></div>
+      </div>
+
+      </div>
+    </aside>
 
     <!-- 文字输入浮层 -->
     <div class="text-input-pop" id="textPop" hidden>

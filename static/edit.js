@@ -29,6 +29,8 @@ import {
   hasAnyEdit,
   makeTextBoxAuto,
 } from '/static/geom.js';
+// 批注要以 PDF 原生注释（/Annots）写进导出文件，换算逻辑在 annot.js
+import { annotationsToPdfItems } from '/static/annot.js';
 
 /* --------------------------------------------------------------------------
    状态
@@ -877,12 +879,23 @@ export async function exportPdf() {
   const nReplace = replaceCount();
   const hasSpecial = nRedact > 0 || nReplace > 0;
 
-  if (!hasAnyEdit(payload)) {
-    // 可能什么都没画，也可能**只画了涂黑 / 替换** —— 后者必须说清楚，
-    // 否则用户会盯着"还没有任何编辑内容"发懵。
-    toast(hasSpecial
-      ? '涂黑 / 替换 不参与「导出 PDF」，请点对应的「并另存为…」'
-      : '还没有任何编辑内容', hasSpecial ? 3000 : 1800);
+  // ★ 批注也参与导出 —— 写成 PDF 原生注释（/Annots），
+  //   这样 Acrobat / Edge / 微信预览都能看见；不写的话导出文件是"干净"的，
+  //   用户会以为标注丢了。
+  let annots = [];
+  try {
+    annots = await annotationsToPdfItems();
+  } catch (e) {
+    console.warn('批注换算失败，导出将不含批注：', e);
+  }
+  if (annots.length) payload.annotations = annots;
+
+  // ★ 统一出口：没有任何改动也允许导出**原样副本**（用户可能只是想另存一份）。
+  //   但「只有涂黑 / 替换」时仍然拦住 —— 这两类不参与叠加式导出，
+  //   导出会产出「看着没处理过」的文件，很容易被误认为已完成（假安全）。
+  const noChange = !hasAnyEdit(payload) && !annots.length;
+  if (noChange && hasSpecial) {
+    toast('涂黑 / 替换 不参与「导出 PDF」，请点对应的「并另存为…」', 3200);
     return;
   }
 
@@ -905,8 +918,16 @@ export async function exportPdf() {
     }
   }
 
-  const btn = els.btnExportPdf;
-  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  // ★ 两个入口共用同一次导出：工具栏常驻按钮 + 编辑侧栏按钮。
+  //   两边都要置忙 —— 只置一个的话，从工具栏点完，侧栏那个还能再点一次，
+  //   于是同一个动作并发跑两遍，产出两份文件。
+  const btns = [els.btnExportTop, els.btnExportPdf].filter(Boolean);
+  if (btns.some(b => b.disabled)) return;
+  const setBusy = (on) => btns.forEach(b => {
+    b.disabled = on;
+    b.classList.toggle('busy', on);
+  });
+  setBusy(true);
 
   try {
     const r = await fetch('/api/export', {
@@ -950,7 +971,11 @@ export async function exportPdf() {
       try { miss = decodeURIComponent(missRaw); } catch (e) { miss = missRaw; }
     }
 
-    let msg = `已导出：${name}` + (pages ? `（${pages} 页）` : '');
+    // 没有改动时说明白是「原样副本」，免得用户以为自己的编辑没生效
+    let msg = (noChange ? `已导出原样副本：${name}` : `已导出：${name}`) +
+              (pages ? `（${pages} 页）` : '');
+    const nAnn = r.headers.get('X-Export-Annots');
+    if (nAnn && nAnn !== '0') msg += `，含 ${nAnn} 条批注`;
     if (dropped && dropped !== '0') msg += `，${dropped} 项被忽略`;
     if (miss) {
       msg += `　⚠ 有 ${[...miss].length} 个字没能写入（字体里没有）：${miss}`;
@@ -961,7 +986,7 @@ export async function exportPdf() {
   } catch (e) {
     toast(e.message || '导出失败', 3000);
   } finally {
-    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+    setBusy(false);
   }
 }
 
@@ -1180,8 +1205,15 @@ export function setEditMode(on) {
   }
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
-  if (els.editPalette) els.editPalette.hidden = !editState.on;
-  if (els.pagePanel) els.pagePanel.hidden = !editState.on;
+  // 编辑面板 / 页面管理现在是同一条右侧栏，统一开合
+  if (els.sidePanel) els.sidePanel.hidden = !editState.on;
+
+  // ★ 编辑与标注**互斥**：进入编辑就退出标注。
+  //   用事件广播而不是直接 import app.js —— 那边已经 import 了本模块，
+  //   反向引用会形成循环依赖（真跑起来是"某个导出变 undefined"的怪问题）。
+  if (editState.on) {
+    document.dispatchEvent(new CustomEvent('pdf:edit-on'));
+  }
 
   syncToolButtons();
   repaintEdits();
@@ -1338,4 +1370,94 @@ function openRedactConfirm() {
 
 function closeRedactConfirm() {
   if (els.redactConfirm) els.redactConfirm.hidden = true;
+}
+
+/* --------------------------------------------------------------------------
+   改段落（Stage B）：把某一段改成新文字，服务端重新折行 + 页内下移
+   --------------------------------------------------------------------------
+
+   和「导出 PDF」是两条路：
+     · 导出 = 叠加式，不动原文；
+     · 改段落 = 真正替换原文文字并重排，所以只产出新文件（原文件绝不写回）。
+   溢出页底时服务端返回 400，这里把原因原样抛给用户 —— 静默截断是最糟的。
+   -------------------------------------------------------------------------- */
+export async function reflowParagraph(page, para, text, orig, pageText) {
+  if (!state.filePath) {
+    toast('请先打开一个文档', 1600);
+    return false;
+  }
+  if (!text || !text.trim()) {
+    toast('文字不能为空。要整段删掉，请用涂黑工具', 2600);
+    return false;
+  }
+
+  const btn = els.paraOk;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  try {
+    const r = await fetch('/api/reflow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // orig = 这段的原文：文档没有 ToUnicode 时，服务端靠它按字对齐
+      // 反推"字符 -> 字码"映射（否则解不出字，也没法把新字写回去）。
+      body: JSON.stringify({ path: state.filePath, page, para, text,
+                             orig: orig || null,
+                             page_text: pageText || null }),
+    });
+
+    if (!r.ok) {
+      let msg = `重排失败 (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j.error) msg = j.error;
+      } catch (e) { /* 忽略解析失败 */ }
+      toast(msg, 8000);
+      return false;
+    }
+
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    let name = `${state.fileName}-改段落.pdf`;
+    const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    if (m) {
+      try { name = decodeURIComponent(m[1]); } catch (e) { /* 忽略 */ }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+    const lb = r.headers.get('X-Reflow-Lines-Before');
+    const la = r.headers.get('X-Reflow-Lines-After');
+    const fbRaw = r.headers.get('X-Reflow-Fallback') || '';
+    let fb = '';
+    if (fbRaw) {
+      try { fb = decodeURIComponent(fbRaw); } catch (e) { fb = fbRaw; }
+    }
+
+    const nPages = parseInt(r.headers.get('X-Reflow-Pages') || '1', 10) || 1;
+    const nNew = parseInt(r.headers.get('X-Reflow-New-Pages') || '0', 10) || 0;
+
+    let msg = `已重排并另存：${name}`;
+    if (lb && la && lb !== la) msg += `（${lb} 行 → ${la} 行）`;
+    else if (la) msg += `（${la} 行）`;
+    // 跨页了要说清楚：用户会想知道"我改一段怎么动了后面的页"
+    if (nPages > 1) msg += `，跨 ${nPages} 页续排`;
+    if (nNew > 0) msg += `，新增 ${nNew} 页`;
+    if (fb) {
+      // 回退字体的字形和原文不一样 —— 必须让用户知道，否则会以为"排版坏了"
+      msg += `　⚠ 这些字用了替代字体，字形会与原文不同：${fb}`;
+      toast(msg, 9000);
+    } else {
+      toast(msg, 3800);
+    }
+    return true;
+  } catch (e) {
+    toast(`重排失败：${e.message || e}`, 5000);
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  }
 }

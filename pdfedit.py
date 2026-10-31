@@ -1387,12 +1387,23 @@ def apply_edits(src_path, out_path, edits):
             _attach_font_resource(doc, refs[pidx], fr)
         missing_cjk |= builder.missing_chars
 
+    # f) 批注 -> PDF 原生注释（/Annots）
+    #    放在页面操作之后：前端提交的 page 是「当前视图里的页序」，
+    #    和 objects 的语义一致（此时 refs 已是最终页序）。
+    annot_stat = {"written": 0, "pages": 0, "skipped": 0}
+    anns = edits.get("annotations") or []
+    if anns:
+        from pdfannot import apply_annotations   # 延迟导入，避免循环引用
+        annot_stat = apply_annotations(doc, refs, anns)
+
     size = build_pdf(doc, extra_streams, out_path)
     return {
         "ok": True,
         "size": size,
         "pages": len(doc.page_refs()),
         "objects": sum(len(v) for v in per_page.values()),
+        # 批注写入统计（0 表示没写；skipped 是我们认不出的类型/坏坐标）
+        "annotations": annot_stat,
         # 中文字体统计。**缺字必须上报** —— 静默丢字是最糟的结果：
         # 用户以为写进去了，实际没有。
         "cjk_glyphs": cjk_subset.num_glyphs if cjk_subset else 0,

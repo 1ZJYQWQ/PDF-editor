@@ -252,6 +252,9 @@ TAG_LABEL = {
 
 EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line"}
 
+# 批注类型（导出时写成 PDF 原生注释 /Annots，不是画进内容流）
+ANNOT_KINDS = {"highlight", "underline", "wavy", "strike", "box", "note"}
+
 # 涂黑区域也持久化在编辑数据里（这样刷新页面不会丢），
 # 但它**不能**走 /api/export —— 普通导出是叠加式的，
 # 无法删除底层文字，让涂黑框走那条路只会产出
@@ -430,6 +433,85 @@ def sanitize_edits(pages, objects):
         clean_objs.append(out)
 
     return clean_pages, clean_objs, dropped
+
+
+def sanitize_annotations(items, max_items=5000):
+    """
+    校验并规范化前端提交的批注（准备写成 PDF 原生注释 /Annots）。
+
+    与 sanitize_edits 同样的原则：宁可丢弃可疑数据，也不能让非法值
+    流进 PDF 写出阶段。批注是**叠加物**，写坏了会在别的阅读器里
+    显示成乱框，比不写更糟。
+
+    返回 (干净的批注列表, 被丢弃数量)。
+    """
+    dropped = 0
+    clean = []
+    for it in (items or [])[:max_items]:
+        if not isinstance(it, dict):
+            dropped += 1
+            continue
+        kind = str(it.get("type") or "").lower()
+        if kind not in ANNOT_KINDS:
+            dropped += 1
+            continue
+        try:
+            page = int(it.get("page", 0))
+        except (TypeError, ValueError):
+            dropped += 1
+            continue
+        if page < 1:
+            dropped += 1
+            continue
+
+        rects = []
+        for r in (it.get("rects") or [])[:400]:
+            if not isinstance(r, (list, tuple)) or len(r) != 4:
+                continue
+            try:
+                x0, y0, x1, y1 = (float(v) for v in r)
+            except (TypeError, ValueError):
+                continue
+            # 极端坐标（NaN / inf / 巨值）会把阅读器搞坏，直接丢
+            if not all(abs(v) < 1e6 for v in (x0, y0, x1, y1)):
+                continue
+            if abs(x1 - x0) < 0.1 or abs(y1 - y0) < 0.1:
+                continue
+            rects.append([round(min(x0, x1), 2), round(min(y0, y1), 2),
+                          round(max(x0, x1), 2), round(max(y0, y1), 2)])
+        if not rects:
+            dropped += 1
+            continue
+
+        color = it.get("color")
+        color = _safe_color(color) if isinstance(color, str) else "#f59e0b"
+        clean.append({
+            "page": page,
+            "type": kind,
+            "rects": rects,
+            "color": color,
+            "note": str(it.get("note") or "")[:2000],
+        })
+    return clean, dropped
+
+
+def unique_out_path(path):
+    """
+    同一秒内多次导出会撞名（文件名精确到秒）。
+
+    直接覆盖的后果：用户先导出"带批注版"、再导出"干净版"，
+    前者就被悄悄顶掉了 —— 导出目录里本该留痕的历史版本会丢。
+    所以撞名时追加 -2 / -3，**绝不覆盖已有文件**。
+    """
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    i = 2
+    while True:
+        cand = "%s-%d%s" % (stem, i, ext)
+        if not os.path.exists(cand):
+            return cand
+        i += 1
 
 
 def sanitize_redactions(regions):
@@ -629,6 +711,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_get_edits(query)
             if route == "/api/pdfinfo":
                 return self.api_pdfinfo(query)
+            if route == "/api/paragraphs":
+                return self.api_paragraphs(query)
             if route.startswith("/static/"):
                 rel = urllib.parse.unquote(route[len("/static/"):])
                 target = os.path.join(STATIC_DIR, rel.replace("/", os.sep))
@@ -657,7 +741,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         if route not in ("/api/annotations", "/api/edits", "/api/export",
-                         "/api/redact", "/api/replace"):
+                         "/api/redact", "/api/replace", "/api/reflow"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -680,6 +764,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_redact(payload)
         if route == "/api/replace":
             return self._post_replace(payload)
+        if route == "/api/reflow":
+            return self._post_reflow(payload)
         return self._post_export(payload)
 
     # ---- POST: 标注 ----
@@ -746,6 +832,11 @@ class Handler(BaseHTTPRequestHandler):
         pages, objects, dropped = sanitize_edits(
             payload.get("pages"), payload.get("objects"))
 
+        # 批注：写成 PDF 原生注释（/Annots），不是画进内容流 ——
+        # 这样 Acrobat / Edge / 微信预览都能看见，也能再编辑。
+        annots, ann_dropped = sanitize_annotations(payload.get("annotations"))
+        dropped += ann_dropped
+
         # 防线：涂黑对象绝不能走普通导出。
         # 普通导出是叠加式的（往内容流后面追加绘制指令），
         # 它没法删除底层文字 —— 让涂黑框从这里出去，用户会拿到
@@ -759,14 +850,16 @@ class Handler(BaseHTTPRequestHandler):
         stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
             os.path.basename(real))[0])
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_name = f"{stem}-已编辑-{stamp}.pdf"
-        out_path = os.path.join(EXPORT_DIR, out_name)
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, f"{stem}-已编辑-{stamp}.pdf"))
+        out_name = os.path.basename(out_path)
 
         try:
             with _edit_lock:
                 result = pdfedit.apply_edits(
                     real, out_path,
-                    {"pages": pages, "objects": objects})
+                    {"pages": pages, "objects": objects,
+                     "annotations": annots})
         except Exception as exc:  # noqa: BLE001
             return self.send_error_json(500, f"导出失败: {exc}")
 
@@ -778,6 +871,12 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
+        # ★ 下载响应必须显式关连接。
+        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
+        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
+        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",
@@ -785,6 +884,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Export-Pages", str(result.get("pages", 0)))
         self.send_header("X-Export-Objects", str(result.get("objects", 0)))
         self.send_header("X-Export-Dropped", str(dropped))
+        # 批注写了几条（0 表示没写或全被丢弃）
+        self.send_header("X-Export-Annots",
+                         str((result.get("annotations") or {}).get("written", 0)))
         # 中文字体：嵌了多少字形、有没有写不进去的字。
         # **缺字必须让用户看到** —— 静默丢字会让人以为写进去了，实际没有。
         # 响应头只能是 latin-1，所以缺字用百分号编码传。
@@ -794,6 +896,161 @@ class Handler(BaseHTTPRequestHandler):
         if miss:
             self.send_header("X-Export-CJK-Missing",
                              urllib.parse.quote(miss, safe=""))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # ---- API: 列出某页的段落（给"改段落"用） ----
+
+    def api_paragraphs(self, query):
+        paths = query.get("path", [])
+        if not paths:
+            return self.send_error_json(400, "缺少 path 参数")
+        target = urllib.parse.unquote(paths[0])
+        try:
+            page = max(1, int((query.get("page") or ["1"])[0]))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            real = os.path.realpath(target)
+            if not os.path.isfile(real):
+                return self.send_error_json(404, "文件不存在")
+            if not is_within(real, self._resolve_dirs(query)):
+                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+            import pdfreflow
+            info = pdfreflow.list_paragraphs(real, page)
+        except Exception as exc:  # noqa: BLE001
+            return self.send_error_json(500, "解析段落失败: %s" % exc)
+        self.send_json(info)
+
+    # ---- POST: 段落改字 + 重新折行（页内重排） ----
+
+    def _post_reflow(self, payload):
+        """
+        把某一段改成新文字并重排，**另存为新文件**（原文件一律不动）。
+
+        溢出页底会返回 400 并说明还差多少 —— 这是有意的：
+        跨页回流还没实现，与其把字画到页面外，不如明确拒绝。
+        """
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(
+                400, "不允许覆盖原文件：只能另存为新文件")
+
+        try:
+            page = int(payload.get("page") or 1)
+            para = int(payload.get("para") if payload.get("para") is not None else -1)
+        except (TypeError, ValueError):
+            return self.send_error_json(400, "page / para 参数无效")
+        if page < 1 or para < 0:
+            return self.send_error_json(400, "page / para 参数无效")
+
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return self.send_error_json(400, "新文字不能为空")
+        if len(text) > 20000:
+            return self.send_error_json(400, "文字太长了（上限 20000 字）")
+
+        # 可选：这段的**原文**（前端 pdf.js 解出来的）。
+        # 没有 ToUnicode 的文档靠它按字对齐反推字符映射。
+        orig = payload.get("orig")
+        if orig is not None:
+            if not isinstance(orig, str):
+                return self.send_error_json(400, "orig 参数无效")
+            if len(orig) > 20000:
+                return self.send_error_json(400, "orig 太长了")
+
+        # 可选：**整页文字**。用来把字符映射的覆盖范围扩到整页
+        # （段落里没出现过的字也能沿用源字体）。同样要过长度闸。
+        page_text = payload.get("page_text")
+        if page_text is not None:
+            if not isinstance(page_text, str):
+                return self.send_error_json(400, "page_text 参数无效")
+            if len(page_text) > 200000:
+                return self.send_error_json(400, "page_text 太长了")
+
+        try:
+            real = os.path.realpath(src)
+            if not os.path.isfile(real):
+                return self.send_error_json(404, "源文件不存在")
+            if not is_within(real, SCAN_DIRS):
+                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        stem = re.sub(r'[\\/:*?"<>|]', "_",
+                      os.path.splitext(os.path.basename(real))[0])
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, "%s-改段落-%s.pdf" % (stem, stamp)))
+        out_name = os.path.basename(out_path)
+
+        try:
+            import pdfreflow
+            with _edit_lock:
+                try:
+                    # 先试"页内重排"（最保守：只动这一页）
+                    result = pdfreflow.apply_paragraph_edit(
+                        real, out_path, page, para, text,
+                        orig_text=orig, page_text=page_text)
+                except ValueError as exc:
+                    # 页内放不下 -> 自动升级成跨页级联：
+                    # 溢出的内容续到下一页，必要时新建页。
+                    if "放不下" not in str(exc):
+                        raise
+                    result = pdfreflow.apply_paragraph_flow(
+                        real, out_path, page, para, text,
+                        orig_text=orig, page_text=page_text)
+        except ValueError as exc:
+            # 业务性拒绝（放不下 / 无 ToUnicode / 越界）：400 + 原文说明
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(500, "改段落失败: %s" % exc)
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, "读取产物失败: %s" % exc)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        # ★ 下载响应必须显式关连接。
+        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
+        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
+        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+        self.send_header("X-Reflow-Lines-Before", str(result["lines_before"]))
+        self.send_header("X-Reflow-Lines-After", str(result["lines_after"]))
+        self.send_header("X-Reflow-Shift", str(result["shift"]))
+        self.send_header("X-Reflow-Font", urllib.parse.quote(str(result["font"]), safe=""))
+        self.send_header("X-Reflow-Map", str(result.get("map_source") or ""))
+        self.send_header("X-Reflow-Pages", str(result.get("pages_affected") or 1))
+        self.send_header("X-Reflow-New-Pages", str(result.get("new_pages") or 0))
+        self.send_header("X-Reflow-Last-Page", str(result.get("last_page") or page))
+        self.send_header("X-Reflow-Mapped", str(result.get("mapped_chars") or 0))
+        fb = str(result.get("fallback_chars") or "")
+        if fb:
+            # 回退字体用到的字必须让用户知道 —— 字形会和原文不一样
+            self.send_header("X-Reflow-Fallback",
+                             urllib.parse.quote(fb, safe=""))
         self.end_headers()
         self.wfile.write(body)
 
@@ -845,8 +1102,9 @@ class Handler(BaseHTTPRequestHandler):
         stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
             os.path.basename(real))[0])
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_name = f"{stem}-已涂黑-{stamp}.pdf"
-        out_path = os.path.join(EXPORT_DIR, out_name)
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, f"{stem}-已涂黑-{stamp}.pdf"))
+        out_name = os.path.basename(out_path)
 
         try:
             with _edit_lock:
@@ -876,6 +1134,12 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
+        # ★ 下载响应必须显式关连接。
+        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
+        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
+        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",
@@ -938,8 +1202,9 @@ class Handler(BaseHTTPRequestHandler):
         stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
             os.path.basename(real))[0])
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_name = f"{stem}-已替换-{stamp}.pdf"
-        out_path = os.path.join(EXPORT_DIR, out_name)
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, f"{stem}-已替换-{stamp}.pdf"))
+        out_name = os.path.basename(out_path)
 
         try:
             with _edit_lock:
@@ -969,6 +1234,12 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
+        # ★ 下载响应必须显式关连接。
+        #   HTTP/1.1 默认 keep-alive：浏览器下载器收到全部字节后仍会
+        #   "等连接结束"才把任务标记为完成 —— 表现就是进度条早就满了，
+        #   状态却卡很久（实测服务端 0.02s 就发完，全是浏览器在等）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",

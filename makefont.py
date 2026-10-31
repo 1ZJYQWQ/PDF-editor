@@ -10,7 +10,8 @@
 ★ 关键：这一步只发生在**开发期**
     转换用 fontTools（第三方库），但**运行时的子集化仍由项目自己的
     零依赖 pdffont.py 完成** —— 所以「服务端零第三方依赖」这条原则不破。
-    fontTools 建议装在隔离的 venv 里，不污染运行时环境。
+    fontTools 装在隔离的 venv 里（.workbuddy/binaries/python/envs/default），
+    不污染运行时环境。
 
     产出的静态 TTF 是**资产**（assets/fonts/），不是代码依赖。
 

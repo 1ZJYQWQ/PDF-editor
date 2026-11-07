@@ -714,8 +714,8 @@ def redact_page_content(doc, page_ref, rects):
     black = [b"\nq"]
     black.append(b"0 0 0 rg")
     for (x0, y0, x1, y1) in rects:
-        black.append(
-            b"%.3f %.3f %.3f %.3f re f" % (x0, y0, x1 - x0, y1 - y0))
+        black.append(b"%.3f %.3f %.3f %.3f re f" %
+                     (x0, y0 - 2.0, x1 - x0, (y1 - y0) + 4.0))
     black.append(b"Q")
     out.append(b"\n".join(black))
 

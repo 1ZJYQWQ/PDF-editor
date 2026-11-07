@@ -7,7 +7,8 @@ import pdffont
 
 
 WHITESPACE = b"\x00\t\n\x0c\r "
-DELIMITERS = b"()<>[]{}/%"
+DELIMITERS = b"()<>[]{}/%,;"
+SKIP_CHARS = b",;"          
 
 
 def tokenize(data):
@@ -18,6 +19,10 @@ def tokenize(data):
         ch = data[i:i + 1]
 
         if ch in WHITESPACE:
+            i += 1
+            continue
+
+        if ch in SKIP_CHARS:
             i += 1
             continue
 
@@ -226,8 +231,48 @@ class PDFDocument:
     def load(cls, data):
         doc = cls()
         doc._parse_objects(data)
+        doc._expand_objstm()
         doc._find_root(data)
         return doc
+
+
+    def _expand_objstm(self):
+        for val in list(self.objects.values()):
+            if not self.is_stream(val):
+                continue
+            dic, data = val
+            if dic.get("Type") != "ObjStm":
+                continue
+            n = dic.get("N")
+            first = dic.get("First")
+            if not (isinstance(n, int) and isinstance(first, int)):
+                continue
+            if n <= 0 or first <= 0 or first > len(data):
+                continue
+            head = data[:first].split()
+            pairs = []
+            for i in range(0, min(len(head) - 1, n * 2), 2):
+                try:
+                    pairs.append((int(head[i]), int(head[i + 1])))
+                except ValueError:
+                    pairs = []
+                    break
+            for i, (onum, off) in enumerate(pairs):
+                start = first + off
+                if i + 1 < len(pairs):
+                    end = first + pairs[i + 1][1]
+                else:
+                    end = len(data)
+                if not (0 <= start < end <= len(data)):
+                    continue
+                try:
+                    obj, _ = parse_object(tokenize(data[start:end]), 0)
+                except Exception:       
+                    continue
+                if (onum, 0) in self.objects:
+                    continue
+                self.objects[(onum, 0)] = obj
+                self.max_obj = max(self.max_obj, onum)
 
     def _parse_objects(self, data):
         for m in OBJ_RE.finditer(data):
@@ -314,6 +359,20 @@ class PDFDocument:
                     if "Root" in obj:
                         break
             idx = data.rfind(b"trailer", 0, idx)
+
+        if not isinstance(self.trailer.get("Root"), Ref):
+            last = None
+            for val in self.objects.values():
+                if self.is_stream(val):
+                    dic = val[0]
+                    if dic.get("Type") == "XRef" and isinstance(dic.get("Root"), Ref):
+                        last = dic          
+            if last is not None:
+                for k in ("Root", "Info", "ID", "Size"):
+                    if k in last:
+                        self.trailer.setdefault(k, last[k])
+                if not isinstance(self.trailer.get("Root"), Ref):
+                    self.trailer["Root"] = last["Root"]
 
         root = self.trailer.get("Root")
         if isinstance(root, Ref):
@@ -1141,7 +1200,7 @@ def _emit_object(b, obj):
                base_font=obj.get("font") or "Helvetica")
 
 
-def _attach_font_resource(doc, page_ref, font_map):
+def _attach_font_resource(doc, page_ref, font_map, overwrite=False):
     page = doc.resolve(page_ref)
     if not isinstance(page, dict):
         return
@@ -1160,6 +1219,6 @@ def _attach_font_resource(doc, page_ref, font_map):
         res["Font"] = fonts
 
     for alias, val in (font_map or {}).items():
-        if alias in fonts:
+        if alias in fonts and not overwrite:
             continue
         fonts[alias] = val

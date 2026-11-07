@@ -193,6 +193,12 @@
       <div class="progress-fill" id="progressFill"></div>
       <div class="progress-markers" id="progressMarkers"></div>
     </div>
+    <div class="stage-bar" id="stageBar" hidden>
+      <span class="stage-dot"></span>
+      <span class="stage-text" id="stageText">预览中 · 改动尚未保存</span>
+      <button class="stage-btn" id="stageSave">保存为 PDF</button>
+      <button class="stage-btn ghost" id="stageDrop">退出预览</button>
+    </div>
     <div class="pages empty" id="pages">
     </div>
     <div class="loading hide" id="loading">
@@ -227,7 +233,7 @@
           <span class="ep-gap"></span>
           <span class="para-hint">Ctrl + Enter</span>
           <button class="tip-btn" id="paraCancel">取消</button>
-          <button class="tip-btn primary" id="paraOk">重排并另存为</button>
+          <button class="tip-btn primary" id="paraOk">更新预览</button>
         </div>
       </div>
 
@@ -294,6 +300,8 @@
         <button class="ep-btn" id="btnEditUndo" title="撤销（Ctrl+Z）">撤销</button>
         <button class="ep-btn" id="btnEditRedo" title="重做（Ctrl+Y）">重做</button>
         <button class="ep-btn" id="btnEditClear" title="清空全部编辑对象">清空</button>
+        <button class="ep-btn" id="btnRange"
+          title="只导出指定页 / 按份拆分">范围…</button>
         <button class="ep-btn primary" id="btnExportPdf"
           title="导出 PDF — 与工具栏「导出」是同一个出口：含编辑、页面改动与批注（原文件不改动）">导出 PDF</button>
         <span class="edit-hint" id="editSaveHint"></span>
@@ -306,6 +314,8 @@
         </span>
         <span class="ep-gap"></span>
         <span class="ep-redact-count" id="redactCount">0 处</span>
+        <button class="ep-btn danger" id="btnTermRedact"
+          title="按关键词全篇删除（不可逆，另存为新文件）">按词删除…</button>
         <button class="ep-btn danger" id="btnRedactPdf"
           title="执行涂黑并另存为新文件">涂黑并另存为…</button>
       </div>
@@ -319,6 +329,32 @@
         <span class="ep-redact-count" id="replaceCount">0 处</span>
         <button class="ep-btn replace" id="btnReplacePdf"
           title="执行原位替换并另存为新文件">替换并另存为…</button>
+      </div>
+
+      <div class="batch-panel" id="batchPanel">
+        <div class="bp-head">
+          <span>查找替换</span>
+          <span class="bp-scope">整篇</span>
+          <span class="bp-count" id="bpCount">—</span>
+        </div>
+        <div class="bp-row">
+          <input class="bp-input" id="bpFind" placeholder="查找内容…"
+            autocomplete="off">
+        </div>
+        <div class="bp-row">
+          <input class="bp-input" id="bpRepl" placeholder="替换为…（留空即删除这几个字）"
+            autocomplete="off">
+        </div>
+        <div class="bp-row bp-ops">
+          <label class="bp-check">
+            <input type="checkbox" id="bpIgnoreCase"> 忽略大小写
+          </label>
+          <span class="ep-gap"></span>
+          <button class="mini-btn" id="bpSearch">查找</button>
+          <button class="mini-btn" id="bpReplaceSel" disabled>替换选中</button>
+          <button class="mini-btn danger" id="bpReplaceAll" disabled>全部替换</button>
+        </div>
+        <div class="bp-list" id="bpList" hidden></div>
       </div>
     </div>
 
@@ -350,6 +386,45 @@
         <span class="ep-gap"></span>
         <button class="tip-btn" id="replaceCancel">取消</button>
         <button class="tip-btn primary" id="replaceOk">确定</button>
+      </div>
+    </div>
+
+    <div class="text-input-pop wide" id="termPop" hidden>
+      <div class="tip-title danger">按关键词删除<span>不可逆</span></div>
+      <textarea class="tip-textarea" id="termText" rows="5"
+        placeholder="一行一个词，例如：&#10;张三&#10;13800000000&#10;某某科技有限公司"></textarea>
+      <label class="rp-label">处理方式
+        <select class="rp-input" id="termMode">
+          <option value="delete">删掉，后面的字往前补位</option>
+          <option value="redact_term">涂黑留痕（只盖命中的字）</option>
+          <option value="redact_line">涂黑留痕（整行）</option>
+          <option value="redact_para">涂黑留痕（整段）</option>
+        </select>
+      </label>
+      <div class="tip-foot">
+        <span class="tip-hint" id="termHint">删掉：文字消失、段落重新折行，不留黑块</span>
+        <span class="ep-gap"></span>
+        <button class="tip-btn" id="termCancel">取消</button>
+        <button class="tip-btn danger" id="termOk">删除并另存为…</button>
+      </div>
+    </div>
+
+    <div class="text-input-pop wide" id="rangePop" hidden>
+      <div class="tip-title">导出范围 / 拆分</div>
+      <label class="rp-label">页码
+        <input class="rp-input" id="rangeSpec" autocomplete="off"
+          placeholder="例如 1-3,5,8-（留空=全部）">
+      </label>
+      <label class="rp-label">拆分
+        <input class="rp-input short" id="splitPer" type="number" min="1"
+          value="10" autocomplete="off"> 页/份
+      </label>
+      <div class="tip-foot">
+        <span class="tip-hint" id="rangeHint"></span>
+        <span class="ep-gap"></span>
+        <button class="tip-btn" id="rangeCancel">取消</button>
+        <button class="tip-btn" id="splitOk">拆分整篇</button>
+        <button class="tip-btn primary" id="rangeOk">导出这几页</button>
       </div>
     </div>
 

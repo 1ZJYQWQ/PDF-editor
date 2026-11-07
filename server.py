@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -22,7 +23,67 @@ ANNOT_DIR = os.path.join(BASE_DIR, "annotations")
 EDIT_DIR = os.path.join(BASE_DIR, "edits")
 EXPORT_DIR = os.path.join(BASE_DIR, "exports")
 
+STAGE_DIR = os.path.join(BASE_DIR, "_stage")
+STAGE_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+STAGE_KEEP_SEC = 6 * 3600     
+
 SCAN_DIRS = []
+
+
+def stage_file(stage_id):
+    return os.path.join(STAGE_DIR, stage_id + ".pdf")
+
+
+
+STAGE_KEEP_VERSIONS = 20      
+
+
+def stage_version_path(stage_id, n):
+    return os.path.join(STAGE_DIR, "%s.v%02d.pdf" % (stage_id, n))
+
+
+def stage_versions(stage_id):
+    out = []
+    if not os.path.isdir(STAGE_DIR):
+        return out
+    prefix = stage_id + ".v"
+    for name in os.listdir(STAGE_DIR):
+        if not name.startswith(prefix) or not name.endswith(".pdf"):
+            continue
+        mid = name[len(prefix):-4]
+        if mid.isdigit():
+            out.append(int(mid))
+    return sorted(out)
+
+
+def backup_stage_version(stage_id):
+    src = stage_file(stage_id)
+    if not os.path.isfile(src):
+        return None
+    vers = stage_versions(stage_id)
+    n = (vers[-1] + 1) if vers else 1
+    dst = stage_version_path(stage_id, n)
+    try:
+        shutil.copy2(src, dst)
+    except OSError:
+        return None
+    while len(vers) + 1 > STAGE_KEEP_VERSIONS:
+        old = vers.pop(0)
+        try:
+            os.remove(stage_version_path(stage_id, old))
+        except OSError:
+            pass
+    return n
+
+
+def new_stage_id():
+    return os.urandom(8).hex()
+
+
+def allowed_roots(query=None, handler=None):
+    if handler is not None:
+        return handler._resolve_dirs(query or {}) + [STAGE_DIR, EXPORT_DIR]
+    return list(SCAN_DIRS) + [STAGE_DIR, EXPORT_DIR]
 PORT = 8000
 PORT_SCAN_RANGE = 20     
 
@@ -605,7 +666,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         if route not in ("/api/annotations", "/api/edits", "/api/export",
-                         "/api/redact", "/api/replace", "/api/reflow"):
+                         "/api/redact", "/api/replace", "/api/reflow",
+                         "/api/stage", "/api/stage/undo",
+                         "/api/find", "/api/replace_all", "/api/redact_terms",
+                         "/api/split", "/api/merge"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -630,6 +694,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_replace(payload)
         if route == "/api/reflow":
             return self._post_reflow(payload)
+        if route == "/api/stage":
+            return self._post_stage(payload)
+        if route == "/api/stage/undo":
+            return self._post_stage_undo(payload)
+        if route == "/api/find":
+            return self._post_find(payload)
+        if route == "/api/replace_all":
+            return self._post_replace_all(payload)
+        if route == "/api/redact_terms":
+            return self._post_redact_terms(payload)
+        if route == "/api/split":
+            return self._post_split(payload)
+        if route == "/api/merge":
+            return self._post_merge(payload)
         return self._post_export(payload)
 
     def _post_annotations(self, payload):
@@ -669,6 +747,380 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  
             self.send_error_json(500, f"保存失败: {exc}")
 
+
+    def _post_find(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+
+        term = payload.get("term")
+        if not isinstance(term, str) or not term:
+            return self.send_error_json(400, "查找内容不能为空")
+
+        try:
+            real = os.path.realpath(src)
+            if not os.path.isfile(real):
+                return self.send_error_json(404, "文件不存在")
+            if not is_within(real, allowed_roots()):
+                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "文件不存在")
+
+        try:
+            import pdfbatch
+            res = pdfbatch.find_text(real, term,
+                                     bool(payload.get("ignore_case")))
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            return self.send_error_json(500, "查找失败: %s" % exc)
+
+        res["ok"] = True
+        res["term"] = term
+        self.send_json(res)
+
+
+    def _post_replace_all(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(
+                400, "不允许覆盖原文件：只能另存为新文件")
+
+        term = payload.get("term")
+        repl = payload.get("repl")
+        if not isinstance(term, str) or not term:
+            return self.send_error_json(400, "查找内容不能为空")
+        if not isinstance(repl, str):
+            return self.send_error_json(400, "替换内容无效")
+        if len(term) > 500 or len(repl) > 2000:
+            return self.send_error_json(400, "查找/替换内容太长了")
+
+        targets = payload.get("targets")
+        if targets is not None and not isinstance(targets, list):
+            return self.send_error_json(400, "targets 必须是数组")
+
+        stage = payload.get("stage")
+        if stage is not None:
+            if not isinstance(stage, str) or not STAGE_ID_RE.match(stage):
+                return self.send_error_json(400, "stage 参数无效")
+
+        try:
+            if stage:
+                real = stage_file(stage)
+                if not os.path.isfile(real):
+                    return self.send_error_json(
+                        404, "预览会话已失效（暂存文件可能被清理），请重新开始")
+            else:
+                real = os.path.realpath(src)
+                if not os.path.isfile(real):
+                    return self.send_error_json(404, "源文件不存在")
+                if not is_within(real, allowed_roots()):
+                    return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        os.makedirs(STAGE_DIR, exist_ok=True)
+        if stage:
+            out_id = stage
+            out_path = os.path.join(STAGE_DIR, stage + ".next.pdf")
+        else:
+            out_id = new_stage_id()
+            out_path = stage_file(out_id)
+
+        hint = payload.get("name")
+        if isinstance(hint, str) and hint.strip():
+            stem_src = hint.strip()
+        else:
+            stem_src = os.path.splitext(os.path.basename(src))[0]
+        base_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_src)[:80] or "文档"
+
+        print("[replace_all] term=%r repl=%r stage=%s targets=%s"
+              % (term[:20], repl[:20], stage or "-",
+                 len(targets) if targets else "all"),
+              file=sys.stderr, flush=True)
+
+        try:
+            import pdfbatch
+            with _edit_lock:
+                result = pdfbatch.replace_all(
+                    real, out_path, term, repl,
+                    ignore_case=bool(payload.get("ignore_case")),
+                    targets=targets)
+        except ValueError as exc:
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(500, "替换失败: %s" % exc)
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, "读取产物失败: %s" % exc)
+
+        if stage:
+            backup_stage_version(stage)
+            try:
+                os.replace(out_path, stage_file(stage))
+            except OSError as exc:
+                return self.send_error_json(500, "暂存覆盖失败: %s" % exc)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "inline; filename*=UTF-8''" + urllib.parse.quote(
+                "%s-替换.pdf" % base_stem))
+        self.send_header("X-Stage-Id", out_id)
+        self.send_header("X-Stage-Path", urllib.parse.quote(
+            stage_file(out_id), safe=""))
+        self.send_header("X-Replace-Edits", str(result["edits"]))
+        self.send_header("X-Replace-Occurrences", str(result["occurrences"]))
+        skipped = result.get("skipped") or []
+        if skipped:
+            self.send_header("X-Replace-Skipped",
+                             urllib.parse.quote("；".join(skipped[:5]), safe=""))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+    def _post_delete_terms(self, real, payload):
+        try:
+            import pdfbatch
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
+                os.path.basename(real))[0])
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            out_path = unique_out_path(
+                os.path.join(EXPORT_DIR, f"{stem}-已删除-{stamp}.pdf"))
+            with _edit_lock:
+                res = pdfbatch.delete_terms(
+                    real, out_path, payload.get("terms"),
+                    bool(payload.get("ignore_case", True)))
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            return self.send_error_json(500, "删除失败: %s" % exc)
+
+        missing = res.get("missing") or []
+        residue = sum(n for n in (res.get("residue") or {}).values() if n > 0)
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, "读取输出文件失败: %s" % exc)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + urllib.parse.quote(
+                os.path.basename(out_path)))
+        self.send_header("X-Out-Path", urllib.parse.quote(out_path, safe=""))
+        self.send_header("X-Delete-Edits", str(res.get("edits", 0)))
+        self.send_header("X-Delete-Removed", str(res.get("removed", 0)))
+        self.send_header("X-Delete-Total", str(res.get("total", 0)))
+        self.send_header("X-Delete-Remaining", str(res.get("remaining", 0)))
+        self.send_header("X-Delete-Residue", str(residue))
+        if missing:
+            self.send_header("X-Delete-Missing",
+                             urllib.parse.quote("、".join(missing), safe=""))
+        if res.get("skipped"):
+            self.send_header("X-Delete-Skipped",
+                             urllib.parse.quote(
+                                 "；".join(res["skipped"][:3]), safe=""))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _post_redact_terms(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(
+                400, "涂黑操作不允许覆盖原文件，只支持另存为")
+
+        try:
+            real = os.path.realpath(src)
+            if not os.path.isfile(real):
+                return self.send_error_json(404, "源文件不存在")
+            if not is_within(real, allowed_roots()):
+                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        terms = payload.get("terms")
+
+        style = str(payload.get("style") or "delete").strip()
+        if style not in ("delete", "redact"):
+            return self.send_error_json(400, "style 只能是 delete / redact")
+        if style == "delete":
+            return self._post_delete_terms(real, payload)
+
+        mode = payload.get("mode") or "term"
+        if mode not in ("term", "line", "para"):
+            return self.send_error_json(400, "mode 只能是 term / line / para")
+        try:
+            import pdfbatch
+            regions, per_term = pdfbatch.term_regions(
+                real, terms, bool(payload.get("ignore_case", True)), mode=mode)
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            return self.send_error_json(500, "定位关键词失败: %s" % exc)
+
+        missing = [w for w, n in per_term.items() if n == 0]
+        if not regions:
+            return self.send_error_json(
+                409, "这些词在文档里一处也没找到：%s。"
+                     "（若是扫描件/图片里的文字，涂黑删不掉它）"
+                     % "、".join(missing or ["（空）"]))
+
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
+            os.path.basename(real))[0])
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, f"{stem}-已涂黑-{stamp}.pdf"))
+
+        try:
+            with _edit_lock:
+                result = pdfredact.apply_redactions(real, out_path, regions)
+        except ValueError as exc:
+            return self.send_error_json(400, f"涂黑失败: {exc}")
+        except Exception as exc:  
+            return self.send_error_json(500, f"涂黑失败: {exc}")
+
+        if result.get("removed_glyphs", 0) <= 0:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(
+                409, "命中了位置，但一个字形都没删掉。"
+                     "如果这些词是图片/扫描件里的，涂黑无法删除其内容")
+
+        residue = 0
+        try:
+            for w in per_term:
+                residue += len(pdfbatch.find_text(out_path, w, True)["hits"])
+        except Exception:  
+            residue = -1
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, f"读取输出文件失败: {exc}")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + urllib.parse.quote(
+                os.path.basename(out_path)))
+        self.send_header("X-Out-Path", urllib.parse.quote(out_path, safe=""))
+        self.send_header("X-Redact-Regions", str(len(regions)))
+        self.send_header("X-Redact-Glyphs", str(result.get("removed_glyphs", 0)))
+        self.send_header("X-Redact-Residue", str(residue))
+        if missing:
+            self.send_header("X-Redact-Missing",
+                             urllib.parse.quote("、".join(missing), safe=""))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+    def _readable(self, src):
+        if not src:
+            return None, self.send_error_json(400, "缺少 path 参数")
+        try:
+            real = os.path.realpath(src)
+            if not os.path.isfile(real):
+                return None, self.send_error_json(404, "文件不存在")
+            if not is_within(real, allowed_roots()):
+                return None, self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return None, self.send_error_json(404, "文件不存在")
+        return real, None
+
+    def _post_split(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        real, err = self._readable(src)
+        if err:
+            return err
+        try:
+            per = int(payload.get("per") or 1)
+        except (TypeError, ValueError):
+            return self.send_error_json(400, "每份页数无效")
+
+        hint = payload.get("name")
+        stem_src = (hint.strip() if isinstance(hint, str) and hint.strip()
+                    else os.path.splitext(os.path.basename(real))[0])
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        try:
+            import pdfbatch
+            with _edit_lock:
+                made = pdfbatch.split_document(real, EXPORT_DIR, per,
+                                               base_name=stem_src)
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            return self.send_error_json(500, "拆分失败: %s" % exc)
+        self.send_json({"ok": True, "files": made, "count": len(made)})
+
+    def _post_merge(self, payload):
+        paths = payload.get("paths")
+        if not isinstance(paths, list) or len(paths) < 2:
+            return self.send_error_json(400, "合并至少需要两份文档")
+        if len(paths) > 50:
+            return self.send_error_json(400, "一次最多合并 50 份")
+        reals = []
+        for p in paths:
+            real, err = self._readable(urllib.parse.unquote(str(p or "")))
+            if err:
+                return err
+            reals.append(real)
+
+        hint = payload.get("name")
+        stem = (hint.strip() if isinstance(hint, str) and hint.strip()
+                else "合并文档")
+        stem = re.sub(r'[\\/:*?"<>|]', "_", stem)[:60] or "合并文档"
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        out_path = unique_out_path(
+            os.path.join(EXPORT_DIR, f"{stem}-合并-{stamp}.pdf"))
+        try:
+            import pdfbatch
+            with _edit_lock:
+                result = pdfbatch.merge_documents(reals, out_path)
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:  
+            return self.send_error_json(500, "合并失败: %s" % exc)
+        self.send_json({"ok": True, "path": out_path,
+                        "name": os.path.basename(out_path),
+                        "pages": result["pages"]})
+
     def _post_export(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
@@ -678,7 +1130,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_roots()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -694,8 +1146,12 @@ class Handler(BaseHTTPRequestHandler):
         dropped += before_n - len(objects)
 
         os.makedirs(EXPORT_DIR, exist_ok=True)
-        stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
-            os.path.basename(real))[0])
+        hint = payload.get("name")
+        if isinstance(hint, str) and hint.strip():
+            stem_src = hint.strip()
+        else:
+            stem_src = os.path.splitext(os.path.basename(real))[0]
+        stem = re.sub(r'[\\/:*?"<>|]', "_", stem_src)[:80] or "文档"
         stamp = time.strftime("%Y%m%d-%H%M%S")
         out_path = unique_out_path(
             os.path.join(EXPORT_DIR, f"{stem}-已编辑-{stamp}.pdf"))
@@ -709,6 +1165,33 @@ class Handler(BaseHTTPRequestHandler):
                      "annotations": annots})
         except Exception as exc:  
             return self.send_error_json(500, f"导出失败: {exc}")
+
+        rng = payload.get("range")
+        if isinstance(rng, str) and rng.strip():
+            try:
+                import pdfbatch
+                total = result.get("pages") or 0
+                if not total:
+                    total = len(pdfbatch.open_doc(out_path).page_refs())
+                picked = pdfbatch.parse_pages(rng, total)
+                if len(picked) != total:
+                    tmp = out_path + ".range.pdf"
+                    pdfbatch.export_pages(out_path, tmp, picked)
+                    spec = re.sub(r'[\\/:*?"<>|]', "_", rng.strip())[:24]
+                    new_path = unique_out_path(os.path.join(
+                        EXPORT_DIR, f"{stem}-第{spec}页-{stamp}.pdf"))
+                    os.replace(tmp, new_path)
+                    try:
+                        os.remove(out_path)
+                    except OSError:
+                        pass
+                    out_path = new_path
+                    out_name = os.path.basename(out_path)
+                    result["pages"] = len(picked)
+            except ValueError as exc:
+                return self.send_error_json(400, str(exc))
+            except Exception as exc:  
+                return self.send_error_json(500, f"按范围导出失败: {exc}")
 
         try:
             with open(out_path, "rb") as fp:
@@ -724,6 +1207,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Disposition",
             "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+        self.send_header("X-Export-Path", urllib.parse.quote(out_path, safe=""))
         self.send_header("X-Export-Pages", str(result.get("pages", 0)))
         self.send_header("X-Export-Objects", str(result.get("objects", 0)))
         self.send_header("X-Export-Dropped", str(dropped))
@@ -752,7 +1236,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, self._resolve_dirs(query)):
+            if not is_within(real, allowed_roots(query, self)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             import pdfreflow
             info = pdfreflow.list_paragraphs(real, page)
@@ -783,6 +1267,14 @@ class Handler(BaseHTTPRequestHandler):
         if len(text) > 20000:
             return self.send_error_json(400, "文字太长了（上限 20000 字）")
 
+        cell = payload.get("cell")
+        if cell is not None:
+            if (not isinstance(cell, (list, tuple)) or len(cell) != 2
+                    or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                               for v in cell)):
+                return self.send_error_json(400, "cell 参数无效（应为 [行, 列] 两个非负整数）")
+            cell = (cell[0], cell[1])
+
         orig = payload.get("orig")
         if orig is not None:
             if not isinstance(orig, str):
@@ -797,22 +1289,43 @@ class Handler(BaseHTTPRequestHandler):
             if len(page_text) > 200000:
                 return self.send_error_json(400, "page_text 太长了")
 
+        stage = payload.get("stage")
+        if stage is not None:
+            if not isinstance(stage, str) or not STAGE_ID_RE.match(stage):
+                return self.send_error_json(400, "stage 参数无效")
+
         try:
-            real = os.path.realpath(src)
-            if not os.path.isfile(real):
-                return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
-                return self.send_error_json(403, "该文件不在允许的扫描目录内")
+            if stage:
+                real = stage_file(stage)
+                if not os.path.isfile(real):
+                    return self.send_error_json(
+                        404, "预览会话已失效（暂存文件可能被清理），请重新开始")
+            else:
+                real = os.path.realpath(src)
+                if not os.path.isfile(real):
+                    return self.send_error_json(404, "源文件不存在")
+                if not is_within(real, allowed_roots()):
+                    return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
 
-        os.makedirs(EXPORT_DIR, exist_ok=True)
-        stem = re.sub(r'[\\/:*?"<>|]', "_",
-                      os.path.splitext(os.path.basename(real))[0])
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        out_path = unique_out_path(
-            os.path.join(EXPORT_DIR, "%s-改段落-%s.pdf" % (stem, stamp)))
-        out_name = os.path.basename(out_path)
+        print("[reflow] page=%d para=%d stage=%s cell=%s text=%r"
+              % (page, para, stage or "-", cell, text[:24]),
+              file=sys.stderr, flush=True)
+
+        os.makedirs(STAGE_DIR, exist_ok=True)
+        if stage:
+            out_id = stage
+            out_path = os.path.join(STAGE_DIR, stage + ".next.pdf")
+        else:
+            out_id = new_stage_id()
+            out_path = stage_file(out_id)
+        hint = payload.get("name")
+        if isinstance(hint, str) and hint.strip():
+            stem_src = hint.strip()
+        else:
+            stem_src = os.path.splitext(os.path.basename(src))[0]
+        base_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_src)[:80] or "文档"
 
         try:
             import pdfreflow
@@ -820,9 +1333,9 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     result = pdfreflow.apply_paragraph_edit(
                         real, out_path, page, para, text,
-                        orig_text=orig, page_text=page_text)
+                        orig_text=orig, page_text=page_text, cell=cell)
                 except ValueError as exc:
-                    if "放不下" not in str(exc):
+                    if cell is not None or "放不下" not in str(exc):
                         raise
                     result = pdfreflow.apply_paragraph_flow(
                         real, out_path, page, para, text,
@@ -848,6 +1361,13 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as exc:
             return self.send_error_json(500, "读取产物失败: %s" % exc)
 
+        if stage:
+            backup_stage_version(stage)
+            try:
+                os.replace(out_path, stage_file(stage))
+            except OSError as exc:
+                return self.send_error_json(500, "暂存覆盖失败: %s" % exc)
+
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Connection", "close")
@@ -855,7 +1375,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",
-            "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+            "inline; filename*=UTF-8''" + urllib.parse.quote(
+                "%s-改段落.pdf" % base_stem))
+        self.send_header("X-Stage-Id", out_id)
+        self.send_header("X-Stage-Path", urllib.parse.quote(
+            stage_file(out_id), safe=""))
         self.send_header("X-Reflow-Lines-Before", str(result["lines_before"]))
         self.send_header("X-Reflow-Lines-After", str(result["lines_after"]))
         self.send_header("X-Reflow-Shift", str(result["shift"]))
@@ -873,6 +1397,69 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+    def _post_stage(self, payload):
+        sid = payload.get("id")
+        if not isinstance(sid, str) or not STAGE_ID_RE.match(sid):
+            return self.send_error_json(400, "id 无效")
+        path = stage_file(sid)
+        removed = False
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+                removed = True
+        except OSError:
+            pass
+        try:
+            nxt = os.path.join(STAGE_DIR, sid + ".next.pdf")
+            if os.path.isfile(nxt):
+                os.remove(nxt)
+        except OSError:
+            pass
+        for n in stage_versions(sid):
+            try:
+                os.remove(stage_version_path(sid, n))
+            except OSError:
+                pass
+        self.send_json({"ok": True, "removed": removed})
+
+
+    def _post_stage_undo(self, payload):
+        sid = payload.get("id")
+        if not isinstance(sid, str) or not STAGE_ID_RE.match(sid):
+            return self.send_error_json(400, "id 无效")
+
+        with _edit_lock:
+            vers = stage_versions(sid)
+            if not vers:
+                return self.send_error_json(
+                    400, "这一版已经是最早的了，没有更早的版本可退回")
+            last = vers[-1]
+            src = stage_version_path(sid, last)
+            dst = stage_file(sid)
+            tmp = os.path.join(STAGE_DIR, sid + ".undo.pdf")
+            try:
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
+            except OSError as exc:
+                try:
+                    if os.path.isfile(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+                return self.send_error_json(500, "撤销失败: %s" % exc)
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+
+        self.send_json({
+            "ok": True,
+            "stageId": sid,
+            "stagePath": dst,
+            "remaining": len(vers) - 1,
+        })
+
+
     def _post_redact(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
         if not src:
@@ -886,7 +1473,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_roots()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -896,8 +1483,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(400, "没有有效的涂黑区域")
 
         os.makedirs(EXPORT_DIR, exist_ok=True)
-        stem = re.sub(r'[\\/:*?"<>|]', "_", os.path.splitext(
-            os.path.basename(real))[0])
+        base = os.path.splitext(os.path.basename(real))[0]
+        given = str(payload.get("name") or "").strip()
+        if given:
+            base = os.path.splitext(os.path.basename(given))[0]
+        stem = re.sub(r'[\\/:*?"<>|]', "_", base)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         out_path = unique_out_path(
             os.path.join(EXPORT_DIR, f"{stem}-已涂黑-{stamp}.pdf"))
@@ -936,6 +1526,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Disposition",
             "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+        self.send_header("X-Out-Path", urllib.parse.quote(out_path, safe=""))
         self.send_header("X-Redact-Pages", str(result.get("pages_redacted", 0)))
         self.send_header("X-Redact-Glyphs", str(result.get("removed_glyphs", 0)))
         self.send_header("X-Redact-Meta",
@@ -960,7 +1551,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, SCAN_DIRS):
+            if not is_within(real, allowed_roots()):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1023,6 +1614,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Disposition",
             "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
+        self.send_header("X-Out-Path", urllib.parse.quote(out_path, safe=""))
         self.send_header("X-Replace-Pages", str(result.get("pages_replaced", 0)))
         self.send_header("X-Replace-Glyphs", str(result.get("replaced_glyphs", 0)))
         self.end_headers()
@@ -1074,7 +1666,7 @@ class Handler(BaseHTTPRequestHandler):
             size = os.path.getsize(real)
         except OSError:
             return self.send_error_json(404, "文件不存在")
-        if not is_within(real, self._resolve_dirs(query)):
+        if not is_within(real, allowed_roots(query, self)):
             return self.send_error_json(403, "该文件不在允许的扫描目录内")
 
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
@@ -1107,6 +1699,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         self.send_header("Cache-Control", "no-cache")
+        if (query.get("download") or [""])[0] in ("1", "true"):
+            fn = (query.get("name") or [""])[0]
+            fn = urllib.parse.unquote(fn) if fn else os.path.basename(real)
+            fn = re.sub(r'[\\/:*?"<>|\r\n]', "_", fn)[:120] or "document.pdf"
+            self.send_header("Content-Disposition",
+                             "attachment; filename*=UTF-8''" +
+                             urllib.parse.quote(fn))
         if partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
@@ -1172,7 +1771,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, self._resolve_dirs(query)):
+            if not is_within(real, allowed_roots(query, self)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
         except Exception as exc:  
@@ -1267,8 +1866,28 @@ def run_startup_check():
         print("    但页面可能异常，建议先修复；或用 --no-check 跳过自检。")
 
 
+def clean_stage_orphans():
+    if not os.path.isdir(STAGE_DIR):
+        return 0
+    limit = time.time() - STAGE_KEEP_SEC
+    n = 0
+    try:
+        names = os.listdir(STAGE_DIR)
+    except OSError:
+        return 0
+    for name in names:
+        fp = os.path.join(STAGE_DIR, name)
+        try:
+            if os.path.isfile(fp) and os.path.getmtime(fp) < limit:
+                os.remove(fp)
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
 def main():
-    global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR
+    global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR
 
     ap = argparse.ArgumentParser(description="本地 PDF 查看器服务")
     ap.add_argument("--dir", action="append", default=[],
@@ -1284,6 +1903,8 @@ def main():
                     help="编辑数据目录，默认 <项目>/edits")
     ap.add_argument("--annot-dir", default=None,
                     help="标注数据目录，默认 <项目>/annotations")
+    ap.add_argument("--stage-dir", default=None,
+                    help="预览暂存目录，默认 <项目>/_stage（测试必须重定向）")
     args = ap.parse_args()
 
     if args.export_dir:
@@ -1292,6 +1913,12 @@ def main():
         EDIT_DIR = os.path.realpath(args.edits_dir)
     if args.annot_dir:
         ANNOT_DIR = os.path.realpath(args.annot_dir)
+    if args.stage_dir:
+        STAGE_DIR = os.path.realpath(args.stage_dir)
+    os.makedirs(STAGE_DIR, exist_ok=True)
+    dropped = clean_stage_orphans()
+    if dropped:
+        print("已清理 %d 个过期预览暂存文件" % dropped)
 
     SCAN_DIRS = [os.path.realpath(d) for d in (args.dir or default_dirs())
                  if os.path.isdir(d)]

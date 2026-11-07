@@ -198,9 +198,29 @@ function restoreSnapshot(json) {
   syncHistoryButtons();
 }
 
-export function undoEdit() {
+let stageUndoHandler = null;
+let stagePresent = false;
+
+export function setStageUndoHandler(fn) {
+  stageUndoHandler = fn;
+}
+
+export function setStagePresent(v) {
+  stagePresent = !!v;
+  syncHistoryButtons();
+}
+
+export async function undoEdit() {
   commitHistory();                                   
-  if (!history.past.length) { toast('没有可撤销的操作', 1200); return; }
+  if (!history.past.length) {
+    if (stageUndoHandler) {
+      let done = false;
+      try { done = await stageUndoHandler(); } catch (e) { done = false; }
+      if (done) { syncHistoryButtons(); return; }
+    }
+    toast('没有可撤销的操作', 1200);
+    return;
+  }
   history.future.push(takeSnapshot());
   restoreSnapshot(history.past.pop());
   toast('已撤销', 900);
@@ -215,7 +235,7 @@ export function redoEdit() {
 }
 
 function syncHistoryButtons() {
-  if (els.btnEditUndo) els.btnEditUndo.disabled = !history.past.length;
+  if (els.btnEditUndo) els.btnEditUndo.disabled = !history.past.length && !stagePresent;
   if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
 }
 
@@ -698,21 +718,48 @@ export function refreshPagePanel() {
 }
 
 
+
+export function downloadServerFile(path, name) {
+  const q = new URLSearchParams({ path, download: '1' });
+  if (name) q.set('name', name);
+  const a = document.createElement('a');
+  a.href = '/api/file?' + q.toString();
+  a.download = name || '';
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 0);
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 export function buildExportPayload() {
   return {
-    path: state.filePath,
+    path: state.contentPath || state.filePath,
+    name: state.fileName,
     pages: editState.pages,
     objects: payloadObjects(editState.objects),
   };
 }
 
-export async function exportPdf() {
+export async function exportPdf(opts = {}) {
   if (!state.filePath) {
     toast('请先打开一个文档', 1600);
     return;
   }
 
   const payload = buildExportPayload();
+  if (opts.range) payload.range = String(opts.range);
   const nRedact = redactCount();
   const nReplace = replaceCount();
   const hasSpecial = nRedact > 0 || nReplace > 0;
@@ -727,7 +774,8 @@ export async function exportPdf() {
 
   const noChange = !hasAnyEdit(payload) && !annots.length;
   if (noChange && hasSpecial) {
-    toast('涂黑 / 替换 不参与「导出 PDF」，请点对应的「并另存为…」', 3200);
+    toast('「导出 PDF」不含涂黑 / 替换。要保存它们请点对应的「并另存为…」' +
+      '（会连当前编辑一起带上）', 4200);
     return;
   }
 
@@ -737,8 +785,9 @@ export async function exportPdf() {
     if (nReplace > 0) parts.push(`替换 ${nReplace} 处`);
     const ok = confirm(
       `你画了 ${parts.join('、')}，但「导出 PDF」不包含这些操作。\n\n` +
-      `· 继续导出：仅导出其它编辑内容，这些区域不会被处理。\n` +
-      `· 要真正执行：请取消，改用对应的「并另存为…」。\n\n确定继续导出吗？`
+      `· 要连它们一起保存：先取消，点对应的「并另存为…」。\n` +
+      `  它作用在**当前版本**上，你刚改的段落会一起带进去。\n` +
+      `· 继续导出：只导出其它编辑，这些区域不会被处理。\n\n确定继续导出吗？`
     );
     if (!ok) {
       toast('已取消。要执行请点对应的「并另存为…」', 2800);
@@ -770,7 +819,6 @@ export async function exportPdf() {
       throw new Error(msg);
     }
 
-    const blob = await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
     let name = `${state.fileName}-已编辑.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
@@ -778,12 +826,17 @@ export async function exportPdf() {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    const rawOut = r.headers.get('X-Export-Path') || '';
+    let outPath = rawOut;
+    if (rawOut) {
+      try { outPath = decodeURIComponent(rawOut); } catch (e) { outPath = rawOut; }
+    }
+
+    if (outPath) {
+      downloadServerFile(outPath, name);
+    } else {
+      downloadBlob(await r.blob(), name);
+    }
 
     const pages = r.headers.get('X-Export-Pages');
     const dropped = r.headers.get('X-Export-Dropped');
@@ -805,8 +858,16 @@ export async function exportPdf() {
     } else {
       toast(msg, 3200);
     }
+
+    if (outPath) {
+      state.contentPath = outPath;
+      state.savedPath = outPath;
+    }
+    await discardStage();
+    return { ok: true, name, outPath };
   } catch (e) {
     toast(e.message || '导出失败', 3000);
+    return { ok: false, error: e.message || String(e) };
   } finally {
     setBusy(false);
   }
@@ -850,7 +911,8 @@ export async function redactPdf() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        path: state.filePath,
+        path: state.contentPath || state.filePath,
+        name: state.fileName,
         regions,
         overwrite: false,
       }),
@@ -865,7 +927,12 @@ export async function redactPdf() {
       throw new Error(msg);
     }
 
-    const blob = await r.blob();
+    const rawOut = r.headers.get('X-Out-Path') || '';
+    let outPath = rawOut;
+    if (rawOut) {
+      try { outPath = decodeURIComponent(rawOut); } catch (e) { outPath = rawOut; }
+    }
+    const blob = outPath ? null : await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
     let name = `${state.fileName}-已涂黑.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
@@ -873,18 +940,19 @@ export async function redactPdf() {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    if (outPath) {
+      downloadServerFile(outPath, name);
+    } else {
+      downloadBlob(blob, name);
+    }
 
     const glyphs = r.headers.get('X-Redact-Glyphs') || '0';
     const pages = r.headers.get('X-Redact-Pages') || '0';
     const outline = r.headers.get('X-Redact-Outline') || '0';
-    toast(`涂黑完成：${pages} 页，移除 ${glyphs} 个字形` +
-      (outline !== '0' ? `，清理 ${outline} 条书签标题` : ''), 4200);
+    const merged = (state.stage && state.stage.id)
+      ? '（已包含尚未保存的段落编辑）' : '';
+    toast(`涂黑完成${merged}：${pages} 页，移除 ${glyphs} 个字形` +
+      (outline !== '0' ? `，清理 ${outline} 条书签标题` : ''), 4800);
   } catch (e) {
     toast(e.message || '涂黑失败', 4000);
   } finally {
@@ -945,7 +1013,12 @@ export async function replacePdf() {
       throw new Error(msg);
     }
 
-    const blob = await r.blob();
+    const rawOut = r.headers.get('X-Out-Path') || '';
+    let outPath = rawOut;
+    if (rawOut) {
+      try { outPath = decodeURIComponent(rawOut); } catch (e) { outPath = rawOut; }
+    }
+    const blob = outPath ? null : await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
     let name = `${state.fileName}-已替换.pdf`;
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
@@ -953,12 +1026,11 @@ export async function replacePdf() {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    if (outPath) {
+      downloadServerFile(outPath, name);
+    } else {
+      downloadBlob(blob, name);
+    }
 
     const glyphs = r.headers.get('X-Replace-Glyphs') || '0';
     const pages = r.headers.get('X-Replace-Pages') || '0';
@@ -1125,14 +1197,14 @@ function closeRedactConfirm() {
   if (els.redactConfirm) els.redactConfirm.hidden = true;
 }
 
-export async function reflowParagraph(page, para, text, orig, pageText) {
+export async function reflowParagraph(page, para, text, orig, pageText, cell) {
   if (!state.filePath) {
     toast('请先打开一个文档', 1600);
-    return false;
+    return null;
   }
   if (!text || !text.trim()) {
     toast('文字不能为空。要整段删掉，请用涂黑工具', 2600);
-    return false;
+    return null;
   }
 
   const btn = els.paraOk;
@@ -1141,9 +1213,13 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
     const r = await fetch('/api/reflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: state.filePath, page, para, text,
+      body: JSON.stringify({ path: state.contentPath || state.filePath,
+                             name: state.fileName,
+                             page, para, text,
                              orig: orig || null,
-                             page_text: pageText || null }),
+                             page_text: pageText || null,
+                             cell: cell || null,
+                             stage: state.stage.id || null }),
     });
 
     if (!r.ok) {
@@ -1153,23 +1229,23 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
         if (j.error) msg = j.error;
       } catch (e) {  }
       toast(msg, 8000);
-      return false;
+      return null;
     }
 
-    const blob = await r.blob();
-    const cd = r.headers.get('Content-Disposition') || '';
-    let name = `${state.fileName}-改段落.pdf`;
-    const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
-    if (m) {
-      try { name = decodeURIComponent(m[1]); } catch (e) {  }
+    const sid = r.headers.get('X-Stage-Id') || '';
+    const rawPath = r.headers.get('X-Stage-Path') || '';
+    let spath = rawPath;
+    if (rawPath) {
+      try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
     }
+    if (!sid || !spath) {
+      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      return null;
+    }
+    state.stage = { id: sid, path: spath };
+    state.contentPath = spath;
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    try { await r.arrayBuffer(); } catch (e) {  }
 
     const lb = r.headers.get('X-Reflow-Lines-Before');
     const la = r.headers.get('X-Reflow-Lines-After');
@@ -1178,26 +1254,32 @@ export async function reflowParagraph(page, para, text, orig, pageText) {
     if (fbRaw) {
       try { fb = decodeURIComponent(fbRaw); } catch (e) { fb = fbRaw; }
     }
-
-    const nPages = parseInt(r.headers.get('X-Reflow-Pages') || '1', 10) || 1;
-    const nNew = parseInt(r.headers.get('X-Reflow-New-Pages') || '0', 10) || 0;
-
-    let msg = `已重排并另存：${name}`;
-    if (lb && la && lb !== la) msg += `（${lb} 行 → ${la} 行）`;
-    else if (la) msg += `（${la} 行）`;
-    if (nPages > 1) msg += `，跨 ${nPages} 页续排`;
-    if (nNew > 0) msg += `，新增 ${nNew} 页`;
-    if (fb) {
-      msg += `　⚠ 这些字用了替代字体，字形会与原文不同：${fb}`;
-      toast(msg, 9000);
-    } else {
-      toast(msg, 3800);
-    }
-    return true;
+    return {
+      stageId: sid,
+      stagePath: spath,
+      linesBefore: lb ? parseInt(lb, 10) : null,
+      linesAfter: la ? parseInt(la, 10) : null,
+      pages: parseInt(r.headers.get('X-Reflow-Pages') || '1', 10) || 1,
+      newPages: parseInt(r.headers.get('X-Reflow-New-Pages') || '0', 10) || 0,
+      fallback: fb,
+    };
   } catch (e) {
     toast(`重排失败：${e.message || e}`, 5000);
-    return false;
+    return null;
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
+}
+
+export async function discardStage() {
+  const sid = state.stage.id;
+  state.stage = { id: null, path: null };
+  if (!sid) return;
+  try {
+    await fetch('/api/stage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: sid }),
+    });
+  } catch (e) {  }
 }

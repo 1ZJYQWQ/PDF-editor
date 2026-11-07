@@ -6,7 +6,7 @@ import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
-FILES = ["geom.js", "core.js", "annot.js", "edit.js", "app.js"]
+FILES = ["geom.js", "core.js", "annot.js", "edit.js", "batch.js", "app.js"]
 
 NODE_CANDIDATES = [
     r"C:\Users\zhangjiayang\.workbuddy\binaries\node\versions\22.22.2-3\node.exe",

@@ -6,8 +6,6 @@ from pdfedit import (
     _escape_literal, STANDARD_WIDTHS,
 )
 
-
-
 def mat_mul(m, n):
     a1, b1, c1, d1, e1, f1 = m
     a2, b2, c2, d2, e2, f2 = n
@@ -20,16 +18,11 @@ def mat_mul(m, n):
         e1 * b2 + f1 * d2 + f2,
     )
 
-
 def mat_apply(m, x, y):
     a, b, c, d, e, f = m
     return (a * x + c * y + e, b * x + d * y + f)
 
-
 IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-
-
-
 
 class GlyphBox:
 
@@ -57,18 +50,15 @@ class GlyphBox:
         return (f"GlyphBox({self.x0:.1f},{self.y0:.1f} - "
                 f"{self.x1:.1f},{self.y1:.1f})")
 
-
-
-
 class FontInfo:
 
     def __init__(self, doc, font_dict):
-        self.missing_width = 500.0     
+        self.missing_width = 500.0
         self.widths = {}
         self.base_font = ""
         self.is_cid = False
-        self.code_bytes = 1            
-        self.to_unicode = {}           
+        self.code_bytes = 1
+        self.to_unicode = {}
         self._resolve(doc, font_dict)
 
     def _resolve(self, doc, fd):
@@ -133,7 +123,7 @@ class FontInfo:
                     if isinstance(w, (int, float)):
                         self.widths[int(key) + k] = float(w)
                 i += 2
-            else:                      
+            else:
                 if i + 2 < len(warr):
                     end = doc.resolve(warr[i + 1])
                     w = doc.resolve(warr[i + 2])
@@ -240,18 +230,14 @@ class FontInfo:
                 return float(table.get(ch, self.missing_width))
         return self.missing_width
 
-
-
-
 class ContentStreamInterpreter:
 
     def __init__(self, doc, resources):
         self.doc = doc
         self.resources = resources if isinstance(resources, dict) else {}
-        self.fonts = {}              
-        self.glyphs = []             
-        self.ops = []                
-
+        self.fonts = {}
+        self.glyphs = []
+        self.ops = []
 
     def font(self, alias):
         if alias in self.fonts:
@@ -263,7 +249,6 @@ class ContentStreamInterpreter:
         info = FontInfo(self.doc, fd)
         self.fonts[alias] = info
         return info
-
 
     def run(self, data):
         tokens = tokenize(data)
@@ -438,7 +423,7 @@ class ContentStreamInterpreter:
                     gs.ctm)
                 continue
 
-            w1000 = info.width_of(code)      
+            w1000 = info.width_of(code)
 
             gx0, gy0 = 0.0, 0.0
             gx1, gy1 = w1000 / 1000.0, 1.0
@@ -463,7 +448,6 @@ class ContentStreamInterpreter:
             full = mat_mul(
                 mat_mul((size * hscale, 0, 0, size, 0, gs.rise), gs.tm),
                 gs.ctm)
-
 
 class _GraphState:
 
@@ -499,9 +483,6 @@ class _GraphState:
          self.char_space, self.word_space, self.h_scale, self.leading,
          self.rise) = self._stack.pop()
 
-
-
-
 def _read_array(tokens, i):
     out = []
     i += 1
@@ -528,7 +509,6 @@ def _read_array(tokens, i):
             out.append(tok)
         i += 1
     return out, i
-
 
 def _read_dict(tokens, i):
     out = {}
@@ -562,7 +542,6 @@ def _read_dict(tokens, i):
         i += 1
     return out, i
 
-
 def _pop_nums(stack, count):
     vals = []
     for _ in range(count):
@@ -571,13 +550,11 @@ def _pop_nums(stack, count):
     vals.reverse()
     return vals
 
-
 def _last_num(stack):
     for v in reversed(stack):
         if isinstance(v, (int, float)):
             return float(v)
     return None
-
 
 def _string_bytes(tok):
     if isinstance(tok, bytes) and tok.startswith(b"("):
@@ -595,7 +572,6 @@ def _string_bytes(tok):
         return tok
     return b""
 
-
 def _string_codes(tok, nbytes=1):
     raw = _string_bytes(tok)
     if not raw:
@@ -607,12 +583,10 @@ def _string_codes(tok, nbytes=1):
     return [int.from_bytes(raw[i:i + 2], "big")
             for i in range(0, len(raw), 2)]
 
-
 def _codes_to_bytes(codes, nbytes=1):
     if nbytes == 2:
         return b"".join((int(c) & 0xFFFF).to_bytes(2, "big") for c in codes)
     return bytes(int(c) & 0xFF for c in codes)
-
 
 def _decode_literal(raw):
     out = bytearray()
@@ -647,9 +621,6 @@ def _decode_literal(raw):
             i += 2
     return bytes(out)
 
-
-
-
 def read_page_content(doc, page_ref):
     page = doc.resolve(page_ref)
     if not isinstance(page, dict):
@@ -671,7 +642,6 @@ def read_page_content(doc, page_ref):
 
     collect(contents)
     return b"\n".join(parts)
-
 
 def redact_page_content(doc, page_ref, rects):
     if not rects:
@@ -721,15 +691,14 @@ def redact_page_content(doc, page_ref, rects):
 
     return b"\n".join(out)
 
-
 def _rewrite_text(data, killed, font_bytes=None):
     tokens = tokenize(data)
     out = bytearray()
-    operand_start = None      
+    operand_start = None
     i = 0
     n = len(tokens)
     op_index = 0
-    cur_nb = 1                
+    cur_nb = 1
 
     while i < n:
         tok = tokens[i]
@@ -782,7 +751,6 @@ def _rewrite_text(data, killed, font_bytes=None):
 
     return bytes(out)
 
-
 def _font_bytes_of(tokens, i0, i1, font_bytes):
     if not font_bytes:
         return 1
@@ -792,12 +760,10 @@ def _font_bytes_of(tokens, i0, i1, font_bytes):
             return font_bytes.get(t[1:].decode("latin-1"), 1)
     return 1
 
-
 def _emit_range(out, tokens, i0, i1):
     for t in tokens[i0:i1]:
         out += t if isinstance(t, bytes) else str(t).encode("latin-1")
         out += b" "
-
 
 def _rebuild_text_op(tokens, ops_start, op_i, op_index, killed, nbytes=1):
     op = tokens[op_i].decode("latin-1")
@@ -839,7 +805,7 @@ def _rebuild_text_op(tokens, ops_start, op_i, op_index, killed, nbytes=1):
             kept.append(code)
 
     if not kept:
-        return None                 
+        return None
 
     prefix = b" ".join(
         t if isinstance(t, bytes) else str(t).encode("latin-1")
@@ -848,20 +814,17 @@ def _rebuild_text_op(tokens, ops_start, op_i, op_index, killed, nbytes=1):
     return head + _encode_pdf_string(_codes_to_bytes(kept, nbytes)) + \
         b" " + op.encode("latin-1")
 
-
 def _array_start(tokens, i0, i1):
     for k in range(i0, i1):
         if tokens[k] == b"[":
             return k
     return i1
 
-
 def _index_of(tokens, i0, i1):
     for k in range(i0, i1):
         if tokens[k] == b"[":
             return k
     return i0
-
 
 def _filter_tj_array(arr, op_index, killed, nbytes=1):
     out = []
@@ -898,7 +861,6 @@ def _filter_tj_array(arr, op_index, killed, nbytes=1):
         return [], False
     return cleaned, True
 
-
 def _serialize_tj_array(items, nbytes=1):
     parts = []
     for item in items:
@@ -913,14 +875,13 @@ def _serialize_tj_array(items, nbytes=1):
             parts.append(_encode_pdf_string(item))
     return b"[ " + b" ".join(parts) + b" ]"
 
-
 def _encode_pdf_string(raw):
     printable = sum(1 for c in raw if 32 <= c < 127)
     if raw and printable / len(raw) < 0.6:
         return b"<" + raw.hex().encode("ascii") + b">"
     esc = bytearray()
     for c in raw:
-        if c in (0x28, 0x29, 0x5C):        
+        if c in (0x28, 0x29, 0x5C):
             esc.append(0x5C)
             esc.append(c)
         elif c < 32 or c > 126:
@@ -929,9 +890,6 @@ def _encode_pdf_string(raw):
         else:
             esc.append(c)
     return b"(" + bytes(esc) + b")"
-
-
-
 
 def clean_metadata(doc):
     removed = []
@@ -953,7 +911,6 @@ def clean_metadata(doc):
             removed.append("XMP Metadata")
 
     return removed
-
 
 def clean_outline_titles(doc, killed_texts):
     changed = 0
@@ -979,7 +936,6 @@ def clean_outline_titles(doc, killed_texts):
 
     return changed
 
-
 def collect_outline_titles(doc):
     out = []
     for key, val in list(doc.objects.items()):
@@ -992,7 +948,6 @@ def collect_outline_titles(doc):
             continue
         out.append(_normalize(_bytes_to_text(title)))
     return out
-
 
 def _bytes_to_text(raw):
     if isinstance(raw, str):
@@ -1009,12 +964,8 @@ def _bytes_to_text(raw):
             return ""
     return raw.decode("latin-1", "replace")
 
-
 def _normalize(s):
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
-
-
-
 
 def apply_redactions(src_path, out_path, redactions, clean_meta=True):
     from pdfedit import build_pdf
@@ -1050,8 +1001,8 @@ def apply_redactions(src_path, out_path, redactions, clean_meta=True):
 
     total_glyphs = 0
     stats = []
-    orphans = set()          
-    killed_texts = set()     
+    orphans = set()
+    killed_texts = set()
     for pidx, rects in per_page.items():
         pref = refs[pidx]
 
@@ -1104,7 +1055,6 @@ def apply_redactions(src_path, out_path, redactions, clean_meta=True):
         "dropped_objects": dropped_objs,
         "details": stats,
     }
-
 
 def apply_text_replace(src_path, out_path, replacements, clean_meta=True):
     from pdfedit import (ContentBuilder, build_cjk_font, build_pdf,
@@ -1161,7 +1111,7 @@ def apply_text_replace(src_path, out_path, replacements, clean_meta=True):
             glyphs = interp.glyphs
 
         all_killed = set()
-        anchors = []          
+        anchors = []
         for rect, txt in items:
             hit = [g for g in glyphs if g.intersects(rect)]
             if not hit:
@@ -1211,7 +1161,6 @@ def apply_text_replace(src_path, out_path, replacements, clean_meta=True):
             "pages_replaced": len(stats),
             "replaced_glyphs": total_replaced, "details": stats}
 
-
 def _collect_content_refs(doc, page_ref):
     page = doc.resolve(page_ref)
     if not isinstance(page, dict):
@@ -1231,7 +1180,6 @@ def _collect_content_refs(doc, page_ref):
 
     walk(page.get("Contents"))
     return out
-
 
 def _drop_objects(doc, refs):
     dropped = 0

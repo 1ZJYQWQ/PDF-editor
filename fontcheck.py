@@ -10,10 +10,8 @@ SAMPLES = "Aaz09中文测试你好世界涂层"
 
 CJK_LO, CJK_HI = 0x4E00, 0x9FFF
 
-
 def read_tables(data, base=0):
     return data[base:base + 4], pdffont._read_table_dir(data, base)
-
 
 def cmap_with_formats(data, tables):
     out = pdffont.parse_cmap(data, tables)
@@ -33,7 +31,6 @@ def cmap_with_formats(data, tables):
                 continue
             used.add(str(struct.unpack(">H", data[so:so + 2])[0]))
     return out, sorted(used)
-
 
 def stroke_ratios(data, tables, cmap, upem):
     if "glyf" not in tables or "loca" not in tables or "head" not in tables:
@@ -68,7 +65,6 @@ def stroke_ratios(data, tables, cmap, upem):
         out[ch] = t * 100.0 / (upem or 1000)
     return out
 
-
 def weight_axes(data, tables):
     if "fvar" not in tables:
         return []
@@ -87,7 +83,6 @@ def weight_axes(data, tables):
         mn, df, mx = struct.unpack(">iii", data[p + 4:p + 16])
         out.append((tag, mn / 65536.0, df / 65536.0, mx / 65536.0))
     return out
-
 
 def inspect(path):
     print("=" * 62)
@@ -205,7 +200,6 @@ def inspect(path):
     print()
     return 1 if bad else 0
 
-
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -218,7 +212,6 @@ def main(argv):
             print("!! %s 检查失败: %s: %s" % (path, type(exc).__name__, exc))
             rc = 1
     return rc
-
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

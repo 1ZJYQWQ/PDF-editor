@@ -1,9 +1,8 @@
-import statistics
 
+import statistics
 
 def eff_size(g):
     return g.y1 - g.y0
-
 
 def row_columns(row, gap_ratio=2.0, min_gap=6.0):
     gs = row["g"]
@@ -19,7 +18,6 @@ def row_columns(row, gap_ratio=2.0, min_gap=6.0):
         if d > limit:
             cols += 1
     return cols, max_gap
-
 
 def build_rows(glyphs, tol=2.0):
     rows = []
@@ -39,7 +37,6 @@ def build_rows(glyphs, tol=2.0):
         r["cols"], r["maxgap"] = row_columns(r)
     rows.sort(key=lambda r: -r["y"])
     return rows
-
 
 def split_columns(glyphs, gap_min=12.0):
     if not glyphs:
@@ -81,10 +78,28 @@ def split_columns(glyphs, gap_min=12.0):
             bands[-1].append(g)
     return bands
 
-
 def _band_extent(rows):
     return (min(r["x0"] for r in rows), max(r["x1"] for r in rows))
 
+def _group_by_rules(rows, rules, size=0.0, tol=1.5):
+    if not rules or len(rules) < 2 or not rows:
+        return [(i, r) for i, r in enumerate(rows)]
+
+    top = max(r["y"] for r in rows)
+    bottom = min(r["y"] for r in rows)
+    pad = max((size or 10.0) * 2.5, 20.0)
+    ys = sorted((y for y in rules if bottom - pad <= y <= top + pad),
+                reverse=True)
+    if len(ys) < 2:
+        return [(i, r) for i, r in enumerate(rows)]
+
+    def gid_of(y):
+        for i in range(len(ys) - 1):
+            if y <= ys[i] + tol and y > ys[i + 1] - tol:
+                return i
+        return len(ys) - 1 if y <= ys[-1] else -1
+
+    return [(gid_of(r["y"]), r) for r in rows]
 
 def table_cells(p, gap_ratio=2.0, min_gap=6.0, tol=5.0):
     rows = p.get("rows") or []
@@ -102,7 +117,7 @@ def table_cells(p, gap_ratio=2.0, min_gap=6.0, tol=5.0):
                 xs.append(b.x0)
         row_starts.append(xs)
 
-    buckets = []          
+    buckets = []
     for xs in row_starts:
         for x in xs:
             for b in buckets:
@@ -115,33 +130,49 @@ def table_cells(p, gap_ratio=2.0, min_gap=6.0, tol=5.0):
     if len(cols) < 2:
         return [], cols
 
+    grouped = _group_by_rules(rows, p.get("rules"), p.get("size") or 0.0)
+
+    order, gmap = [], {}
+    for gid, r in grouped:
+        if gid not in gmap:
+            gmap[gid] = []
+            order.append(gid)
+        gmap[gid].append(r)
+
     cells = []
-    for ri, r in enumerate(rows):
+    for gid in order:
+        grows = gmap[gid]
+        first = rows.index(grows[0])
         buckets = [[] for _ in cols]
-        for g in r["g"]:
-            ci = 0
-            for i, cx in enumerate(cols):
-                if g.x0 >= cx - tol:
-                    ci = i
-            buckets[ci].append(g)
+        for r in grows:
+            for g in r["g"]:
+                ci = 0
+                for i, cx in enumerate(cols):
+                    if g.x0 >= cx - tol:
+                        ci = i
+                buckets[ci].append(g)
         for ci, gs in enumerate(buckets):
             if not gs:
                 continue
-            gs = sorted(gs, key=lambda g: g.x0)
+            gs = sorted(gs, key=lambda g: (-round(g.y0, 2), g.x0))
             right = cols[ci + 1] if ci + 1 < len(cols) else p["right"]
             cells.append({
-                "row": ri, "col": ci,
-                "x0": gs[0].x0, "x1": gs[-1].x1,
-                "y0": r["y"], "y1": r["y"] + r["size"],
+                "row": first,
+                "gid": gid,
+                "col": ci,
+                "x0": min(g.x0 for g in gs),
+                "x1": max(g.x1 for g in gs),
+                "y0": grows[-1]["y"],
+                "y1": grows[0]["y"] + grows[0]["size"],
                 "right": right,
-                "size": r["size"],
-                "rows": [r],
+                "size": grows[0]["size"],
+                "rows": grows,
                 "glyphs": gs,
             })
     return cells, cols
 
-
-def build_page_model(glyphs, gap_min=12.0, indent_tol=3.0, gap_tol=0.25):
+def build_page_model(glyphs, gap_min=12.0, indent_tol=3.0, gap_tol=0.25,
+                     rules=None):
     bands = split_columns(glyphs, gap_min=gap_min)
     band_rows = [build_rows(b) for b in bands]
     band_rows = [rs for rs in band_rows if rs]
@@ -167,16 +198,15 @@ def build_page_model(glyphs, gap_min=12.0, indent_tol=3.0, gap_tol=0.25):
         for r in rs:
             r["col"] = ci
         rows.extend(rs)
-        for p in _paragraphs_of_rows(rs, indent_tol, gap_tol):
+        for p in _paragraphs_of_rows(rs, indent_tol, gap_tol, rules=rules):
             p["col"] = ci
             paras.append(p)
 
     gaps = [rs[i]["y"] - rs[i + 1]["y"] for rs in band_rows for i in range(len(rs) - 1)]
     body_gap = statistics.median(gaps) if gaps else 0.0
-    return rows, _finalize_paras(paras, body_gap)
+    return rows, _finalize_paras(paras, body_gap, rules=rules)
 
-
-def _finalize_paras(paras, body_gap):
+def _finalize_paras(paras, body_gap, rules=None):
     for p in paras:
         ys = [r["y"] for r in p["rows"]]
         p["top"] = max(ys)
@@ -186,10 +216,31 @@ def _finalize_paras(paras, body_gap):
         ncol_rows = sum(1 for r in p["rows"] if r.get("cols", 1) > 1)
         p["cols"] = max((r.get("cols", 1) for r in p["rows"]), default=1)
         p["table_like"] = ncol_rows >= 2 and ncol_rows * 2 >= len(p["rows"])
+        if rules:
+            p["rules"] = rules
     return paras
 
+def _rule_gids(rows, rules, tol=1.5, pad=30.0):
+    if not rules or len(rules) < 2 or not rows:
+        return [None] * len(rows)
+    top = max(r["y"] for r in rows)
+    bottom = min(r["y"] for r in rows)
+    ys = sorted((y for y in rules if bottom - pad <= y <= top + pad),
+                reverse=True)
+    if len(ys) < 2:
+        return [None] * len(rows)
+    out = []
+    for r in rows:
+        y = r["y"]
+        gid = None
+        for i in range(len(ys) - 1):
+            if y <= ys[i] + tol and y > ys[i + 1] - tol:
+                gid = i
+                break
+        out.append(gid)
+    return out
 
-def _paragraphs_of_rows(rows, indent_tol=3.0, gap_tol=0.25):
+def _paragraphs_of_rows(rows, indent_tol=3.0, gap_tol=0.25, rules=None):
     if not rows:
         return []
 
@@ -199,17 +250,23 @@ def _paragraphs_of_rows(rows, indent_tol=3.0, gap_tol=0.25):
     gaps = [rows[i]["y"] - rows[i + 1]["y"] for i in range(len(rows) - 1)]
     body_gap = statistics.median(gaps) if gaps else 0.0
 
+    gids = _rule_gids(rows, rules)
+
     paras = []
     for i, r in enumerate(rows):
         prev = rows[i - 1] if i else None
         new_para = True
         if prev is not None and paras:
             gap = prev["y"] - r["y"]
-            indented = r["x0"] > left + indent_tol          
+            indented = r["x0"] > left + indent_tol
             same_gap = body_gap > 0 and abs(gap - body_gap) <= max(1.2, body_gap * gap_tol)
-            same_x = abs(r["x0"] - left) <= indent_tol      
+            same_x = abs(r["x0"] - left) <= indent_tol
             same_size = abs(r["size"] - prev["size"]) <= 0.6
-            if not indented and same_gap and same_x and same_size:
+            gi, gp = gids[i], gids[i - 1]
+            same_rule = gi is not None and gp is not None and gi == gp
+            if same_rule:
+                new_para = False
+            elif not indented and same_gap and same_x and same_size:
                 new_para = False
         if new_para:
             paras.append({"rows": [r], "left": r["x0"], "right": r["x1"],
@@ -222,16 +279,12 @@ def _paragraphs_of_rows(rows, indent_tol=3.0, gap_tol=0.25):
             p["fonts"] = sorted(set(p["fonts"]) | set(r["fonts"]))
     return paras
 
-
-
 def row_text(row, text_of):
     return "".join(text_of.get(id(g), "") for g in row["g"])
-
 
 def _hex_code(g, code_bytes):
     n = code_bytes.get(g.font_alias, 1)
     return ("%0*X" % (n * 2, g.code & ((1 << (8 * n)) - 1)))
-
 
 def rebuild_ops(rows, code_bytes, positions=None):
     out = [b"q", b"BT"]

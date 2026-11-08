@@ -13,7 +13,6 @@ OUT = os.path.join(OUT_DIR, "NotoSansSC-Regular.ttf")
 KEEP = {"head", "hhea", "maxp", "hmtx", "loca", "glyf",
         "cmap", "OS/2", "post", "name"}
 
-
 def main(argv):
     wght = argv[1] if len(argv) > 1 else "400"
     if not os.path.exists(SRC):
@@ -55,7 +54,6 @@ def main(argv):
     print("下一步：用 fontcheck.py 体检（轮廓类型 / 字重 / 覆盖），")
     print("确认无误后把 pdffont.load_default() 指向它。")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

@@ -1,4 +1,7 @@
 
+
+
+
 import {
   pdfjsLib, state, els, cacheEls, $, uid, escapeHtml, debounce,
   toast, showLoading, hideLoading, api,
@@ -18,10 +21,13 @@ import {
   updateObject, pageSize, screenToNorm, refreshPagePanel, insertBlank,
   exportPdf, buildExportPayload, pdfToNorm, reflowParagraph, discardStage,
   undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
-  setStageUndoHandler, setStagePresent, redactCount,
+  setStageUndoHandler, setStagePresent, redactCount, dropTableRow,
+  insertTableRow,
 } from '/static/edit.js';
 
+
 import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } from '/static/geom.js';
+
 
 import { initBatchUI } from '/static/batch.js';
 
@@ -30,10 +36,14 @@ const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
 
 
+
+
+
 function pageSizeAt(page, scale) {
   const vp = page.getViewport({ scale, rotation: state.rotation });
   return { width: vp.width, height: vp.height };
 }
+
 
 async function computeScale(mode) {
   if (!state.pdf) return 1;
@@ -57,6 +67,7 @@ async function computeScale(mode) {
   }
   return parseFloat(mode) || 1;
 }
+
 
 function posKey() {
   return LS_PREFIX + 'pos:' + (state.docId || state.fileName);
@@ -83,6 +94,7 @@ function readPosition() {
   } catch (e) { return null; }
 }
 
+
 function bookmarkKey() {
   return LS_PREFIX + 'bm:' + (state.docId || state.fileName);
 }
@@ -108,6 +120,7 @@ function toggleBookmark() {
   saveBookmarks();
   updateProgressMarkers();
   updateBookmarkBtn();
+  
   buildOutline();
 }
 
@@ -116,6 +129,8 @@ function updateBookmarkBtn() {
     els.btnBookmark.classList.toggle('on', state.bookmarks.has(state.currentPage));
   }
 }
+
+
 
 
 async function loadPdfFromPath(path, name, docId) {
@@ -159,6 +174,7 @@ async function loadPdfFromFile(file) {
   try {
     const buf = await file.arrayBuffer();
     const task = pdfjsLib.getDocument({ data: buf });
+    
     const id = await localDocId(file);
     await openDocument(task, file.name.replace(/\.pdf$/i, ''), id, null);
   } catch (err) {
@@ -167,6 +183,92 @@ async function loadPdfFromFile(file) {
     toast('打开失败：' + (err?.message || err));
   }
 }
+
+
+
+
+function openNewPop(anchor) {
+  const pop = els.newPop;
+  if (!pop) return;
+  if (els.newPages) els.newPages.value = '1';
+  if (els.newLandscape) els.newLandscape.checked = false;
+  if (els.newSize) els.newSize.value = 'a4';
+
+  
+  pop.hidden = false;
+  placeNewPop(pop, anchor);
+}
+
+
+
+function placeNewPop(pop, anchor) {
+  const pad = 12;
+  const w = pop.offsetWidth || 320;
+  const h = pop.offsetHeight || 240;
+  let left, top;
+  if (anchor && anchor.getBoundingClientRect) {
+    const r = anchor.getBoundingClientRect();
+    left = r.left;
+    top = r.bottom + 8;
+    if (top + h > window.innerHeight - pad) top = Math.max(pad, r.top - h - 8);
+  } else {
+    left = (window.innerWidth - w) / 2;
+    top = Math.max(pad, (window.innerHeight - h) / 3);
+  }
+  if (left + w > window.innerWidth - pad) left = window.innerWidth - w - pad;
+  pop.style.left = Math.max(pad, left) + 'px';
+  pop.style.top = Math.max(pad, top) + 'px';
+}
+
+function closeNewPop() {
+  if (els.newPop) els.newPop.hidden = true;
+}
+
+
+
+async function createNewPdf() {
+  const size = (els.newSize && els.newSize.value) || 'a4';
+  const pages = parseInt((els.newPages && els.newPages.value) || '1', 10) || 1;
+  const landscape = !!(els.newLandscape && els.newLandscape.checked);
+  const btn = els.newOk;
+  if (btn) { btn.disabled = true; btn.textContent = '正在生成…'; }
+  try {
+    const r = await fetch('/api/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ size, pages, landscape }),
+    });
+    if (!r.ok) {
+      let msg = `新建失败 (${r.status})`;
+      try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    const sid = r.headers.get('X-Stage-Id') || '';
+    const raw = r.headers.get('X-Stage-Path') || '';
+    let spath = raw;
+    if (raw) { try { spath = decodeURIComponent(raw); } catch (e) { spath = raw; } }
+    try { await r.arrayBuffer(); } catch (e) {  }
+    if (!sid || !spath) throw new Error('服务端没有返回新文件位置');
+    closeNewPop();
+
+    
+    
+    await loadPdfFromPath(spath, '未命名', null);
+    
+    state.stage = { id: sid, path: spath };
+    state.contentPath = spath;
+    state.savedPath = spath;
+    updateStageBar();
+    setEditMode(true);
+    toast('已新建空白文档：用左侧工具加文字 / 图形，最后点「保存为 PDF」',
+      6000);
+  } catch (e) {
+    toast(e.message || '新建失败', 5000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '新建'; }
+  }
+}
+
 
 async function localDocId(file) {
   const raw = `${file.name}|${file.size}`;
@@ -177,15 +279,20 @@ async function localDocId(file) {
 }
 
 async function openDocument(task, name, docId, path) {
+  
+  
   await discardStage();
   const pdf = await task.promise;
   state.pdf = pdf;
   state.fileName = name || '未命名文档';
   state.docId = docId;
   state.filePath = path || null;
+  
   state.contentPath = path || null;
   state.savedPath = path || null;
   updateStageBar(false);
+  
+  
   paraCache.clear();
   closeParaPop();
   state.pageCount = pdf.numPages;
@@ -201,6 +308,7 @@ async function openDocument(task, name, docId, path) {
   els.pageInput.max = pdf.numPages;
   els.pageInput.value = 1;
 
+  
   const saved = readPosition();
   state.rotation = (saved && saved.rotation) || 0;
   state.viewMode = (saved && saved.viewMode) || 'single';
@@ -209,23 +317,30 @@ async function openDocument(task, name, docId, path) {
   state.scale = await computeScale(state.scaleMode);
   els.zoomSelect.value = state.scaleMode;
 
+  
   ['navGroup', 'navSep', 'zoomGroup', 'zoomSep', 'toolGroup', 'toolGroupSep',
    'annotGroup', 'annotSep', 'editGroup', 'editSep',
    'viewGroup', 'searchSep', 'fileGroup']
     .forEach(id => { els[id] && (els[id].hidden = false); });
   if (els.progressBar) els.progressBar.hidden = false;
 
+  
   if (editState.on) setEditMode(false);
   loadBookmarks();
   await buildPages();
   syncBlankPages();     
   setupObserver();
 
+  
+  
+  
   buildThumbs();
   buildOutline();
 
+  
   await loadAnnotations(state.docId);
 
+  
   await loadEdits(state.docId);
   if (state.filePath) {
     try {
@@ -237,6 +352,7 @@ async function openDocument(task, name, docId, path) {
       editState.pageInfo = [];
     }
   } else {
+    
     editState.pageInfo = [];
   }
   repaintEdits();
@@ -245,6 +361,7 @@ async function openDocument(task, name, docId, path) {
   updateProgressMarkers();
   hideLoading();
 
+  
   if (saved && saved.page > 1 && saved.page <= pdf.numPages) {
     goToPage(saved.page);
     toast(`已回到第 ${saved.page} 页`, 1800);
@@ -256,8 +373,12 @@ async function openDocument(task, name, docId, path) {
   updateProgress();
 }
 
+
 function closeDocument() {
+  
+  
   setEditMode(false);
+  
   discardStage();
   state.contentPath = null;
   updateStageBar(false);
@@ -292,6 +413,8 @@ function closeDocument() {
   hideLoading();
   renderWelcome();
 }
+
+
 
 
 async function buildPages() {
@@ -331,13 +454,17 @@ async function buildPages() {
   container.appendChild(frag);
 }
 
+
+
 function syncBlankPages() {
   if (!els.pages) return;
   const inserts = (editState.pages && editState.pages.insert) || [];
   const need = inserts.length;
 
+  
   const blanks = state.pages.filter(r => r.blank);
 
+  
   for (let i = blanks.length - 1; i >= need; i--) {
     const rec = blanks[i];
     rec.wrap.remove();
@@ -345,10 +472,15 @@ function syncBlankPages() {
     if (idx >= 0) state.pages.splice(idx, 1);
   }
 
+  
   const first = els.pages.querySelector(':scope > .page:not(.blank)');
   const w = (first && first.offsetWidth) || 595;
   const h = (first && first.offsetHeight) || 842;
 
+  
+  
+  
+  
   for (let i = blanks.length; i < need; i++) {
     const num = state.pageCount + i + 1;
     const wrap = document.createElement('div');
@@ -371,12 +503,15 @@ function syncBlankPages() {
     });
   }
 
+  
   const total = state.pageCount + need;
   if (els.pageInput) els.pageInput.max = total;
   if (els.pageTotal) els.pageTotal.textContent = '/ ' + total;
 
+  
   if (editState.on) repaintEdits();
 }
+
 
 document.addEventListener('pdf:pages-changed', syncBlankPages);
 
@@ -402,9 +537,11 @@ function setupObserver() {
   for (const rec of state.pages) state.observer.observe(rec.wrap);
 }
 
+
 async function renderPage(rec) {
   if (rec.rendered || rec.rendering) return;
 
+  
   if (state.renderQueue.size >= 3) return;
   state.renderQueue.add(rec.num);
   rec.rendering = true;
@@ -413,6 +550,7 @@ async function renderPage(rec) {
     const page = await state.pdf.getPage(rec.num);
     const viewport = page.getViewport({ scale: state.scale, rotation: state.rotation });
 
+    
     const outputScale = window.devicePixelRatio || 1;
     let cssW = viewport.width, cssH = viewport.height;
     let pxW = Math.floor(cssW * outputScale);
@@ -426,6 +564,7 @@ async function renderPage(rec) {
       effScale = outputScale * ratio;
     }
 
+    
     rec.wrap.style.width = Math.floor(cssW) + 'px';
     rec.wrap.style.height = Math.floor(cssH) + 'px';
 
@@ -447,10 +586,12 @@ async function renderPage(rec) {
     await task.promise;
     rec.task = null;
 
+    
     const textContent = await page.getTextContent();
     rec.textContent = textContent;
     buildTextLayer(rec, textContent, viewport);
 
+    
     loadPagePdfAnnots(rec);
 
     rec.wrap.classList.remove('pending');
@@ -459,14 +600,19 @@ async function renderPage(rec) {
     rec.rendering = false;
     state.renderQueue.delete(rec.num);
 
+    
     const hitOnPage = state.searchHitsByPage.get(rec.num - 1);
     if (hitOnPage) {
       for (const hit of hitOnPage) paintHitsOnPage(rec, hit);
       markCurrentHit();
     }
 
+    
     paintPageAnnotations(rec);
+    
     paintPageEdits(rec);
+    
+    
     if (objBarId) {
       const sel = editState.objects.find(o => o.id === objBarId);
       if (sel && sel.page === rec.num) showObjBar(rec, sel);
@@ -474,6 +620,7 @@ async function renderPage(rec) {
   } catch (err) {
     rec.rendering = false;
     state.renderQueue.delete(rec.num);
+    
     if (err?.name !== 'RenderingCancelledException' && !String(err).includes('cancel')) {
       console.warn(`第 ${rec.num} 页渲染失败：`, err);
       rec.wrap.classList.remove('pending');
@@ -482,12 +629,15 @@ async function renderPage(rec) {
   }
 }
 
+
 function buildTextLayer(rec, textContent, viewport) {
   const layer = rec.textLayer;
   layer.innerHTML = '';
 
+  
   textContent.items.forEach((it, i) => { it.__idx = i; });
 
+  
   const measureCtx = (rec._measureCanvas ||= document.createElement('canvas')).getContext('2d');
   const frag = document.createDocumentFragment();
 
@@ -500,20 +650,31 @@ function buildTextLayer(rec, textContent, viewport) {
 
     const span = document.createElement('span');
     span.textContent = item.str;
+    
+    
     span.dataset.itemIndex = String(item.__idx);
     span.style.left = tx[4] + 'px';
     span.style.top = (tx[5] - fontHeight) + 'px';
     span.style.fontSize = fontHeight + 'px';
     span.style.fontFamily = 'sans-serif';
 
+    
     const targetW = item.width * viewport.scale;
 
+    
+    
+    
+    
+    
+    
+    
     const isBlank = !item.str.trim();
     if (fontHeight > 0 && targetW > 0 && !isBlank) {
       measureCtx.font = `${fontHeight}px sans-serif`;
       const naturalW = measureCtx.measureText(item.str).width;
       if (naturalW > 0.01) {
         const ratio = targetW / naturalW;
+        
         if (Math.abs(ratio - 1) > 0.01) {
           span.style.transformOrigin = '0 0';
           span.style.transform = `scaleX(${ratio.toFixed(4)})`;
@@ -529,6 +690,7 @@ function buildTextLayer(rec, textContent, viewport) {
   }
   layer.appendChild(frag);
 }
+
 
 function updateCurrentPage() {
   if (!state.pages.length) return;
@@ -552,6 +714,7 @@ function updateCurrentPage() {
   }
 }
 
+
 function updateProgress() {
   if (!els.progressFill || !state.pageCount) return;
   const v = els.viewer;
@@ -561,12 +724,15 @@ function updateProgress() {
 }
 
 
+
+
 async function applyScale(mode, anchor) {
   if (!state.pdf) return;
   const oldScale = state.scale;
   state.scaleMode = mode;
   state.scale = await computeScale(mode);
 
+  
   if (!anchor) {
     const viewerRect = els.viewer.getBoundingClientRect();
     anchor = {
@@ -581,6 +747,7 @@ async function applyScale(mode, anchor) {
 }
 
 async function rebuildAtNewScale(anchor) {
+  
   for (const rec of state.pages) {
     if (rec.task) { try { rec.task.cancel(); } catch (e) {  } rec.task = null; }
   }
@@ -603,6 +770,7 @@ async function rebuildAtNewScale(anchor) {
     }
   }
 
+  
   if (anchor) {
     requestAnimationFrame(() => {
       const rec = state.pages[anchor.page - 1];
@@ -611,6 +779,7 @@ async function rebuildAtNewScale(anchor) {
         rec.wrap.offsetHeight * Math.min(Math.max(anchor.ratio, 0), 1) -
         els.viewer.clientHeight / 2;
       els.viewer.scrollTop = Math.max(0, target);
+      
       for (let d = -1; d <= 1; d++) {
         const r = state.pages[anchor.page - 1 + d];
         if (r) renderPage(r);
@@ -624,6 +793,7 @@ function rotate() {
   if (!state.pdf) return;
   state.rotation = (state.rotation + 90) % 360;
   applyScale(state.scaleMode === 'auto' ? 'auto' : state.scaleMode);
+  
   buildThumbs();
   toast(`旋转 ${state.rotation}°`, 1200);
 }
@@ -635,6 +805,8 @@ function toggleInvert() {
 }
 
 
+
+
 async function applyViewMode(mode, silent = false) {
   state.viewMode = mode;
   document.body.classList.toggle('view-double', mode === 'double');
@@ -643,6 +815,7 @@ async function applyViewMode(mode, silent = false) {
   els.pages.classList.toggle('double', mode === 'double');
 
   if (state.pdf && !silent) {
+    
     state.scale = await computeScale(state.scaleMode);
     await buildPages();
     setupObserver();
@@ -651,6 +824,8 @@ async function applyViewMode(mode, silent = false) {
     savePosition();
   }
 }
+
+
 
 
 let autoScrollRAF = null;
@@ -685,6 +860,8 @@ function stopAutoScroll() {
 }
 
 
+
+
 function goToPage(num, smooth = false) {
   if (!state.pdf) return;
   num = Math.min(Math.max(1, parseInt(num, 10) || 1), state.pageCount);
@@ -703,11 +880,16 @@ function goToPage(num, smooth = false) {
 }
 
 
+
+
 let thumbObserver = null;
 
 async function buildThumbs() {
   const box = els.thumbList;
   box.innerHTML = '';
+  
+  
+  
   thumbCache.clear();
   if (!state.pdf) return;
   if (thumbObserver) thumbObserver.disconnect();
@@ -724,10 +906,15 @@ async function buildThumbs() {
   }
   box.appendChild(frag);
 
+  
   thumbObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
       const n = parseInt(e.target.dataset.page, 10);
+      
+      
+      
+      
       renderThumb(n)
         .then(ok => { if (ok) thumbObserver.unobserve(e.target); })
         .catch(() => {  });
@@ -740,6 +927,7 @@ async function buildThumbs() {
 const thumbCache = new Map();
 
 async function renderThumb(num) {
+  
   if (!state.pdf || thumbCache.has(num)) return true;
   const btn = els.thumbList.querySelector(`.thumb[data-page="${num}"]`);
   if (!btn) return false;
@@ -772,6 +960,7 @@ async function renderThumb(num) {
     holder.appendChild(canvas);
     return true;
   } catch (err) {
+    
     if (err && err.name !== 'RenderingCancelledException') {
       console.warn('缩略图渲染失败（下次可见时重试）', num, err);
     }
@@ -795,18 +984,24 @@ function updateThumbActive() {
 }
 
 
+
+
 async function buildOutline() {
   const box = els.outlineList;
   box.innerHTML = '';
   state.outlinMap = new Map();
   if (!state.pdf) return;
 
+  
+  
+  
   renderMyBookmarks(box);
 
   let outline = null;
   try { outline = await state.pdf.getOutline(); } catch (e) { outline = null; }
 
   if (!outline || !outline.length) {
+    
     if (!state.bookmarks.size) {
       const div = document.createElement('div');
       div.className = 'outline-empty';
@@ -822,6 +1017,7 @@ async function buildOutline() {
   rendered.forEach(n => n && frag.appendChild(n));
   box.appendChild(frag);
 }
+
 
 function renderMyBookmarks(box) {
   const pages = [...state.bookmarks].sort((a, b) => a - b);
@@ -856,6 +1052,7 @@ async function resolveDestPage(dest) {
     }
     if (!ref) return null;
     if (ref[0] && typeof ref[0] === 'object') {
+      
       const idx = await state.pdf.getPageIndex(ref[0]);
       return idx + 1;
     }
@@ -899,6 +1096,10 @@ async function buildOutlineNode(item, depth) {
 
 
 
+
+
+
+
 async function runSearch(keyword) {
   clearSearchHighlights();
   state.searchHits = [];
@@ -931,6 +1132,7 @@ async function runSearch(keyword) {
     }
     if (!textContent || !textContent.items.length) continue;
 
+    
     const pieces = [];
     const charMap = [];
     for (let ii = 0; ii < textContent.items.length; ii++) {
@@ -945,6 +1147,7 @@ async function runSearch(keyword) {
 
     let at = lower.indexOf(q);
     while (at !== -1) {
+      
       const parts = [];
       let cur = null;
       for (let c = at; c < at + q.length; c++) {
@@ -990,6 +1193,7 @@ async function runSearch(keyword) {
   }
 }
 
+
 function restoreSpan(span) {
   if (span.dataset.orig !== undefined) {
     span.textContent = span.dataset.orig;
@@ -997,9 +1201,11 @@ function restoreSpan(span) {
   }
 }
 
+
 function clearSearchHighlights() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
+    
     rec.textLayer.querySelectorAll('mark.hl').forEach(m => {
       const sp = m.closest('span');
       if (sp) restoreSpan(sp);
@@ -1010,14 +1216,17 @@ function clearSearchHighlights() {
   state.hitIndex = -1;
 }
 
+
 function findSpanForItem(rec, itemIndex) {
   if (!rec || !rec.textLayer) return null;
   return rec.textLayer.querySelector(`span[data-item-index="${itemIndex}"]`);
 }
 
+
 function paintHitsOnPage(rec, hit) {
   if (!rec || !rec.rendered) return;
 
+  
   const byItem = new Map();
   hit.parts.forEach((p, idx) => {
     if (!byItem.has(p.itemIndex)) byItem.set(p.itemIndex, []);
@@ -1030,6 +1239,7 @@ function paintHitsOnPage(rec, hit) {
     const orig = span.dataset.orig !== undefined ? span.dataset.orig : span.textContent;
     span.dataset.orig = orig;
 
+    
     let html = escapeHtml(orig);
     [...segs].sort((a, b) => b.start - a.start).forEach(seg => {
       const inner = escapeHtml(orig.slice(seg.start, seg.end));
@@ -1042,6 +1252,7 @@ function paintHitsOnPage(rec, hit) {
   }
 }
 
+
 function applySearchHighlight() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
@@ -1052,6 +1263,7 @@ function applySearchHighlight() {
   markCurrentHit();
 }
 
+
 function markCurrentHit() {
   document.querySelectorAll('.text-layer mark.cur').forEach(m => m.classList.remove('cur'));
   if (state.hitIndex < 0 || !state.searchHits.length) return;
@@ -1061,6 +1273,7 @@ function markCurrentHit() {
   const mark = rec.textLayer.querySelector(`mark.hl[data-seq="${hit.seq}"]`);
   if (mark) mark.classList.add('cur');
 }
+
 
 function gotoHit(index) {
   const n = state.searchHits.length;
@@ -1075,6 +1288,7 @@ function gotoHit(index) {
 
   if (!rec.rendered) renderPage(rec);
 
+  
   let tries = 0;
   const locate = () => {
     const mark = rec.textLayer.querySelector(`mark.hl[data-seq="${hit.seq}"]`);
@@ -1095,12 +1309,15 @@ function gotoHit(index) {
     if (tries < 20) {
       setTimeout(locate, 100);
     } else {
+      
       goToPage(hit.pageNum, true);
       markCurrentHit();
     }
   };
   locate();
 }
+
+
 
 
 let pendingSel = null;   
@@ -1116,35 +1333,48 @@ function hideSelMenu() {
   if (els.selMenu) els.selMenu.hidden = true;
 }
 
+
+
 function showSelMenu(rect) {
   const menu = els.selMenu;
   if (!menu) return;
   menu.hidden = false;
 
+  
+  
+  
   const box = menu.getBoundingClientRect();
   const mw = box.width || menu.offsetWidth || 300;
   const mh = box.height || menu.offsetHeight || 34;
 
   const vr = els.viewer.getBoundingClientRect();
 
+  
+  
+  
   const sx = els.viewer.scrollLeft;
   const sy = els.viewer.scrollTop;
 
+  
   const selLeft = rect.left - vr.left + sx;
   const selTop = rect.top - vr.top + sy;
   const selBottom = rect.bottom - vr.top + sy;
 
+  
   const viewTop = sy + 6;
   const viewBottom = sy + vr.height - 6;
 
   const GAP = 8;      
   const EDGE = 6;     
 
+  
   const minLeft = sx + EDGE;
   const maxLeft = sx + Math.max(EDGE, vr.width - mw - EDGE);
   let left = selLeft + rect.width / 2 - mw / 2;
   left = Math.min(Math.max(left, minLeft), maxLeft);
 
+  
+  
   const above = selTop - mh - GAP;
   const below = selBottom + GAP;
 
@@ -1161,6 +1391,7 @@ function showSelMenu(rect) {
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
 
+  
   if (selMenuTimer) clearTimeout(selMenuTimer);
   selMenuTimer = setTimeout(() => {
     if (menuBusy) return;
@@ -1169,13 +1400,17 @@ function showSelMenu(rect) {
   }, 6000);
 }
 
+
 function onSelectionChange() {
+  
   if (menuBusy) return;
 
+  
   if (editState.on) return;
 
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) {
+    
     if (!pendingSel) hideSelMenu();
     return;
   }
@@ -1185,15 +1420,19 @@ function onSelectionChange() {
   const range = sel.getRangeAt(0);
   if (!els.viewer.contains(range.commonAncestorContainer)) { hideSelMenu(); return; }
 
+  
   const anchors = selectionToAnchors();
   if (!anchors) { hideSelMenu(); return; }
   pendingSel = anchors;
 
+  
+  
   let anchorRect = null;
   try {
     const rects = range.getClientRects();
     if (rects && rects.length) {
       const first = rects[0];
+      
       const whole = range.getBoundingClientRect();
       anchorRect = {
         left: whole.left, width: whole.width,
@@ -1204,11 +1443,14 @@ function onSelectionChange() {
   showSelMenu(anchorRect || range.getBoundingClientRect());
 }
 
+
 function finishMenuAction() {
   hideSelMenu();
   pendingSel = null;
   try { window.getSelection()?.removeAllRanges(); } catch (e) {  }
 }
+
+
 
 
 let dragState = null;      
@@ -1217,7 +1459,10 @@ let resizeState = null;
 let textPopInfo = null;    
 let objBarId = null;       
 
+
+
 const MOVE_THRESHOLD = 3;
+
 
 function pageAt(clientX, clientY) {
   for (const rec of state.pages) {
@@ -1230,6 +1475,8 @@ function pageAt(clientX, clientY) {
   return null;
 }
 
+
+
 function showObjBar(rec, obj) {
   const bar = els.objBar;
   if (!bar) return;
@@ -1241,6 +1488,11 @@ function showObjBar(rec, obj) {
   if (els.objBarName) els.objBarName.textContent = names[obj.kind] || '对象';
   objBarId = obj.id;
 
+  
+  
+  
+  
+  
   const r = rec.wrap.getBoundingClientRect();
   const ps = pageSize(obj.page);
   const p = pdfToNorm(obj.x, obj.y, obj.w || 0, obj.h || 0,
@@ -1275,6 +1527,8 @@ function hideObjBar() {
   if (els.objBar) els.objBar.hidden = true;
 }
 
+
+
 function onEditDoubleClick(e) {
   if (!editState.on || editState.tool !== 'select') return;
   if (!e.target.closest('.page')) return;
@@ -1286,10 +1540,14 @@ function onEditDoubleClick(e) {
     e.preventDefault();
     openTextPop(rec, e.clientX, e.clientY, obj);
   } else if (obj.kind === 'replace') {
+    
     e.preventDefault();
     openReplacePop(obj, e.clientX, e.clientY);
   }
 }
+
+
+
 
 function setAnnotMode(on, silent = false) {
   const next = !!on;
@@ -1309,6 +1567,9 @@ function onEditMouseDown(e) {
   if (!editState.on || !editState.tool) return;
   if (e.button !== 0) return;
 
+  
+  
+  
   const handle = e.target.closest('.ed-handle');
   if (handle) {
     if (editState.tool !== 'select') return;
@@ -1334,8 +1595,18 @@ function onEditMouseDown(e) {
     return;
   }
 
+  
+  
+  
+  
+  
+  
+  
+  
+  
   if (!e.target.closest('.page')) return;
 
+  
   closeTextPop();
 
   const rec = pageAt(e.clientX, e.clientY);
@@ -1343,12 +1614,15 @@ function onEditMouseDown(e) {
 
   const tool = editState.tool;
 
+  
   if (tool === 'para') {
     e.preventDefault();
     openParaPop(rec, e.clientX, e.clientY);
     return;
   }
 
+  
+  
   if (tool === 'select') {
     const obj = hitTest(rec, e.clientX, e.clientY);
     editState.selectedId = obj ? obj.id : null;
@@ -1362,6 +1636,8 @@ function onEditMouseDown(e) {
         rec,
         startX: e.clientX,
         startY: e.clientY,
+        
+        
         orig: { x: obj.x, y: obj.y, x2: obj.x2, y2: obj.y2 },
         rw: r.width,
         rh: r.height,
@@ -1375,8 +1651,10 @@ function onEditMouseDown(e) {
 
   e.preventDefault();
 
+  
   hideObjBar();
 
+  
   if (tool === 'text') {
     openTextPop(rec, e.clientX, e.clientY);
     return;
@@ -1391,6 +1669,8 @@ function onEditMouseDown(e) {
   };
   document.body.classList.add('dragging-edit');
 }
+
+
 
 function dragMoveObject(e) {
   const st = moveState;
@@ -1409,6 +1689,7 @@ function dragMoveObject(e) {
   updateObject(st.id, movedPosition(st.orig, d));
 }
 
+
 function dragResizeObject(e) {
   const st = resizeState;
   const dxs = e.clientX - st.startX;
@@ -1416,6 +1697,7 @@ function dragResizeObject(e) {
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
   updateObject(st.id, resizedRect(st.orig, st.corner, d));
 }
+
 
 function onEditMouseMove(e) {
   if (resizeState) { dragResizeObject(e); return; }
@@ -1430,6 +1712,7 @@ function onEditMouseMove(e) {
     : makeRectObject(rec, page, start, { x: e.clientX, y: e.clientY },
                      tool, opts);
 
+  
   if (tool === 'line') {
     temp._norm = {
       x: temp.x / pageSize(page).width,
@@ -1451,7 +1734,9 @@ function onEditMouseMove(e) {
   paintPageEdits(rec);
 }
 
+
 function onEditMouseUp(e) {
+  
   if (resizeState) {
     const st = resizeState;
     resizeState = null;
@@ -1460,6 +1745,7 @@ function onEditMouseUp(e) {
     toast('已缩放', 900);
     return;
   }
+  
   if (moveState) {
     const st = moveState;
     moveState = null;
@@ -1478,6 +1764,7 @@ function onEditMouseUp(e) {
   const dx = Math.abs(e.clientX - start.x);
   const dy = Math.abs(e.clientY - start.y);
 
+  
   if (tool !== 'line' && dx < 4 && dy < 4) {
     editState.tempShape = null;
     paintPageEdits(rec);
@@ -1500,10 +1787,13 @@ function onEditMouseUp(e) {
 
   editState.tempShape = null;
   const created = addObject(obj);
+  
+  
   setTool('select');
   editState.selectedId = created.id;
   showObjBar(rec, created);
   repaintEdits();
+  
   if (tool === 'replace') {
     toast('已框选替换区域，请输入要替换成的新文字', 2600);
     openReplacePop(created, e.clientX, e.clientY);
@@ -1511,6 +1801,8 @@ function onEditMouseUp(e) {
   }
   const label = { whiteout: '涂白', rect: '矩形', ellipse: '椭圆',
                   line: '直线', redact: '涂黑区域' }[tool] || '对象';
+  
+  
   if (tool === 'redact') {
     toast('已标记涂黑区域，点「涂黑并另存为…」才会真正删除文字', 3200);
   } else {
@@ -1520,10 +1812,17 @@ function onEditMouseUp(e) {
 
 
 
+
+
+
 let paraPopInfo = null;             
 const paraCache = new Map();        
 
 async function fetchParagraphs(page) {
+  
+  
+  
+  
   const src = state.contentPath || state.filePath;
   const key = `${src}|${page}`;
   if (paraCache.has(key)) return paraCache.get(key);
@@ -1540,12 +1839,17 @@ async function fetchParagraphs(page) {
   return list;
 }
 
+
 function itemRectPdf(item) {
   const t = item.transform || [1, 0, 0, 1, 0, 0];
   const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
   const w = Math.abs(item.width || 0);
   return [t[4], t[5], t[4] + w, t[5] + h];
 }
+
+
+
+
 
 function joinItemsByLines(picked) {
   if (!picked.length) return '';
@@ -1591,8 +1895,11 @@ function paragraphTextFromDom(rec, box) {
     }
   }
   if (!picked.length) return '';
+  
   return joinItemsByLines(picked);
 }
+
+
 
 function flashParaRange(rec, p, label) {
   const { width: pw, height: ph } = pageSize(rec.num);
@@ -1613,6 +1920,7 @@ function flashParaRange(rec, p, label) {
   rec.wrap.appendChild(el);
   setTimeout(() => el.remove(), 2300);
 }
+
 
 function flashBoxes(pageNum, boxes) {
   const rec = state.pages[pageNum - 1];
@@ -1639,6 +1947,7 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
+  
   const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
                              py >= p.y0 - 2 && py <= p.y1 + 2);
   if (!hit) {
@@ -1646,6 +1955,12 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
+  
+  
+  
+  
+  
+  
   if (hit.table_like) {
     const cell = (hit.cells || []).find(c =>
       px >= c.x0 - 2 && px <= c.x1 + 2 && py >= c.y0 - 2 && py <= c.y1 + 2);
@@ -1659,9 +1974,22 @@ async function openParaPop(rec, clientX, clientY) {
       page: rec.num,
       para: hit.index,
       cell: [cell.row, cell.col],
+      
+      gid: (cell.gid != null ? cell.gid : cell.row),
+      
       orig: cell.text || null,
       pageText: null,
     };
+    if (els.paraDropRow) {
+      els.paraDropRow.hidden = false;
+      els.paraDropRow.textContent = `删掉第 ${cell.row + 1} 行`;
+    }
+    if (els.paraInsertBelow) els.paraInsertBelow.hidden = false;
+    if (els.paraInsertAbove) {
+      els.paraInsertAbove.hidden = false;
+      
+      els.paraInsertAbove.textContent = cell.row === 0 ? '加表头' : '上插一行';
+    }
     if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
     if (els.paraTip) {
       els.paraTip.textContent =
@@ -1677,6 +2005,8 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
+  
+  
   let paraText = hit.text || '';
   let usedDom = false;
   if (!paraText && rec.textContent) {
@@ -1691,9 +2021,17 @@ async function openParaPop(rec, clientX, clientY) {
   paraPopInfo = {
     page: rec.num,
     para: hit.index,
+    
+    gid: null,
+    
     orig: usedDom ? paraText : null,
+    
+    
     pageText: usedDom ? pageTextFromDom(rec) : null,
   };
+  if (els.paraDropRow) els.paraDropRow.hidden = true;
+  if (els.paraInsertBelow) els.paraInsertBelow.hidden = true;
+  if (els.paraInsertAbove) els.paraInsertAbove.hidden = true;
   if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
   if (els.paraTip) {
     els.paraTip.textContent =
@@ -1707,6 +2045,9 @@ async function openParaPop(rec, clientX, clientY) {
   if (!box) return;
   box.hidden = false;
 
+  
+  
+  
   box.scrollIntoView({ block: 'nearest' });
   els.paraText && els.paraText.focus();
 }
@@ -1714,9 +2055,14 @@ async function openParaPop(rec, clientX, clientY) {
 function updateParaCount() {
   if (!els.paraCount) return;
   const t = (els.paraText && els.paraText.value) || '';
+  
   const n = [...t.replace(/\s/g, '')].length;
   els.paraCount.textContent = `${n} 字`;
 }
+
+
+
+
 
 
 async function reloadContentFrom(path) {
@@ -1734,6 +2080,8 @@ async function reloadContentFrom(path) {
   state.pageCount = pdf.numPages;
   els.pageTotal.textContent = '/ ' + pdf.numPages;
   els.pageInput.max = pdf.numPages;
+  
+  
   paraCache.clear();
   state.searchHits = [];
   state.searchHitsByPage = new Map();
@@ -1750,6 +2098,8 @@ async function reloadContentFrom(path) {
   await goToPage(Math.min(keepPage, pdf.numPages));
   els.viewer.scrollTop = keepScroll;
 
+  
+  
   if (state.contentPath) {
     try {
       const info = await api('/api/pdfinfo?path=' +
@@ -1762,6 +2112,7 @@ async function reloadContentFrom(path) {
   updateProgressMarkers();
   return pdf;
 }
+
 
 async function applyStagePreview(res) {
   showLoading('正在刷新预览…');
@@ -1783,18 +2134,23 @@ async function applyStagePreview(res) {
   if (res.pages > 1) msg += `，跨 ${res.pages} 页续排`;
   if (res.newPages > 0) msg += `，新增 ${res.newPages} 页`;
 
+  
+  
   const staleRedact = redactCount();
   if (staleRedact > 0) {
     msg += `　⚠ 版面已变，之前画的 ${staleRedact} 处涂黑框请重画`;
   }
 
   if (res.fallback) {
+    
     msg += `　⚠ 这些字用了替代字体，字形会与原文不同：${res.fallback}`;
     toast(msg, 9000);
   } else {
     toast(msg + '。满意就点顶部「保存为 PDF」', 3600);
   }
 }
+
+
 
 async function undoStagePreview() {
   if (!state.stage || !state.stage.id) return false;
@@ -1812,6 +2168,7 @@ async function undoStagePreview() {
     return false;
   }
   if (!r.ok) {
+    
     if (r.status === 400 && !j.error) return false;
     if (r.status === 400) { toast(j.error, 2200); return true; }
     toast(j.error || '撤销失败', 4000);
@@ -1833,10 +2190,13 @@ async function undoStagePreview() {
 
 setStageUndoHandler(undoStagePreview);
 
+
 function updateStageBar(saved = false) {
   const bar = els.stageBar;
   if (!bar) return;
   const has = !!state.stage.id;
+  
+  
   setStagePresent(has);
   bar.hidden = !has && !saved;
   bar.classList.toggle('is-saved', !!saved);
@@ -1850,13 +2210,17 @@ function updateStageBar(saved = false) {
   }
 }
 
+
 async function saveStagePreview() {
   const res = await exportPdf();
   if (res && res.ok) updateStageBar(true);
 }
 
+
 async function exitStagePreview() {
   await discardStage();
+  
+  
   const back = state.savedPath || state.filePath;
   state.contentPath = back;
   updateStageBar(false);
@@ -1873,6 +2237,10 @@ async function exitStagePreview() {
 
 function closeParaPop() {
   if (els.paraEdit) els.paraEdit.hidden = true;
+  
+  if (els.paraDropRow) els.paraDropRow.hidden = true;
+  if (els.paraInsertBelow) els.paraInsertBelow.hidden = true;
+  if (els.paraInsertAbove) els.paraInsertAbove.hidden = true;
   paraPopInfo = null;
 }
 
@@ -1887,6 +2255,47 @@ async function confirmParaPop() {
   const res = await reflowParagraph(info.page, info.para, txt,
                                     info.orig, info.pageText, info.cell);
   if (!res) return;
+  
+  closeParaPop();
+  await applyStagePreview(res);
+}
+
+
+
+
+async function confirmInsertRow(where) {
+  if (!paraPopInfo || paraPopInfo.gid == null) return;
+  const info = paraPopInfo;
+  const above = where === 'above';
+  const ok = confirm(
+    (above ? `在上面插入一行？\n\n` : `在下面插入一行？\n\n`) +
+    `· 新行是**这一行的副本**，插完直接点它、改掉里面的文字即可；\n` +
+    `· ${above ? '这一行' : '下面的内容'}整体下移一行，表格补上边框；\n` +
+    (above ? `· 在第一行上用它，就等于给表格加了一行表头；\n` : '') +
+    `· 页底空间不够时会拒绝，不会把内容挤出页面。`);
+  if (!ok) return;
+
+  const res = await insertTableRow(info.page, info.para, info.gid, where);
+  if (!res) return;
+  closeParaPop();
+  await applyStagePreview(res);
+}
+
+async function confirmDropRow() {
+  if (!paraPopInfo || paraPopInfo.gid == null) return;
+  const info = paraPopInfo;
+  const preview = (els.paraText && els.paraText.value || '').trim();
+  const shown = preview.length > 40 ? preview.slice(0, 40) + '…' : preview;
+  const ok = confirm(
+    `删掉表格里的这一整行？\n\n` +
+    `这一行现在有：${shown ? '「' + shown + '」' : '（空行）'}\n` +
+    `· 整行的文字和它的下边框线一起消失（不只是这一格）；\n` +
+    `· 下面的内容整体往上走，表格不留空洞；\n` +
+    `· 想反悔请点预览条上的「撤销」。\n\n继续吗？`);
+  if (!ok) return;
+
+  const res = await dropTableRow(info.page, info.para, info.gid);
+  if (!res) return;
   closeParaPop();
   await applyStagePreview(res);
 }
@@ -1898,6 +2307,9 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   const vr = els.viewer.getBoundingClientRect();
   const r = rec.wrap.getBoundingClientRect();
 
+  
+  
+  
   textPopInfo = {
     rec,
     page: rec.num,
@@ -1907,11 +2319,14 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   };
 
   pop.hidden = false;
+  
   if (els.tipText) els.tipText.value = editing ? (editing.text || '') : '';
   if (els.tipSize) {
     els.tipSize.value = String(editing ? (editing.size || 14) : 14);
   }
 
+  
+  
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -1926,8 +2341,13 @@ function openTextPop(rec, clientX, clientY, editing = null) {
 function closeTextPop() {
   if (els.textPop) els.textPop.hidden = true;
   textPopInfo = null;
+  
+  
+  
   if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
+
+
 
 
 function textMargins(pageW, pageH) {
@@ -1938,12 +2358,14 @@ function textMargins(pageW, pageH) {
   };
 }
 
+
 function pageElScale(pageNum) {
   const W = pageSize(pageNum).width || 595;
   const rec = (state.pages || []).find(r => r.num === pageNum);
   const px = rec && rec.wrap ? rec.wrap.getBoundingClientRect().width : 0;
   return (px || W) / W;
 }
+
 
 let _textMeasureCtx = null;
 function makeMeasurer(sizePdf, scale) {
@@ -1954,6 +2376,7 @@ function makeMeasurer(sizePdf, scale) {
     return (s) => _textMeasureCtx.measureText(s).width;
   } catch (e) { return () => 0; }
 }
+
 
 function layoutText(text, page, xPdf, firstBaseline, size) {
   const { width: W, height: H } = pageSize(page);
@@ -1967,12 +2390,14 @@ function layoutText(text, page, xPdf, firstBaseline, size) {
   });
 }
 
+
 function ensurePageExists(num) {
   let guard = 0;
   while (state.pages.length < num && guard++ < 500) {
     insertBlank(state.pages.length - 1);
   }
 }
+
 
 function placeTextPlacements(placements, common) {
   for (const pl of placements) {
@@ -1997,6 +2422,7 @@ function confirmTextPop() {
   const size = parseFloat(els.tipSize && els.tipSize.value) || 14;
   const { page, nx, ny, editingId } = textPopInfo;
 
+  
   if (editingId) {
     if (!txt) {
       toast('文字不能为空。要删掉这段文字，请用选择工具删掉对象', 2600);
@@ -2049,6 +2475,7 @@ function confirmTextPop() {
 }
 
 
+
 let replacePopInfo = null;   
 
 function openReplacePop(obj, clientX, clientY) {
@@ -2060,6 +2487,7 @@ function openReplacePop(obj, clientX, clientY) {
   pop.hidden = false;
   if (els.replaceText) els.replaceText.value = obj.text || '';
 
+  
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -2074,6 +2502,8 @@ function openReplacePop(obj, clientX, clientY) {
 function closeReplacePop() {
   if (els.replaceTextPop) els.replaceTextPop.hidden = true;
   replacePopInfo = null;
+  
+  
   if (els.replaceText && document.activeElement === els.replaceText) els.replaceText.blur();
 }
 
@@ -2090,6 +2520,7 @@ function confirmReplacePop() {
   toast('已设置替换文字', 1100);
 }
 
+
 function applyAnnotation(sel, type, color) {
   if (!sel || !sel.parts || !sel.parts.length) {
     toast('选区已失效，请重新选择文字', 1800);
@@ -2097,6 +2528,7 @@ function applyAnnotation(sel, type, color) {
   }
 
   if (type === 'note') {
+    
     const an = addAnnotation(sel, 'highlight', color || currentAnnotColorHex, '');
     setTimeout(() => openAnnotPop(an.id), 60);
     return;
@@ -2108,6 +2540,7 @@ function applyAnnotation(sel, type, color) {
   toast(`已添加${label}`, 1100);
 }
 
+
 function openAnnotPop(id) {
   const an = annState.items.find(a => a.id === id);
   if (!an) return;
@@ -2118,12 +2551,16 @@ function openAnnotPop(id) {
   els.apText.textContent = an.text || '（区域标注）';
   els.apNote.value = an.note || '';
 
+  
   const rec = state.pages[an.page - 1];
   const el = rec && rec.wrap.querySelector(`.an[data-id="${id}"]`);
   const vr = els.viewer.getBoundingClientRect();
   const pop = els.annotPop;
   pop.hidden = false;
 
+  
+  
+  
   const pw = pop.offsetWidth || 306;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -2150,6 +2587,8 @@ function closeAnnotPop() {
   els.annotPop && (els.annotPop.hidden = true);
   popAnnotId = null;
 }
+
+
 
 
 let boxStart = null;
@@ -2232,7 +2671,10 @@ function onBoxDown(e) {
   document.addEventListener('mouseup', up);
 }
 
+
+
 let serverFiles = [];
+
 
 let mergeSel = [];
 let mergeMode = false;
@@ -2266,6 +2708,7 @@ async function mergeSelected() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `合并失败 (${r.status})`);
     toast(`已合并 ${d.pages} 页：${d.name}`, 5000);
+    
     window.location.href = '/api/file?download=1&path=' +
       encodeURIComponent(d.path);
     setMergeMode(false);
@@ -2292,6 +2735,10 @@ async function renderWelcome() {
     <div class="welcome-head">
       <h2>服务端文档</h2>
       <input class="file-search" id="fileSearch" placeholder="按名称筛选…">
+      <button class="btn primary" id="btnNewHere" title="从零新建一个空白 PDF">
+        <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9.5" y1="14.5" x2="14.5" y2="14.5"/></svg>
+        <span class="lbl">新建 PDF</span>
+      </button>
       <button class="btn" id="btnPickDir" title="添加其他目录">
         <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="9.5" y1="13.5" x2="14.5" y2="13.5"/></svg>
         <span class="lbl">添加目录</span>
@@ -2341,8 +2788,10 @@ function bindWelcome() {
   $('btnRescan').addEventListener('click', () => loadServerFiles());
   $('btnPickDir').addEventListener('click', pickServerDir);
   $('btnMerge').addEventListener('click', () => setMergeMode(!mergeMode));
+  $('btnNewHere').addEventListener('click', (ev) => openNewPop(ev.currentTarget));
   $('mergeCancel').addEventListener('click', () => setMergeMode(false));
   $('mergeGo').addEventListener('click', mergeSelected);
+  
   mergeMode = false;
   document.body.classList.remove('merge-mode');
   paintMergeBar();
@@ -2405,6 +2854,7 @@ function paintFileList() {
   list.querySelectorAll('.file-item').forEach(el => {
     el.addEventListener('click', (e) => {
       const f = serverFiles[parseInt(el.dataset.i, 10)];
+      
       if (e.target.closest('.fi-check')) {
         e.preventDefault();
         const at = mergeSel.indexOf(f.path);
@@ -2427,6 +2877,7 @@ function paintFileList() {
 }
 
 async function pickServerDir() {
+  
   const dir = prompt('请输入要扫描的文件夹完整路径：\n例如 D:\\我的PDF', '');
   if (!dir) return;
   showLoading('正在扫描目录…');
@@ -2457,10 +2908,14 @@ async function handleLocalFile(file) {
 }
 
 
+
+
 function bindToolbar() {
+  
   els.stageSave && els.stageSave.addEventListener('click', saveStagePreview);
   els.stageDrop && els.stageDrop.addEventListener('click', exitStagePreview);
 
+  
   els.colorPicker.querySelectorAll('.color-dot').forEach(dot => {
     dot.addEventListener('click', () => {
       els.colorPicker.querySelectorAll('.color-dot').forEach(d => d.classList.remove('on'));
@@ -2470,18 +2925,25 @@ function bindToolbar() {
     });
   });
 
+  
   els.btnAnnotMode.addEventListener('click', () => {
     setAnnotMode(!state.annotMode);
   });
 
+  
   document.addEventListener('pdf:edit-on', () => setAnnotMode(false, true));
 
+  
   els.btnViewSingle.addEventListener('click', () => applyViewMode('single'));
   els.btnViewDouble.addEventListener('click', () => applyViewMode('double'));
   els.btnScrollPlay.addEventListener('click', startAutoScroll);
 
+  
   els.btnBookmark.addEventListener('click', toggleBookmark);
 
+  
+  
+  
   const guardMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2521,11 +2983,13 @@ function bindToolbar() {
     });
   });
 
+  
   els.selMenu.addEventListener('mousedown', () => {
     menuBusy = true;
     setTimeout(() => { menuBusy = false; }, 300);
   }, true);
 
+  
   els.annotPop.addEventListener('mousedown', guardMenu, true);
   els.annotPop.addEventListener('mouseup', (e) => e.stopPropagation(), true);
   els.annotPop.addEventListener('mousedown', () => {
@@ -2544,6 +3008,7 @@ function bindToolbar() {
     closeAnnotPop();
   });
   els.apCancel.addEventListener('click', () => {
+    
     const an = annState.items.find(a => a.id === popAnnotId);
     if (an && !an.note && !an.text) removeAnnotation(popAnnotId);
     closeAnnotPop();
@@ -2553,6 +3018,7 @@ function bindToolbar() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); els.apSave.click(); }
   });
 
+  
   els.annotFilter.querySelectorAll('.af-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       els.annotFilter.querySelectorAll('.af-chip').forEach(c => c.classList.remove('on'));
@@ -2562,6 +3028,7 @@ function bindToolbar() {
     });
   });
 
+  
   els.pages.addEventListener('click', (e) => {
     const an = e.target.closest('.an');
     if (an) {
@@ -2571,8 +3038,10 @@ function bindToolbar() {
     }
   });
 
+  
   els.viewer.addEventListener('mousedown', onBoxDown);
 
+  
   els.annotActions.hidden = false;
   els.btnExportMd.addEventListener('click', () => {
     if (!state.docId) { toast('请先打开文档'); return; }
@@ -2593,22 +3062,28 @@ function bindToolbar() {
     setTimeout(() => URL.revokeObjectURL(a.href), 3000);
   });
 
+  
   document.addEventListener('mousedown', (e) => {
     if (menuBusy) return;
 
+    
     if (!els.selMenu.hidden && els.selMenu.contains(e.target)) return;
 
+    
     if (!els.annotPop.hidden && els.annotPop.contains(e.target)) return;
 
+    
     if (!els.selMenu.hidden) {
       hideSelMenu();
       pendingSel = null;
     }
 
+    
     const onText = !!e.target.closest('.text-layer');
     const onAnnot = !!e.target.closest('.an');
 
     if (!els.annotPop.hidden && !onText && !onAnnot) {
+      
       if (popAnnotId) {
         const an = annState.items.find(a => a.id === popAnnotId);
         if (an) {
@@ -2623,8 +3098,10 @@ function bindToolbar() {
     }
   });
 
+  
   document.addEventListener('selectionchange', debounce(onSelectionChange, 90));
 
+  
   els.progressBar.addEventListener('click', (e) => {
     const r = els.progressBar.getBoundingClientRect();
     const ratio = (e.clientX - r.left) / r.width;
@@ -2632,6 +3109,7 @@ function bindToolbar() {
     v.scrollTop = ratio * (v.scrollHeight - v.clientHeight);
   });
 
+  
   window.addEventListener('blur', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   });
@@ -2639,6 +3117,7 @@ function bindToolbar() {
     if (document.hidden && !els.selMenu.hidden) hideSelMenu();
   });
 
+  
   els.viewer.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !els.selMenu.hidden) {
       hideSelMenu();
@@ -2646,6 +3125,7 @@ function bindToolbar() {
     }
   });
 
+  
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (els.redactConfirm && !els.redactConfirm.hidden) {
@@ -2654,19 +3134,24 @@ function bindToolbar() {
     }
   });
 
+  
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
       if (el) el.addEventListener('click', () => hideSelMenu());
     });
 
+  
   bindEditUI();
 
+  
   els.viewer.addEventListener('mousedown', onEditMouseDown);
+  
   els.viewer.addEventListener('dblclick', onEditDoubleClick);
   window.addEventListener('mousemove', onEditMouseMove);
   window.addEventListener('mouseup', onEditMouseUp);
 
+  
   if (els.tipOk) els.tipOk.addEventListener('click', confirmTextPop);
   if (els.tipCancel) els.tipCancel.addEventListener('click', closeTextPop);
   if (els.tipText) {
@@ -2677,6 +3162,7 @@ function bindToolbar() {
       }
     });
   }
+  
   document.addEventListener('mousedown', (e) => {
     if (els.objBar && !els.objBar.hidden && !els.objBar.contains(e.target)) {
       hideObjBar();
@@ -2686,6 +3172,7 @@ function bindToolbar() {
     closeTextPop();
   }, true);
 
+  
   if (els.replaceOk) els.replaceOk.addEventListener('click', confirmReplacePop);
   if (els.replaceCancel) els.replaceCancel.addEventListener('click', closeReplacePop);
   if (els.replaceText) {
@@ -2696,36 +3183,58 @@ function bindToolbar() {
       }
     });
   }
+  
   document.addEventListener('mousedown', (e) => {
     if (!els.replaceTextPop || els.replaceTextPop.hidden) return;
     if (els.replaceTextPop.contains(e.target)) return;
     closeReplacePop();
   }, true);
 
+  
   if (els.paraOk) els.paraOk.addEventListener('click', confirmParaPop);
   if (els.paraCancel) els.paraCancel.addEventListener('click', closeParaPop);
+  if (els.paraDropRow) els.paraDropRow.addEventListener('click', confirmDropRow);
+  if (els.paraInsertBelow) {
+    els.paraInsertBelow.addEventListener('click', () => confirmInsertRow('below'));
+  }
+  if (els.paraInsertAbove) {
+    els.paraInsertAbove.addEventListener('click', () => confirmInsertRow('above'));
+  }
+  if (els.btnNewPdf) {
+    els.btnNewPdf.addEventListener('click', (ev) => openNewPop(ev.currentTarget));
+  }
+  if (els.newOk) els.newOk.addEventListener('click', createNewPdf);
+  if (els.newCancel) els.newCancel.addEventListener('click', closeNewPop);
   if (els.paraText) {
     els.paraText.addEventListener('input', updateParaCount);
     els.paraText.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeParaPop(); }
+      
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault(); confirmParaPop();
       }
     });
   }
 
+  
   if (els.sideClose) {
     els.sideClose.addEventListener('click', () => setEditMode(false));
   }
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
 
+    
+    
+    
     const overlays = [
       els.paraEdit, els.textPop, els.replaceTextPop,
       els.annotPop, els.selMenu, els.redactConfirm,
     ];
     if (overlays.some(p => p && !p.hidden)) return;
 
+    
+    
+    
     const tgt = e.target;
     if (tgt && tgt.closest &&
         tgt.closest('.text-input-pop, .annot-pop, input, textarea')) return;
@@ -2736,10 +3245,12 @@ function bindToolbar() {
     }
   });
 
+  
   if (els.paraFold) {
     els.paraFold.addEventListener('click', closeParaPop);
   }
 
+  
   const DW_KEY = LS_PREFIX + 'drawerW';
   const setDrawerW = (px, persist = true) => {
     const w = Math.max(240, Math.min(620, Math.round(px)));
@@ -2759,6 +3270,7 @@ function bindToolbar() {
       try { els.spResizer.setPointerCapture(e.pointerId); } catch (err) {  }
       e.preventDefault();
     });
+    
     window.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       setDrawerW(window.innerWidth - e.clientX);
@@ -2771,6 +3283,7 @@ function bindToolbar() {
     els.spResizer.addEventListener('dblclick', () => setDrawerW(300));
   }
 
+  
   if (els.objBarDel) {
     els.objBarDel.addEventListener('click', () => {
       if (objBarId == null) return;
@@ -2782,6 +3295,7 @@ function bindToolbar() {
   if (els.objBarFront) {
     els.objBarFront.addEventListener('click', () => {
       if (objBarId == null) return;
+      
       const i = editState.objects.findIndex(o => o.id === objBarId);
       if (i >= 0 && i < editState.objects.length - 1) {
         const [o] = editState.objects.splice(i, 1);
@@ -2804,8 +3318,10 @@ function bindToolbar() {
     });
   }
 
+  
   els.btnSidebar.addEventListener('click', () => {
     els.sidebar.classList.toggle('collapsed');
+    
     setTimeout(() => {
       if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
     }, 220);
@@ -2837,6 +3353,10 @@ function bindToolbar() {
     els.zoomSelect.value = 'width';
   });
 
+  
+  
+  
+  
   if (els.btnExportTop) {
     els.btnExportTop.addEventListener('click', () => {
       if (!state.pdf) { toast('请先打开一个文档', 1600); return; }
@@ -2855,6 +3375,7 @@ function bindToolbar() {
     });
   });
 
+  
   const si = els.searchInput;
   si.addEventListener('input', debounce(() => {
     els.searchWrap.classList.toggle('has-text', si.value.length > 0);
@@ -2877,20 +3398,27 @@ function bindToolbar() {
   els.btnPrevHit.addEventListener('click', () => gotoHit(state.hitIndex - 1));
   els.btnNextHit.addEventListener('click', () => gotoHit(state.hitIndex + 1));
 
+  
   document.querySelectorAll('.side-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.side-tab').forEach(t => t.classList.toggle('on', t === tab));
       const key = tab.dataset.tab;
+      
+      
+      
       $('panelThumbs').classList.toggle('on', key === 'thumbs');
       $('panelOutline').classList.toggle('on', key === 'outline');
       $('panelAnnots').classList.toggle('on', key === 'annots');
     });
   });
 
+  
   els.viewer.addEventListener('scroll', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   }, { passive: true });
 
+  
+  
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
@@ -2902,6 +3430,7 @@ function bindToolbar() {
     updateProgress();
   }, 60), { passive: true });
 
+  
   els.viewer.addEventListener('wheel', (e) => {
     if (!state.pdf) return;
     if (e.ctrlKey || e.metaKey) {
@@ -2910,6 +3439,7 @@ function bindToolbar() {
     }
   }, { passive: false });
 
+  
   els.viewer.addEventListener('click', (e) => {
     if (!state.pdf) return;
     const rec = e.target.closest('.page');
@@ -2919,6 +3449,7 @@ function bindToolbar() {
     }
   });
 
+  
   ['dragover', 'drop'].forEach(ev => {
     document.addEventListener(ev, (e) => {
       if (ev === 'dragover') { e.preventDefault(); return; }
@@ -2928,12 +3459,17 @@ function bindToolbar() {
     });
   });
 
+  
+  
+  
+  
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
     e.preventDefault();
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
     if (typing) {
+      
       toast('请先完成当前输入（确定 / 取消）再导出', 2600);
       return;
     }
@@ -2946,6 +3482,7 @@ function bindToolbar() {
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
 
     if ((e.ctrlKey || e.metaKey) && !typing) {
+      
       if (editState.on) {
         const k = e.key.toLowerCase();
         if (k === 'z') { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); return; }
@@ -3013,6 +3550,7 @@ function stepZoom(dir) {
   els.zoomSelect.value = String(target);
   const opt = [...els.zoomSelect.options].find(o => o.value === String(target));
   if (!opt) {
+    
     const o = new Option(Math.round(target * 100) + '%', String(target));
     els.zoomSelect.add(o);
     els.zoomSelect.value = String(target);
@@ -3020,9 +3558,12 @@ function stepZoom(dir) {
   applyScale(String(target));
 }
 
+
 const onResize = debounce(() => {
   if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
 }, 220);
+
+
 
 
 function cacheAllEls() {
@@ -3036,6 +3577,7 @@ function cacheAllEls() {
     'searchWrap', 'searchInput', 'searchClear', 'searchCount', 'searchNav',
     'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnExportTop',
     'btnPrint', 'filePicker',
+    
     'annotGroup', 'annotSep', 'btnAnnotMode', 'colorPicker',
     'viewGroup', 'btnViewSingle', 'btnViewDouble', 'btnScrollPlay',
     'btnBookmark',
@@ -3044,19 +3586,25 @@ function cacheAllEls() {
     'progressBar', 'progressFill', 'progressMarkers',
     'stageBar', 'stageText', 'stageSave', 'stageDrop',
     'selMenu', 'annotPop', 'apTag', 'apText', 'apNote', 'apSave', 'apCancel', 'apDelete',
+    
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
     'sidePanel', 'sideClose', 'sideTitle',
     'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
     'objBar', 'objBarName', 'objBarFront', 'objBarBack', 'objBarDel',
+    
     'btnRedactPdf', 'redactCount', 'redactConfirm', 'redactConfirmStats',
     'redactCancel', 'redactOk',
+    
     'btnReplacePdf', 'replaceCount', 'replaceTextPop', 'replaceText',
     'replaceCancel', 'replaceOk',
+    
     'paraEdit', 'paraText', 'paraTip', 'paraPage', 'paraCount',
     'paraFold', 'spResizer',
-    'paraCancel', 'paraOk',
+    'paraCancel', 'paraOk', 'paraDropRow', 'paraInsertAbove', 'paraInsertBelow',
+    'btnNewPdf', 'newPop', 'newSize', 'newPages', 'newLandscape',
+    'newOk', 'newCancel',
   ]);
   els.sideBody = document.querySelector('.side-body');
 }
@@ -3065,6 +3613,8 @@ async function init() {
   cacheAllEls();
   bindNavHelpers(goToPage, renderPage);
   bindEditHelpers({ goToPage, renderPage });
+  
+  
   initBatchUI({
     goToPage: (p) => goToPage(p, true),
     flashBoxes,
@@ -3073,6 +3623,7 @@ async function init() {
   bindToolbar();
   window.addEventListener('resize', onResize);
 
+  
   window.addEventListener('beforeunload', savePosition);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { savePosition(); doSave(); saveEdits(); }

@@ -5,11 +5,9 @@ import zlib
 
 import pdffont
 
-
 WHITESPACE = b"\x00\t\n\x0c\r "
 DELIMITERS = b"()<>[]{}/%,;"
-SKIP_CHARS = b",;"          
-
+SKIP_CHARS = b",;"
 
 def tokenize(data):
     tokens = []
@@ -82,12 +80,11 @@ def tokenize(data):
         while j < n and data[j:j + 1] not in WHITESPACE and \
                 data[j:j + 1] not in DELIMITERS:
             j += 1
-        if j == i:      
+        if j == i:
             j = i + 1
         tokens.append(data[i:j])
         i = j
     return tokens
-
 
 def parse_object(tokens, pos):
     if pos >= len(tokens):
@@ -138,7 +135,6 @@ def parse_object(tokens, pos):
 
     return tok, pos + 1
 
-
 def _is_number(b):
     try:
         float(b)
@@ -146,18 +142,14 @@ def _is_number(b):
     except (ValueError, TypeError):
         return False
 
-
 def _is_int(b):
     return bool(re.fullmatch(rb"[+-]?\d+", b or b""))
-
 
 def _to_number(b):
     return int(b) if _is_int(b) else float(b)
 
-
 class Name(str):
     __slots__ = ()
-
 
 class Ref(tuple):
     __slots__ = ()
@@ -172,7 +164,6 @@ class Ref(tuple):
     @property
     def gen(self):
         return self[1]
-
 
 def decode_name(raw):
     if not raw.startswith(b"/"):
@@ -192,7 +183,6 @@ def decode_name(raw):
         i += 1
     return bytes(out).decode("latin-1")
 
-
 def encode_name(s):
     out = bytearray(b"/")
     for byte in s.encode("latin-1", "replace"):
@@ -202,10 +192,7 @@ def encode_name(s):
             out.append(byte)
     return bytes(out)
 
-
-
 OBJ_RE = re.compile(rb"(\d+)\s+(\d+)\s+obj\b")
-
 
 class PDFDocument:
 
@@ -216,7 +203,6 @@ class PDFDocument:
         self.pages_ref = None
         self.max_obj = 0
 
-
     @staticmethod
     def is_stream(val):
         return (isinstance(val, tuple) and len(val) == 2
@@ -226,7 +212,6 @@ class PDFDocument:
         val = self.objects.get(tuple(ref)) if isinstance(ref, Ref) else None
         return val[1] if self.is_stream(val) else None
 
-
     @classmethod
     def load(cls, data):
         doc = cls()
@@ -234,7 +219,6 @@ class PDFDocument:
         doc._expand_objstm()
         doc._find_root(data)
         return doc
-
 
     def _expand_objstm(self):
         for val in list(self.objects.values()):
@@ -267,7 +251,7 @@ class PDFDocument:
                     continue
                 try:
                     obj, _ = parse_object(tokenize(data[start:end]), 0)
-                except Exception:       
+                except Exception:
                     continue
                 if (onum, 0) in self.objects:
                     continue
@@ -315,7 +299,7 @@ class PDFDocument:
         if isinstance(value, dict):
             length = value.get("Length")
             if isinstance(length, Ref):
-                length = None      
+                length = None
 
         if isinstance(length, int) and length >= 0:
             raw = body[raw_start:raw_start + length]
@@ -366,7 +350,7 @@ class PDFDocument:
                 if self.is_stream(val):
                     dic = val[0]
                     if dic.get("Type") == "XRef" and isinstance(dic.get("Root"), Ref):
-                        last = dic          
+                        last = dic
             if last is not None:
                 for k in ("Root", "Info", "ID", "Size"):
                     if k in last:
@@ -405,7 +389,6 @@ class PDFDocument:
                 return Ref(num, gen)
         return None
 
-
     def get(self, ref):
         if isinstance(ref, Ref):
             return self.objects.get(tuple(ref))
@@ -422,7 +405,6 @@ class PDFDocument:
         self.max_obj += 1
         self.objects[(self.max_obj, 0)] = value
         return Ref(self.max_obj, 0)
-
 
     def page_refs(self):
         out = []
@@ -464,8 +446,6 @@ class PDFDocument:
             node = self.resolve(parent)
             seen += 1
         return default
-
-
 
 def serialize_value(val, out):
     if val is None:
@@ -510,11 +490,10 @@ def serialize_value(val, out):
     else:
         out += b"null"
 
-
 def _escape_literal(raw):
     out = bytearray(b"(")
     for byte in raw:
-        if byte in (0x28, 0x29, 0x5C):        
+        if byte in (0x28, 0x29, 0x5C):
             out += b"\\" + bytes([byte])
         elif byte == 0x0A:
             out += b"\\n"
@@ -528,7 +507,6 @@ def _escape_literal(raw):
             out.append(byte)
     out += b")"
     return bytes(out)
-
 
 def build_pdf(doc, extra_streams, out_path):
     out = bytearray()
@@ -593,8 +571,6 @@ def build_pdf(doc, extra_streams, out_path):
         fp.write(out)
     return len(out)
 
-
-
 class ContentBuilder:
 
     CID_ALIAS = "CJK"
@@ -602,10 +578,10 @@ class ContentBuilder:
     def __init__(self):
         self.ops = []
         self.fonts = {}
-        self.cid_ref = None         
-        self.cid_subset = None      
-        self.cid_used = False       
-        self.missing_chars = set()  
+        self.cid_ref = None
+        self.cid_subset = None
+        self.cid_used = False
+        self.missing_chars = set()
 
     def set_cid_font(self, font_ref, subset):
         self.cid_ref = font_ref
@@ -624,7 +600,6 @@ class ContentBuilder:
             "Encoding": Name("WinAnsiEncoding"),
         }
         return alias
-
 
     def rect(self, x, y, w, h, rgb, fill=True, stroke=False, line_width=1.0):
         r, g, b = rgb
@@ -677,7 +652,6 @@ class ContentBuilder:
             f"{x1:.3f} {y1:.3f} m {x2:.3f} {y2:.3f} l S"
         )
 
-
     def text(self, x, y, s, size, rgb, base_font="Helvetica"):
         if s and self.cid_subset is not None and has_non_latin(s):
             self._text_cid(x, y, s, size, rgb)
@@ -724,7 +698,6 @@ class ContentBuilder:
             total += widths.get(ch, 0.556)
         return total * size
 
-
     def to_bytes(self):
         return ("\n".join(self.ops) + "\n").encode("latin-1", "replace")
 
@@ -733,7 +706,6 @@ class ContentBuilder:
         if self.cid_used and self.cid_ref is not None:
             out[self.CID_ALIAS] = self.cid_ref
         return out or None
-
 
 STANDARD_WIDTHS = {
     "Helvetica": {
@@ -759,14 +731,11 @@ STANDARD_WIDTHS["Helvetica-Oblique"] = STANDARD_WIDTHS["Helvetica"]
 STANDARD_WIDTHS["Times-Roman"] = STANDARD_WIDTHS["Helvetica"]
 STANDARD_WIDTHS["Courier"] = {}
 
-
 def split_lines(s):
     return s.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
-
 def line_leading(size):
     return (size or 12.0) * 1.25
-
 
 def _pdf_text_encode(s, base_font="Helvetica"):
     out = []
@@ -789,11 +758,8 @@ def _pdf_text_encode(s, base_font="Helvetica"):
             out.append(ch)
     return "".join(out)
 
-
 def has_non_latin(s):
     return any(ord(ch) > 255 for ch in s)
-
-
 
 def reorder_pages(doc, order):
     refs = doc.page_refs()
@@ -807,7 +773,6 @@ def reorder_pages(doc, order):
         if isinstance(p, dict):
             p["Parent"] = doc.pages_ref
     return len(kids)
-
 
 def rotate_page(doc, index, delta):
     refs = doc.page_refs()
@@ -823,7 +788,6 @@ def rotate_page(doc, index, delta):
         cur = 0
     page["Rotate"] = (cur + delta) % 360
     return True
-
 
 def insert_blank_page(doc, index, width, height):
     refs = doc.page_refs()
@@ -855,7 +819,6 @@ def insert_blank_page(doc, index, width, height):
     pages_node["Count"] = len(kids)
     return ref
 
-
 def delete_pages(doc, indices):
     refs = doc.page_refs()
     drop = {i for i in indices if 0 <= i < len(refs)}
@@ -866,14 +829,11 @@ def delete_pages(doc, indices):
         pages_node["Count"] = len(keep)
     return len(keep)
 
-
 def _num(v, default=0.0):
     try:
         return float(v)
     except (TypeError, ValueError):
         return default
-
-
 
 def _to_rgb(color, default=(0.0, 0.0, 0.0)):
     if isinstance(color, (list, tuple)) and len(color) >= 3:
@@ -893,9 +853,6 @@ def _to_rgb(color, default=(0.0, 0.0, 0.0)):
                 int(s[4:6], 16) / 255.0)
     return default
 
-
-
-
 def _width_array(widths):
     if not widths:
         return []
@@ -910,33 +867,30 @@ def _width_array(widths):
                and widths[gids[j + 1]] == w):
             j += 1
         if j - i >= 2:
-            out += [gids[i], gids[j], w]              
+            out += [gids[i], gids[j], w]
         else:
             for k in range(i, j + 1):
                 out += [gids[k], [widths[gids[k]]]]
         i = j + 1
     return out
 
-
 def _utf16be_hex(ch):
     return ch.encode("utf-16-be").hex().upper()
 
-
 def _unicode_pref(u):
-    if 0x20 <= u <= 0x7E:                                   
+    if 0x20 <= u <= 0x7E:
         return 0
-    if 0x4E00 <= u <= 0x9FFF:                               
+    if 0x4E00 <= u <= 0x9FFF:
         return 1
-    if 0x3000 <= u <= 0x30FF or 0xFF00 <= u <= 0xFFEF:      
+    if 0x3000 <= u <= 0x30FF or 0xFF00 <= u <= 0xFFEF:
         return 1
-    if 0x3400 <= u <= 0x4DBF or 0x20000 <= u <= 0x3FFFF:    
+    if 0x3400 <= u <= 0x4DBF or 0x20000 <= u <= 0x3FFFF:
         return 2
-    if 0xF900 <= u <= 0xFAFF:                               
+    if 0xF900 <= u <= 0xFAFF:
         return 8
-    if 0x2E80 <= u <= 0x2FDF:                               
+    if 0x2E80 <= u <= 0x2FDF:
         return 9
     return 5
-
 
 def to_unicode_cmap(gid_of):
     best = {}
@@ -971,7 +925,6 @@ def to_unicode_cmap(gid_of):
         "end",
     ]
     return "\n".join(lines).encode("ascii")
-
 
 def embed_cid_font(doc, subset, ps_name="CJK-Subset", unicode_map=None):
     upem = subset.upem or 1000
@@ -1029,7 +982,6 @@ def embed_cid_font(doc, subset, ps_name="CJK-Subset", unicode_map=None):
         "ToUnicode": tounicode,
     })
 
-
 def build_cjk_font(doc, chars, base_name="NotoSansSC"):
     font = pdffont.load_default()
     subset = font.subset(chars)
@@ -1047,7 +999,6 @@ def build_cjk_font(doc, chars, base_name="NotoSansSC"):
     ref = embed_cid_font(doc, subset, ps_name=ps_name, unicode_map=used)
     return ref, subset
 
-
 def apply_edits(src_path, out_path, edits):
     with open(src_path, "rb") as fp:
         data = fp.read()
@@ -1058,13 +1009,12 @@ def apply_edits(src_path, out_path, edits):
 
     pages_cfg = edits.get("pages") or {}
 
-
     dels = pages_cfg.get("delete") or []
     if dels:
         delete_pages(doc, [int(i) for i in dels])
         refs_after = doc.page_refs()
         old_refs = []
-        doc2_pages = doc.resolve(doc.pages_ref)  
+        doc2_pages = doc.resolve(doc.pages_ref)
         remap = {}
         kept = 0
         original_order = _original_indices(len(doc.page_refs()) + len(dels), dels)
@@ -1145,7 +1095,7 @@ def apply_edits(src_path, out_path, edits):
     annot_stat = {"written": 0, "pages": 0, "skipped": 0}
     anns = edits.get("annotations") or []
     if anns:
-        from pdfannot import apply_annotations   
+        from pdfannot import apply_annotations
         annot_stat = apply_annotations(doc, refs, anns)
 
     size = build_pdf(doc, extra_streams, out_path)
@@ -1160,10 +1110,8 @@ def apply_edits(src_path, out_path, edits):
         "cjk_missing": "".join(sorted(missing_cjk)),
     }
 
-
 def _original_indices(total, deleted):
     return [i for i in range(total) if i not in set(deleted)]
-
 
 def _emit_object(b, obj):
     kind = (obj.get("kind") or "").lower()
@@ -1198,7 +1146,6 @@ def _emit_object(b, obj):
         b.text(x, y, str(obj.get("text") or ""), size,
                _to_rgb(obj.get("color"), (0.0, 0.0, 0.0)),
                base_font=obj.get("font") or "Helvetica")
-
 
 def _attach_font_resource(doc, page_ref, font_map, overwrite=False):
     page = doc.resolve(page_ref)

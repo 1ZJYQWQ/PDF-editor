@@ -8,10 +8,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
 FILES = ["geom.js", "core.js", "annot.js", "edit.js", "batch.js", "app.js"]
 
-NODE_CANDIDATES = [
-    r"C:\Users\zhangjiayang\.workbuddy\binaries\node\versions\22.22.2-3\node.exe",
-    "node",
-]
+NODE_CANDIDATES = ["node"]
 
 BUILTIN = {
     'console','window','document','Math','JSON','Object','Array','String','Number',
@@ -35,21 +32,17 @@ BUILTIN = {
     'translate','rotate','none','inherit','auto','bold','font',
 }
 
-
 def strip_comments(code):
     code = re.sub(r'/\*.*?\*/', '', code, flags=re.S)
     return re.sub(r'(?m)//[^\n]*$', '', code)
-
 
 def strip_strings(code):
     code = re.sub(r'`(?:[^`\\]|\\.)*`', '``', code, flags=re.S)
     code = re.sub(r"'(?:[^'\\\n]|\\.)*'", "''", code)
     return re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)
 
-
 def clean(raw):
     return strip_strings(strip_comments(raw))
-
 
 def collect_defined(src):
     d = set()
@@ -122,14 +115,12 @@ def collect_defined(src):
         d.add(m)
     return d
 
-
 def find_used(src):
     u = set()
     u |= set(re.findall(r'(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(', src))
     u |= set(re.findall(r'(?<![\w.$])([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$]', src))
     u |= set(re.findall(r'(?<![\w.$])([A-Za-z_$][\w$]*)\s*\[', src))
     return u
-
 
 def find_exports(src):
     e = set()
@@ -142,14 +133,12 @@ def find_exports(src):
                 e.add(x.split(' as ')[-1].strip())
     return e
 
-
 def find_imports(src):
     out = []
     for names, mod in re.findall(r"import\s*\{([\s\S]*?)\}\s*from\s*'([^']+)'", src):
         lst = [x.strip().split(' as ')[0].strip() for x in names.split(',') if x.strip()]
         out.append((lst, mod))
     return out
-
 
 def run_syntax_check(node_exe, results):
     script = os.path.join(BASE, ".syntax_check.mjs")
@@ -182,7 +171,6 @@ def run_syntax_check(node_exe, results):
             os.remove(script)
         except OSError:
             pass
-
 
 def main():
     results = []
@@ -291,7 +279,6 @@ def main():
         print("  全部通过，可以交给用户测试")
     print("=" * 56)
     return 1 if problems else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

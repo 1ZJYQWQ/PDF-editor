@@ -10,37 +10,36 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pdfedit
 import pdfredact
+import appenv
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = appenv.resource_dir()
+DATA_DIR = appenv.data_dir()
+
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")   
-ANNOT_DIR = os.path.join(BASE_DIR, "annotations")
-EDIT_DIR = os.path.join(BASE_DIR, "edits")
-EXPORT_DIR = os.path.join(BASE_DIR, "exports")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+ANNOT_DIR = os.path.join(DATA_DIR, "annotations")
+EDIT_DIR = os.path.join(DATA_DIR, "edits")
+EXPORT_DIR = os.path.join(DATA_DIR, "exports")
 
-STAGE_DIR = os.path.join(BASE_DIR, "_stage")
+STAGE_DIR = os.path.join(DATA_DIR, "_stage")
 STAGE_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
-STAGE_KEEP_SEC = 6 * 3600     
+STAGE_KEEP_SEC = 6 * 3600
 
 SCAN_DIRS = []
-
 
 def stage_file(stage_id):
     return os.path.join(STAGE_DIR, stage_id + ".pdf")
 
-
-
-STAGE_KEEP_VERSIONS = 20      
-
+STAGE_KEEP_VERSIONS = 20
 
 def stage_version_path(stage_id, n):
     return os.path.join(STAGE_DIR, "%s.v%02d.pdf" % (stage_id, n))
-
 
 def stage_versions(stage_id):
     out = []
@@ -54,7 +53,6 @@ def stage_versions(stage_id):
         if mid.isdigit():
             out.append(int(mid))
     return sorted(out)
-
 
 def backup_stage_version(stage_id):
     src = stage_file(stage_id)
@@ -75,37 +73,31 @@ def backup_stage_version(stage_id):
             pass
     return n
 
-
 def new_stage_id():
     return os.urandom(8).hex()
-
 
 def allowed_roots(query=None, handler=None):
     if handler is not None:
         return handler._resolve_dirs(query or {}) + [STAGE_DIR, EXPORT_DIR]
     return list(SCAN_DIRS) + [STAGE_DIR, EXPORT_DIR]
 PORT = 8000
-PORT_SCAN_RANGE = 20     
+PORT_SCAN_RANGE = 20
 
-MAX_LIST = 2000          
-CHUNK = 64 * 1024        
-MAX_BODY = 8 * 1024 * 1024   
+MAX_LIST = 2000
+CHUNK = 64 * 1024
+MAX_BODY = 8 * 1024 * 1024
 
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
 
-
-
 def norm(path):
     return os.path.normcase(os.path.abspath(path))
-
 
 def _clean_path(path):
     p = os.path.normcase(os.path.normpath(os.path.realpath(path)))
     if p.startswith("\\\\?\\"):
         p = p[len("\\\\?\\"):]
     return p
-
 
 def is_within(path, roots):
     p = _clean_path(path)
@@ -120,13 +112,11 @@ def is_within(path, roots):
             continue
     return False
 
-
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024.0
-
 
 def scan_pdfs(dirs):
     found = []
@@ -167,8 +157,6 @@ def scan_pdfs(dirs):
     found.sort(key=lambda x: x["mtime"], reverse=True)
     return found
 
-
-
 def doc_id(path, size=None):
     try:
         if size is None:
@@ -179,14 +167,11 @@ def doc_id(path, size=None):
     raw = f"{base}|{size}".encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:16]
 
-
 def annot_path(did):
     return os.path.join(ANNOT_DIR, f"{did}.json")
 
-
 def valid_doc_id(did):
     return bool(did) and re.fullmatch(r"[0-9a-f]{16}", did or "")
-
 
 def load_annotations(did):
     p = annot_path(did)
@@ -201,9 +186,8 @@ def load_annotations(did):
         data["ok"] = True
         data["docId"] = did
         return data
-    except Exception as exc:  
+    except Exception as exc:
         return {"ok": False, "error": f"读取标注失败: {exc}", "items": []}
-
 
 def save_annotations(did, items, meta=None):
     os.makedirs(ANNOT_DIR, exist_ok=True)
@@ -220,7 +204,6 @@ def save_annotations(did, items, meta=None):
     os.replace(tmp, annot_path(did))
     return payload
 
-
 TAG_LABEL = {
     "highlight": "高亮",
     "underline": "下划线",
@@ -230,18 +213,14 @@ TAG_LABEL = {
     "box": "区域",
 }
 
-
-
 EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line"}
 
 ANNOT_KINDS = {"highlight", "underline", "wavy", "strike", "box", "note"}
 
 REDACT_KIND = "redact"
 
-
 def edit_path(did):
     return os.path.join(EDIT_DIR, f"{did}.json")
-
 
 def empty_edits(did):
     return {
@@ -251,7 +230,6 @@ def empty_edits(did):
         "objects": [],
         "updated": 0,
     }
-
 
 def load_edits(did):
     p = edit_path(did)
@@ -267,10 +245,9 @@ def load_edits(did):
         data["ok"] = True
         data["docId"] = did
         return data
-    except Exception as exc:  
+    except Exception as exc:
         return {"ok": False, "error": f"读取编辑数据失败: {exc}",
                 "pages": {}, "objects": []}
-
 
 def save_edits(did, pages, objects, meta=None):
     os.makedirs(EDIT_DIR, exist_ok=True)
@@ -287,7 +264,6 @@ def save_edits(did, pages, objects, meta=None):
         json.dump(payload, fp, ensure_ascii=False, indent=2)
     os.replace(tmp, edit_path(did))
     return payload
-
 
 def sanitize_edits(pages, objects):
     dropped = 0
@@ -398,7 +374,6 @@ def sanitize_edits(pages, objects):
 
     return clean_pages, clean_objs, dropped
 
-
 def sanitize_annotations(items, max_items=5000):
     dropped = 0
     clean = []
@@ -448,7 +423,6 @@ def sanitize_annotations(items, max_items=5000):
         })
     return clean, dropped
 
-
 def unique_out_path(path):
     if not os.path.exists(path):
         return path
@@ -459,7 +433,6 @@ def unique_out_path(path):
         if not os.path.exists(cand):
             return cand
         i += 1
-
 
 def sanitize_redactions(regions):
     dropped = 0
@@ -487,16 +460,14 @@ def sanitize_redactions(regions):
 
     return clean, dropped
 
-
 def _safe_float(v, default=0.0):
     try:
         f = float(v)
     except (TypeError, ValueError):
         return default
-    if f != f or f in (float("inf"), float("-inf")):     
+    if f != f or f in (float("inf"), float("-inf")):
         return default
     return f
-
 
 def _safe_color(v):
     if not isinstance(v, str):
@@ -510,7 +481,6 @@ def _safe_color(v):
         return "#%02x%02x%02x" % tuple(vals)
     return "#000000"
 
-
 def _safe_font(v):
     allowed = {
         "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Times-Roman",
@@ -518,7 +488,6 @@ def _safe_font(v):
     }
     s = str(v or "").strip()
     return s if s in allowed else "Helvetica"
-
 
 def pdf_page_info(path):
     with open(path, "rb") as fp:
@@ -549,7 +518,6 @@ def pdf_page_info(path):
             "rotate": rot,
         })
     return {"ok": True, "count": len(pages), "pages": pages}
-
 
 def export_markdown(did, doc_name=""):
     data = load_annotations(did)
@@ -583,8 +551,6 @@ def export_markdown(did, doc_name=""):
                 lines.append(f"  {it['note']}")
             lines.append("")
     return "\n".join(lines)
-
-
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "PDFViewer/1.0"
@@ -624,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if route == "/":
                 return self.serve_file(os.path.join(STATIC_DIR, "index.html"))
+            if route == "/api/ping":
+                return self.send_json({"app": "pdfviewer", "ok": True})
             if route == "/api/files":
                 return self.api_files(query)
             if route == "/api/file":
@@ -655,7 +623,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(404, "未找到该路径")
         except BrokenPipeError:
             pass
-        except Exception as exc:  
+        except Exception as exc:
             self.log_message("ERROR %s", exc)
             try:
                 self.send_error_json(500, f"服务器错误: {exc}")
@@ -669,6 +637,8 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/redact", "/api/replace", "/api/reflow",
                          "/api/stage", "/api/stage/undo",
                          "/api/find", "/api/replace_all", "/api/redact_terms",
+                         "/api/table/drop_row", "/api/table/insert_row",
+                         "/api/new",
                          "/api/split", "/api/merge"):
             return self.send_error_json(404, "未找到该路径")
         try:
@@ -698,6 +668,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_stage(payload)
         if route == "/api/stage/undo":
             return self._post_stage_undo(payload)
+        if route == "/api/table/drop_row":
+            return self._post_drop_row(payload)
+        if route == "/api/table/insert_row":
+            return self._post_insert_row(payload)
+        if route == "/api/new":
+            return self._post_new(payload)
         if route == "/api/find":
             return self._post_find(payload)
         if route == "/api/replace_all":
@@ -724,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
                 saved = save_annotations(did, items, payload.get("doc"))
             self.send_json({"ok": True, "count": len(items),
                             "updated": saved["updated"]})
-        except Exception as exc:  
+        except Exception as exc:
             self.send_error_json(500, f"保存失败: {exc}")
 
     def _post_edits(self, payload):
@@ -744,9 +720,268 @@ class Handler(BaseHTTPRequestHandler):
                 "dropped": dropped,
                 "updated": saved["updated"],
             })
-        except Exception as exc:  
+        except Exception as exc:
             self.send_error_json(500, f"保存失败: {exc}")
 
+    def _post_drop_row(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(400, "不允许覆盖原文件：只能另存为新文件")
+
+        try:
+            page = int(payload.get("page") or 1)
+            para = int(payload.get("para") if payload.get("para") is not None else -1)
+            gid = int(payload.get("gid") if payload.get("gid") is not None else -1)
+        except (TypeError, ValueError):
+            return self.send_error_json(400, "page / para / gid 参数无效")
+        if page < 1 or para < 0 or gid < 0:
+            return self.send_error_json(400, "page / para / gid 参数无效")
+
+        stage = payload.get("stage")
+        if stage is not None:
+            if not isinstance(stage, str) or not STAGE_ID_RE.match(stage):
+                return self.send_error_json(400, "stage 参数无效")
+
+        try:
+            if stage:
+                real = stage_file(stage)
+                if not os.path.isfile(real):
+                    return self.send_error_json(
+                        404, "预览会话已失效（暂存文件可能被清理），请重新开始")
+            else:
+                real = os.path.realpath(src)
+                if not os.path.isfile(real):
+                    return self.send_error_json(404, "源文件不存在")
+                if not is_within(real, allowed_roots()):
+                    return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        print("[drop-row] page=%d para=%d gid=%d stage=%s"
+              % (page, para, gid, stage or "-"), file=sys.stderr, flush=True)
+
+        os.makedirs(STAGE_DIR, exist_ok=True)
+        if stage:
+            out_id = stage
+            out_path = os.path.join(STAGE_DIR, stage + ".next.pdf")
+        else:
+            out_id = new_stage_id()
+            out_path = stage_file(out_id)
+
+        hint = payload.get("name")
+        if isinstance(hint, str) and hint.strip():
+            stem_src = hint.strip()
+        else:
+            stem_src = os.path.splitext(os.path.basename(src))[0]
+        base_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_src)[:80] or "文档"
+
+        try:
+            import pdfreflow
+            with _edit_lock:
+                result = pdfreflow.delete_table_row(real, out_path, page, para, gid)
+        except ValueError as exc:
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(500, "删行失败: %s" % exc)
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, "读取产物失败: %s" % exc)
+
+        if stage:
+            backup_stage_version(stage)
+            try:
+                os.replace(out_path, stage_file(stage))
+            except OSError as exc:
+                return self.send_error_json(500, "暂存覆盖失败: %s" % exc)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "inline; filename*=UTF-8''" + urllib.parse.quote(
+                "%s-删行.pdf" % base_stem))
+        self.send_header("X-Stage-Id", out_id)
+        self.send_header("X-Stage-Path", urllib.parse.quote(
+            stage_file(out_id), safe=""))
+        self.send_header("X-Drop-Text", urllib.parse.quote(
+            str(result.get("text") or "")[:200], safe=""))
+        self.send_header("X-Drop-Height", str(result.get("height") or 0))
+        self.send_header("X-Drop-Rows", str(result.get("moved_rows") or 0))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _post_new(self, payload):
+        size = payload.get("size") or "a4"
+        landscape = bool(payload.get("landscape"))
+        raw_pages = payload.get("pages")
+        try:
+            pages = 1 if raw_pages is None else int(raw_pages)
+        except (TypeError, ValueError):
+            return self.send_error_json(400, "页数必须是整数")
+
+        try:
+            import pdfnew
+            body = pdfnew.build_blank_pdf(pages, size, landscape)
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+
+        os.makedirs(STAGE_DIR, exist_ok=True)
+        sid = new_stage_id()
+        path = stage_file(sid)
+        try:
+            with open(path, "wb") as fp:
+                fp.write(body)
+        except OSError as exc:
+            return self.send_error_json(500, "写入失败: %s" % exc)
+
+        print("[new] size=%s pages=%d land=%s stage=%s"
+              % (size, pages, landscape, sid), file=sys.stderr, flush=True)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "inline; filename*=UTF-8''" + urllib.parse.quote("未命名.pdf"))
+        self.send_header("X-Stage-Id", sid)
+        self.send_header("X-Stage-Path", urllib.parse.quote(path, safe=""))
+        self.send_header("X-New-Pages", str(pages))
+        self.send_header("X-New-Name", urllib.parse.quote("未命名", safe=""))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _post_insert_row(self, payload):
+        src = urllib.parse.unquote(str(payload.get("path") or ""))
+        if not src:
+            return self.send_error_json(400, "缺少 path 参数")
+        if payload.get("overwrite") or payload.get("inPlace"):
+            return self.send_error_json(400, "不允许覆盖原文件：只能另存为新文件")
+
+        where = str(payload.get("where") or "below").strip().lower()
+        if where not in ("above", "below"):
+            return self.send_error_json(400, "where 只能是 above 或 below")
+
+        try:
+            page = int(payload.get("page") or 1)
+            para = int(payload.get("para") if payload.get("para") is not None else -1)
+            gid = int(payload.get("gid") if payload.get("gid") is not None else -1)
+        except (TypeError, ValueError):
+            return self.send_error_json(400, "page / para / gid 参数无效")
+        if page < 1 or para < 0 or gid < 0:
+            return self.send_error_json(400, "page / para / gid 参数无效")
+
+        stage = payload.get("stage")
+        if stage is not None:
+            if not isinstance(stage, str) or not STAGE_ID_RE.match(stage):
+                return self.send_error_json(400, "stage 参数无效")
+
+        try:
+            if stage:
+                real = stage_file(stage)
+                if not os.path.isfile(real):
+                    return self.send_error_json(
+                        404, "预览会话已失效（暂存文件可能被清理），请重新开始")
+            else:
+                real = os.path.realpath(src)
+                if not os.path.isfile(real):
+                    return self.send_error_json(404, "源文件不存在")
+                if not is_within(real, allowed_roots()):
+                    return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        except OSError:
+            return self.send_error_json(404, "源文件不存在")
+
+        print("[insert-row] page=%d para=%d gid=%d stage=%s"
+              % (page, para, gid, stage or "-"), file=sys.stderr, flush=True)
+
+        os.makedirs(STAGE_DIR, exist_ok=True)
+        if stage:
+            out_id = stage
+            out_path = os.path.join(STAGE_DIR, stage + ".next.pdf")
+        else:
+            out_id = new_stage_id()
+            out_path = stage_file(out_id)
+
+        hint = payload.get("name")
+        if isinstance(hint, str) and hint.strip():
+            stem_src = hint.strip()
+        else:
+            stem_src = os.path.splitext(os.path.basename(src))[0]
+        base_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_src)[:80] or "文档"
+
+        try:
+            import pdfreflow
+            with _edit_lock:
+                result = pdfreflow.insert_table_row(real, out_path, page, para,
+                                                    gid, where=where)
+        except ValueError as exc:
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(400, str(exc))
+        except Exception as exc:
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return self.send_error_json(500, "插入行失败: %s" % exc)
+
+        try:
+            with open(out_path, "rb") as fp:
+                body = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, "读取产物失败: %s" % exc)
+
+        if stage:
+            backup_stage_version(stage)
+            try:
+                os.replace(out_path, stage_file(stage))
+            except OSError as exc:
+                return self.send_error_json(500, "暂存覆盖失败: %s" % exc)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            "inline; filename*=UTF-8''" + urllib.parse.quote(
+                "%s-插行.pdf" % base_stem))
+        self.send_header("X-Stage-Id", out_id)
+        self.send_header("X-Stage-Path", urllib.parse.quote(
+            stage_file(out_id), safe=""))
+        self.send_header("X-Insert-Height", str(result.get("height") or 0))
+        self.send_header("X-Insert-Rows", str(result.get("moved_rows") or 0))
+        self.send_header("X-Insert-Lines", str(result.get("vlines") or 0))
+        self.send_header("X-Insert-Where", where)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _post_find(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
@@ -772,13 +1007,12 @@ class Handler(BaseHTTPRequestHandler):
                                      bool(payload.get("ignore_case")))
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "查找失败: %s" % exc)
 
         res["ok"] = True
         res["term"] = term
         self.send_json(res)
-
 
     def _post_replace_all(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
@@ -855,7 +1089,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             try:
                 if os.path.exists(out_path):
                     os.remove(out_path)
@@ -897,7 +1131,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-
     def _post_delete_terms(self, real, payload):
         try:
             import pdfbatch
@@ -913,7 +1146,7 @@ class Handler(BaseHTTPRequestHandler):
                     bool(payload.get("ignore_case", True)))
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "删除失败: %s" % exc)
 
         missing = res.get("missing") or []
@@ -983,7 +1216,7 @@ class Handler(BaseHTTPRequestHandler):
                 real, terms, bool(payload.get("ignore_case", True)), mode=mode)
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "定位关键词失败: %s" % exc)
 
         missing = [w for w, n in per_term.items() if n == 0]
@@ -1005,7 +1238,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = pdfredact.apply_redactions(real, out_path, regions)
         except ValueError as exc:
             return self.send_error_json(400, f"涂黑失败: {exc}")
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"涂黑失败: {exc}")
 
         if result.get("removed_glyphs", 0) <= 0:
@@ -1021,7 +1254,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             for w in per_term:
                 residue += len(pdfbatch.find_text(out_path, w, True)["hits"])
-        except Exception:  
+        except Exception:
             residue = -1
 
         try:
@@ -1048,7 +1281,6 @@ class Handler(BaseHTTPRequestHandler):
                              urllib.parse.quote("、".join(missing), safe=""))
         self.end_headers()
         self.wfile.write(body)
-
 
     def _readable(self, src):
         if not src:
@@ -1084,7 +1316,7 @@ class Handler(BaseHTTPRequestHandler):
                                                base_name=stem_src)
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "拆分失败: %s" % exc)
         self.send_json({"ok": True, "files": made, "count": len(made)})
 
@@ -1115,7 +1347,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = pdfbatch.merge_documents(reals, out_path)
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "合并失败: %s" % exc)
         self.send_json({"ok": True, "path": out_path,
                         "name": os.path.basename(out_path),
@@ -1163,7 +1395,7 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path,
                     {"pages": pages, "objects": objects,
                      "annotations": annots})
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"导出失败: {exc}")
 
         rng = payload.get("range")
@@ -1190,7 +1422,7 @@ class Handler(BaseHTTPRequestHandler):
                     result["pages"] = len(picked)
             except ValueError as exc:
                 return self.send_error_json(400, str(exc))
-            except Exception as exc:  
+            except Exception as exc:
                 return self.send_error_json(500, f"按范围导出失败: {exc}")
 
         try:
@@ -1222,7 +1454,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-
     def api_paragraphs(self, query):
         paths = query.get("path", [])
         if not paths:
@@ -1240,10 +1471,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             import pdfreflow
             info = pdfreflow.list_paragraphs(real, page)
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, "解析段落失败: %s" % exc)
         self.send_json(info)
-
 
     def _post_reflow(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
@@ -1347,7 +1577,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return self.send_error_json(400, str(exc))
-        except Exception as exc:  
+        except Exception as exc:
             try:
                 if os.path.exists(out_path):
                     os.remove(out_path)
@@ -1396,7 +1626,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-
     def _post_stage(self, payload):
         sid = payload.get("id")
         if not isinstance(sid, str) or not STAGE_ID_RE.match(sid):
@@ -1421,7 +1650,6 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
         self.send_json({"ok": True, "removed": removed})
-
 
     def _post_stage_undo(self, payload):
         sid = payload.get("id")
@@ -1458,7 +1686,6 @@ class Handler(BaseHTTPRequestHandler):
             "stagePath": dst,
             "remaining": len(vers) - 1,
         })
-
 
     def _post_redact(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
@@ -1498,7 +1725,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = pdfredact.apply_redactions(real, out_path, regions)
         except ValueError as exc:
             return self.send_error_json(400, f"涂黑失败: {exc}")
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"涂黑失败: {exc}")
 
         if result.get("removed_glyphs", 0) <= 0:
@@ -1536,7 +1763,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Redact-Dropped", str(dropped))
         self.end_headers()
         self.wfile.write(body)
-
 
     def _post_replace(self, payload):
         src = urllib.parse.unquote(str(payload.get("path") or ""))
@@ -1587,7 +1813,7 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path, replacements)
         except ValueError as exc:
             return self.send_error_json(400, f"替换失败: {exc}")
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"替换失败: {exc}")
 
         if result.get("replaced_glyphs", 0) <= 0:
@@ -1627,7 +1853,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_file(query, head_only=True)
         self.send_error(404)
 
-
     def _resolve_dirs(self, query):
         global SCAN_DIRS
         seen = {norm(x) for x in SCAN_DIRS}
@@ -1645,7 +1870,7 @@ class Handler(BaseHTTPRequestHandler):
         dirs = self._resolve_dirs(query)
         try:
             files = scan_pdfs(dirs)
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"扫描失败: {exc}")
         self.send_json({
             "ok": True,
@@ -1774,7 +1999,7 @@ class Handler(BaseHTTPRequestHandler):
             if not is_within(real, allowed_roots(query, self)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"解析失败: {exc}")
         self.send_json(info)
 
@@ -1790,14 +2015,14 @@ class Handler(BaseHTTPRequestHandler):
             if not is_within(real, self._resolve_dirs(query)):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             if sys.platform == "win32":
-                os.startfile(real)  
+                os.startfile(real)
             elif sys.platform == "darwin":
                 import subprocess
                 subprocess.Popen(["open", real])
             else:
                 import subprocess
                 subprocess.Popen(["xdg-open", real])
-        except Exception as exc:  
+        except Exception as exc:
             return self.send_error_json(500, f"打开失败: {exc}")
         self.send_json({"ok": True})
 
@@ -1830,9 +2055,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-
-
 def default_dirs():
+    if appenv.FROZEN:
+        home = os.path.expanduser("~")
+        for name in ("Documents", "Desktop", "Downloads"):
+            d = os.path.join(home, name)
+            if os.path.isdir(d):
+                return [d]
+        return [DATA_DIR]
+
     out = []
     local = os.path.join(BASE_DIR, "documents")
     if os.path.isdir(local):
@@ -1844,27 +2075,61 @@ def default_dirs():
         out.append(BASE_DIR)
     return out
 
+def find_running_instance(host, port, span):
+    for p in range(port, port + span):
+        try:
+            with urllib.request.urlopen(
+                    "http://%s:%d/api/ping" % (host, p), timeout=0.25) as r:
+                if r.status == 200 and b"pdfviewer" in r.read(200):
+                    return p
+        except Exception:
+            continue
+    return None
+
+def open_app_window(url):
+    if os.name != "nt":
+        return False
+    roots = [os.environ.get("ProgramFiles(x86)"),
+             os.environ.get("ProgramFiles"),
+             os.environ.get("LOCALAPPDATA")]
+    rel = [
+        ("Microsoft", "Edge", "Application", "msedge.exe"),
+        ("Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for root in roots:
+        if not root:
+            continue
+        for parts in rel:
+            exe = os.path.join(root, *parts)
+            if not os.path.isfile(exe):
+                continue
+            try:
+                import subprocess
+                subprocess.Popen([exe, "--app=" + url, "--window-size=1360,960"],
+                                 close_fds=True)
+                return True
+            except OSError:
+                continue
+    return False
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = (os.name != "nt")
 
-
 def run_startup_check():
     try:
-        import check  
-    except Exception:  
-        return  
+        import check
+    except Exception:
+        return
     try:
         rc = check.main()
-    except Exception as exc:  
+    except Exception as exc:
         print(f"  前端自检无法运行：{exc}")
         return
     if rc:
         print()
         print("  ⚠ 前端自检发现问题（见上）。不阻止启动，")
         print("    但页面可能异常，建议先修复；或用 --no-check 跳过自检。")
-
 
 def clean_stage_orphans():
     if not os.path.isdir(STAGE_DIR):
@@ -1885,9 +2150,14 @@ def clean_stage_orphans():
             continue
     return n
 
-
 def main():
     global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR
+
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(line_buffering=True, errors="replace")
+        except Exception:
+            pass
 
     ap = argparse.ArgumentParser(description="本地 PDF 查看器服务")
     ap.add_argument("--dir", action="append", default=[],
@@ -1895,6 +2165,8 @@ def main():
     ap.add_argument("--port", type=int, default=8000, help="监听端口，默认 8000")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机")
     ap.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    ap.add_argument("--browser", action="store_true",
+                    help="用默认浏览器打开，不开独立应用窗口（打包版默认开应用窗口）")
     ap.add_argument("--no-check", action="store_true",
                     help="启动时跳过前端静态自检（check.py）")
     ap.add_argument("--export-dir", default=None,
@@ -1915,7 +2187,17 @@ def main():
         ANNOT_DIR = os.path.realpath(args.annot_dir)
     if args.stage_dir:
         STAGE_DIR = os.path.realpath(args.stage_dir)
-    os.makedirs(STAGE_DIR, exist_ok=True)
+    for _d in (EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR):
+        os.makedirs(_d, exist_ok=True)
+
+    if appenv.FROZEN:
+        try:
+            appenv.ensure_writable()
+        except OSError as exc:
+            print("错误：数据目录不可写 —— %s" % exc)
+            print("       %s" % DATA_DIR)
+            return 1
+
     dropped = clean_stage_orphans()
     if dropped:
         print("已清理 %d 个过期预览暂存文件" % dropped)
@@ -1929,8 +2211,21 @@ def main():
         print("  python server.py --dir D:\\我的PDF")
         return 1
 
-    if not args.no_check:
+    if not args.no_check and not appenv.FROZEN:
         run_startup_check()
+
+    if args.port == 8000:
+        running = find_running_instance(args.host, args.port, PORT_SCAN_RANGE)
+        if running:
+            url = f"http://{args.host}:{running}/"
+            print("已经有一个 PDF 查看器在运行：%s" % url)
+            print("（两个实例会抢同一份编辑数据，这里就不再开新的了）")
+            if not args.no_browser:
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+            return 0
 
     httpd = None
     taken = []
@@ -1959,16 +2254,25 @@ def main():
     print(f"  扫描目录 :")
     for d in SCAN_DIRS:
         print(f"    - {d}")
+    if appenv.FROZEN:
+        print(f"  数据目录 : {DATA_DIR}")
     print()
     print("  提示：在页面上点「添加目录」可临时扫描其他位置。")
-    print("  按 Ctrl+C 停止服务。")
+    print("  关闭这个窗口即可停止程序（窗口里按 Ctrl+C 也行）。" if appenv.FROZEN
+          else "  按 Ctrl+C 停止服务。")
     print("=" * 58)
 
     if not args.no_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        opened = False
+        if appenv.FROZEN and not args.browser:
+            opened = open_app_window(url)
+            if not opened:
+                print("  提示：没找到 Edge / Chrome，改用默认浏览器打开。")
+        if not opened:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
 
     try:
         httpd.serve_forever()
@@ -1977,7 +2281,6 @@ def main():
     finally:
         httpd.server_close()
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

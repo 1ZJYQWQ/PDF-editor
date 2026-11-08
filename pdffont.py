@@ -15,7 +15,6 @@ DROP_LAYOUT = ("GDEF", "GPOS", "GSUB", "BASE")
 DROP_VAR = ("fvar", "gvar", "avar", "HVAR", "VVAR", "MVAR", "STAT")
 DROP_EXTRA = ("name", "cmap", "vhea", "vmtx", "meta", "kern")
 
-
 def _read_table_dir(data, base=0):
     if len(data) < base + 12:
         raise ValueError("数据太短，不是 sfnt")
@@ -29,9 +28,6 @@ def _read_table_dir(data, base=0):
         tables[tag.decode("latin-1")] = (o, ln)
     return tables
 
-
-
-
 def _cmap_format4(data, off):
     out = {}
     seg_x2 = struct.unpack(">H", data[off + 6:off + 8])[0]
@@ -39,7 +35,7 @@ def _cmap_format4(data, off):
     if seg <= 0:
         return out
     end_base = off + 14
-    start_base = end_base + seg * 2 + 2          
+    start_base = end_base + seg * 2 + 2
     delta_base = start_base + seg * 2
     range_base = delta_base + seg * 2
 
@@ -68,7 +64,6 @@ def _cmap_format4(data, off):
                 out[c] = gid
     return out
 
-
 def _cmap_format12(data, off):
     out = {}
     ngroups = struct.unpack(">I", data[off + 12:off + 16])[0]
@@ -83,7 +78,6 @@ def _cmap_format12(data, off):
         for c in range(s, e + 1):
             out[c] = g + (c - s)
     return out
-
 
 def parse_cmap(data, tables):
     if "cmap" not in tables:
@@ -112,9 +106,6 @@ def parse_cmap(data, tables):
             continue
     return out
 
-
-
-
 def composite_gids(gd):
     if len(gd) < 10:
         return []
@@ -137,7 +128,6 @@ def composite_gids(gd):
         if not (flags & MORE_COMPONENTS):
             break
     return out
-
 
 def subset_glyph(gd, gid_map):
     if len(gd) < 10:
@@ -186,9 +176,6 @@ def subset_glyph(gd, gid_map):
             tail = tail[2 + ilen:]
     return bytes(body) + tail
 
-
-
-
 def _checksum(data):
     if len(data) % 4:
         data = data + b"\x00" * (4 - len(data) % 4)
@@ -196,7 +183,6 @@ def _checksum(data):
     for i in range(0, len(data), 4):
         s = (s + struct.unpack(">I", data[i:i + 4])[0]) & 0xFFFFFFFF
     return s
-
 
 def build_sfnt(tables, sfnt_version=b"\x00\x01\x00\x00"):
     tags = sorted(tables)
@@ -233,9 +219,6 @@ def build_sfnt(tables, sfnt_version=b"\x00\x01\x00\x00"):
         struct.pack_into(">I", out, head_offset + 8, adj)
     return bytes(out)
 
-
-
-
 class SubsetFont:
 
     __slots__ = ("data", "gid_of", "old_to_new", "upem", "widths", "bbox",
@@ -243,15 +226,15 @@ class SubsetFont:
 
     def __init__(self):
         self.data = b""
-        self.gid_of = {}        
-        self.old_to_new = {}    
-        self.widths = {}        
+        self.gid_of = {}
+        self.old_to_new = {}
+        self.widths = {}
         self.upem = 1000
         self.bbox = (0, 0, 0, 0)
         self.ascent = 0
         self.descent = 0
         self.num_glyphs = 0
-        self.missing = []       
+        self.missing = []
         self.ps_name = ""
 
     def encode(self, text):
@@ -264,7 +247,6 @@ class SubsetFont:
                 continue
             out += struct.pack(">H", g)
         return bytes(out), miss
-
 
 class TrueTypeFont:
 
@@ -284,7 +266,6 @@ class TrueTypeFont:
             ">H", self._table_slice("hhea", 34, 2))[0]
         self._loca = self._read_loca()
         self.ps_name = _postscript_name(data, self.tables)
-
 
     def _head_u16(self, off):
         try:
@@ -308,7 +289,6 @@ class TrueTypeFont:
         if len(raw) < 4 * n:
             return [0] * n
         return list(struct.unpack(">%dI" % n, raw))
-
 
     def glyph(self, gid):
         if gid < 0 or gid + 1 >= len(self._loca):
@@ -353,10 +333,9 @@ class TrueTypeFont:
                                   self.data[hhea + 4: hhea + 8])
         return bbox, asc, desc
 
-
     def subset(self, unicodes, ps_name=None):
         cmap = self.cmap_map()
-        want = {0}                     
+        want = {0}
         missing = []
         for u in sorted(set(unicodes)):
             g = cmap.get(u)
@@ -391,8 +370,8 @@ class TrueTypeFont:
         out_tables = {}
 
         head = bytearray(self._table_slice("head", 0, 54))
-        struct.pack_into(">I", head, 8, 0)          
-        struct.pack_into(">h", head, 50, 1)         
+        struct.pack_into(">I", head, 8, 0)
+        struct.pack_into(">h", head, 50, 1)
         out_tables["head"] = bytes(head)
 
         hhea = bytearray(self._table_slice("hhea", 0, 36))
@@ -414,7 +393,6 @@ class TrueTypeFont:
         out_tables["post"] = struct.pack(
             ">iiihhIIII", 0x00030000, 0, 0, 0, 0, 0, 0, 0, 0)
 
-
         res = SubsetFont()
         res.data = build_sfnt(out_tables)
         res.old_to_new = dict(gid_map)
@@ -433,7 +411,6 @@ class TrueTypeFont:
         for old in old_gids:
             res.widths[gid_map[old]] = int(round(self.advance(old) * scale))
         return res
-
 
 def _postscript_name(data, tables):
     if "name" not in tables:
@@ -460,11 +437,9 @@ def _postscript_name(data, tables):
             return ""
     return ""
 
-
 def load(path):
     with open(path, "rb") as f:
         return TrueTypeFont(f.read())
-
 
 def load_default(path=None):
     if path is None:

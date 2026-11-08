@@ -1,3 +1,4 @@
+
 import re
 import statistics
 import struct
@@ -7,9 +8,7 @@ from pdfredact import (PDFDocument, ContentStreamInterpreter,
                        read_page_content, _rewrite_text)
 from pdfpara import build_rows, build_page_model, table_cells
 
-FALLBACK_ALIAS = "CJKfloor"      
-
-
+FALLBACK_ALIAS = "CJKfloor"
 
 def load_page_model(path, page_no=1):
     with open(path, "rb") as fp:
@@ -22,9 +21,8 @@ def load_page_model(path, page_no=1):
     resources = doc.resolve(doc.inherited(pref, "Resources"))
     ip = ContentStreamInterpreter(doc, resources)
     ip.run(content)
-    rows, paras = build_page_model(ip.glyphs)
+    rows, paras = build_page_model(ip.glyphs, rules=page_rules(content))
     return doc, pref, content, ip, rows, paras
-
 
 def char_of(ip):
     def f(g):
@@ -34,21 +32,18 @@ def char_of(ip):
         return fi.to_unicode.get(g.code, "")
     return f
 
-
 def _rev_map(fi):
     rev = getattr(fi, "_rev", None)
     if rev is None:
         rev = {}
         for code, ch in (fi.to_unicode or {}).items():
-            if ch and ch not in rev:      
+            if ch and ch not in rev:
                 rev[ch] = code
         fi._rev = rev
     return rev
 
-
 def para_text(p, ch):
     return "\n".join("".join(ch(g) for g in r["g"]) for r in p["rows"])
-
 
 def dominant_font(p):
     n = {}
@@ -56,8 +51,6 @@ def dominant_font(p):
         for g in r["g"]:
             n[g.font_alias] = n.get(g.font_alias, 0) + 1
     return max(n, key=n.get) if n else ""
-
-
 
 def solid_glyphs(p):
     size = p["size"] or 12.0
@@ -67,7 +60,6 @@ def solid_glyphs(p):
             if (g.x1 - g.x0) > 0.15 * size:
                 out.append(g)
     return out
-
 
 def build_aligned_map(p, orig_text):
     size = p["size"] or 12.0
@@ -87,7 +79,7 @@ def build_aligned_map(p, orig_text):
         for g, c in zip(gs, cs):
             key = (g.font_alias, g.code)
             if c in table and table[c] != key:
-                conflicts += 1      
+                conflicts += 1
                 continue
             table[c] = key
         return table, conflicts
@@ -103,7 +95,6 @@ def build_aligned_map(p, orig_text):
         "为避免把字写错，已拒绝。\n"
         "常见原因：这段里含图片文字、或者原文少取/多取了几个字。"
         % (len(chars_all), len(chars_ns), len(glyphs), len(solid)))
-
 
 def unique_font_alias(doc, page_ref, base):
     page = doc.resolve(page_ref)
@@ -121,7 +112,6 @@ def unique_font_alias(doc, page_ref, base):
         n += 1
         name = "%s%d" % (base, n)
     return name
-
 
 def char_runs(text, fi, alias, size, subset, extra=None, fonts=None,
               fallback_alias=None):
@@ -158,7 +148,6 @@ def char_runs(text, fi, alias, size, subset, extra=None, fonts=None,
         else:
             out.append((ch, None, None, size * 0.5, 0, True))
     return out
-
 
 def wrap_runs(runs, first_x, cont_x, right, tol=0.5):
     hard = [[]]
@@ -212,7 +201,6 @@ def wrap_runs(runs, first_x, cont_x, right, tol=0.5):
 
     return lines
 
-
 def fit_line(line, right):
     runs = line["runs"]
     if not runs:
@@ -223,7 +211,6 @@ def fit_line(line, right):
         return runs
     k = max(0.1, (right - line["x"]) / total)
     return [(r[0], r[1], r[2], r[3] * k, r[4], r[5]) for r in runs]
-
 
 def justify(line, right):
     runs = line["runs"]
@@ -250,11 +237,8 @@ def justify(line, right):
             out.append(r)
     return out
 
-
-
 def _hex(code, nbytes):
     return "%0*X" % (max(1, nbytes) * 2, int(code) & ((1 << (8 * max(1, nbytes))) - 1))
-
 
 def runs_to_ops(items):
     out = [b"q", b"0 0 0 rg", b"BT"]
@@ -269,7 +253,6 @@ def runs_to_ops(items):
     out.append(b"Q")
     return b"\n".join(out) + b"\n"
 
-
 def _row_items(rows, code_bytes, dy=0.0, alias_map=None):
     items = []
     for r in rows:
@@ -278,8 +261,6 @@ def _row_items(rows, code_bytes, dy=0.0, alias_map=None):
             items.append((g.x0, g.y0 + dy, a,
                           g.y1 - g.y0, _hex(g.code, code_bytes.get(g.font_alias, 1))))
     return items
-
-
 
 _NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)'
 _RE_RECT = re.compile(
@@ -290,33 +271,87 @@ _PATH_END = re.compile(
     r'(?<![A-Za-z])(f\*|f|S|s|B\*|B|b\*|b|n|W\*|W)(?![A-Za-z])')
 _PATH_Y_IDX = {"m": [1], "l": [1], "c": [1, 3, 5], "v": [1, 3], "y": [1, 3]}
 
-
 def _fmt_num(v):
     s = ('%.6f' % v).rstrip('0').rstrip('.')
     return '0' if s in ('', '-0') else s
-
 
 def _next_op(text, pos):
     tail = text[pos:pos + 12].lstrip()
     sp = tail.split()
     return sp[0] if sp else ''
 
+_PAINT_OPS = ("f", "F", "f*", "B", "B*", "S", "s", "b", "b*")
+
+def _op_span(text, pos, limit=16):
+    i = pos
+    n = len(text)
+    while i < n and i < pos + limit and text[i] in " \t\r\n":
+        i += 1
+    j = i
+    while j < n and (text[j].isalpha() or text[j] == "*"):
+        j += 1
+    if j == i:
+        return None
+    return (i, j, text[i:j])
+
+def drop_rules(content, ys, tol=1.0):
+    if not ys:
+        return content
+    text = content.decode("latin-1")
+    masked = _mask_strings(text)
+
+    events = []
+    for m in _QS_RE.finditer(masked):
+        events.append((m.start(), "q" if m.group(1) == "q" else "Q", m))
+    for m in _CTM_RE.finditer(masked):
+        events.append((m.start(), "cm",
+                       tuple(float(m.group(i)) for i in range(1, 7))))
+    for m in _RE_RECT.finditer(masked):
+        events.append((m.start(), "re", m))
+    events.sort(key=lambda e: e[0])
+
+    edits = []
+    stack = []
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for _pos, kind, payload in events:
+        if kind == "q":
+            stack.append(ctm)
+            continue
+        if kind == "Q":
+            if stack:
+                ctm = stack.pop()
+            continue
+        if kind == "cm":
+            ctm = _mat_mul(ctm, payload)
+            continue
+        if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9:
+            continue
+        a, b, c, d = (float(payload.group(i)) for i in range(1, 5))
+        x0, y0 = _map_pt(ctm, a, b)
+        x1, y1 = _map_pt(ctm, a + c, b + d)
+        if abs(x1 - x0) < 30.0 or abs(y1 - y0) > 2.0:
+            continue
+        cy = (min(y0, y1) + max(y0, y1)) / 2.0
+        if not any(abs(cy - y) <= tol for y in ys):
+            continue
+        sp = _op_span(text, payload.end())
+        if not sp or sp[2] not in _PAINT_OPS:
+            continue
+        edits.append((sp[0], sp[1], "n"))
+
+    if not edits:
+        return content
+    out, last = [], 0
+    for s0, e0, rep in edits:
+        out.append(text[last:s0])
+        out.append(rep)
+        last = e0
+    out.append(text[last:])
+    return "".join(out).encode("latin-1")
 
 def h_lines(content, x0, x1, tol=2.0):
-    text = content.decode('latin-1')
-    ys = []
-    for m in _RE_RECT.finditer(text):
-        op = _next_op(text, m.end())
-        if op in ('W*', 'n', ''):
-            continue
-        a, b, c, d = (float(m.group(i)) for i in range(1, 5))
-        if d > 1.5:
-            continue                                  
-        if a + c < x0 - tol or a > x1 + tol:
-            continue
-        ys.append(round(b + d / 2.0, 2))
-    return sorted(set(ys), reverse=True)
-
+    return [m["y"] for m in table_rules(content)
+            if not (m["x1"] < x0 - tol or m["x0"] > x1 + tol)]
 
 def _mask_strings(text):
     out = list(text)
@@ -351,11 +386,9 @@ def _mask_strings(text):
             i += 1
     return ''.join(out)
 
-
 _CTM_RE = re.compile(
     r'(%s)\s+(%s)\s+(%s)\s+(%s)\s+(%s)\s+(%s)\s+cm(?![A-Za-z])' % ((_NUM,) * 6))
 _QS_RE = re.compile(r'(?<![A-Za-z0-9])([qQ])(?![A-Za-z0-9])')
-
 
 def _mat_mul(m, c):
     a, b, cc, d, e, f = m
@@ -367,11 +400,76 @@ def _mat_mul(m, c):
             a * ce + cc * cf + e,
             b * ce + d * cf + f)
 
-
 def _map_pt(m, x, y):
     a, b, c, d, e, f = m
     return (a * x + c * y + e, b * x + d * y + f)
 
+def table_rules(content, min_w=30.0, max_h=2.0, merge_tol=0.6):
+    if not content or not content.strip():
+        return []
+    text = content.decode("latin-1")
+    masked = _mask_strings(text)
+
+    events = []
+    for m in _QS_RE.finditer(masked):
+        events.append((m.start(), "q" if m.group(1) == "q" else "Q", m))
+    for m in _CTM_RE.finditer(masked):
+        events.append((m.start(), "cm",
+                       tuple(float(m.group(i)) for i in range(1, 7))))
+    for m in _RE_RECT.finditer(masked):
+        events.append((m.start(), "re", m))
+    events.sort(key=lambda e: e[0])
+
+    stack = []
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    segs = []
+    for _pos, kind, payload in events:
+        if kind == "q":
+            stack.append(ctm)
+            continue
+        if kind == "Q":
+            if stack:
+                ctm = stack.pop()
+            continue
+        if kind == "cm":
+            ctm = _mat_mul(ctm, payload)
+            continue
+        if _next_op(text, payload.end()) in ("W", "W*", "n", ""):
+            continue
+        if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9:
+            continue
+        a, b, c, d = (float(payload.group(i)) for i in range(1, 5))
+        x0, y0 = _map_pt(ctm, a, b)
+        x1, y1 = _map_pt(ctm, a + c, b + d)
+        w = abs(x1 - x0)
+        h = abs(y1 - y0)
+        if h <= max_h and w >= min_w:
+            segs.append((min(x0, x1), max(x0, x1),
+                         min(y0, y1), max(y0, y1)))
+
+    segs.sort(key=lambda t: (t[2] + t[3]) / 2.0)
+    merged = []
+    for lo, hi, by0, by1 in segs:
+        cy = (by0 + by1) / 2.0
+        if merged and abs(merged[-1]["y"] - cy) <= merge_tol:
+            m = merged[-1]
+            m["x0"] = min(m["x0"], lo)
+            m["x1"] = max(m["x1"], hi)
+            m["top"] = max(m["top"], by1)
+            m["bottom"] = min(m["bottom"], by0)
+            m["w"] = m["x1"] - m["x0"]
+            m["parts"] += 1
+        else:
+            merged.append({"y": cy, "top": by1, "bottom": by0,
+                           "x0": lo, "x1": hi, "w": hi - lo, "parts": 1})
+
+    for m in merged:
+        for k in ("y", "top", "bottom", "x0", "x1", "w"):
+            m[k] = round(m[k], 4)
+    return sorted(merged, key=lambda m: -m["y"])
+
+def page_rules(content, min_w=30.0, max_h=2.0, merge_tol=0.6):
+    return [m["y"] for m in table_rules(content, min_w, max_h, merge_tol)]
 
 def shift_vectors(content, y_bot, delta, x0, x1, tol=2.0, y_min=0.0,
                   stretch=True):
@@ -444,9 +542,9 @@ def shift_vectors(content, y_bot, delta, x0, x1, tol=2.0, y_min=0.0,
                 path["xs"].append(X)
                 path["ys"].append(Y)
             if path["dy"] is None:
-                pass                                   
+                pass
             elif abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9 or abs(ctm[3]) < 1e-9:
-                path["dy"] = None                      
+                path["dy"] = None
                 stat["ctm_skipped"] += 1
             else:
                 path["dy"] = -delta / ctm[3]
@@ -465,7 +563,7 @@ def shift_vectors(content, y_bot, delta, x0, x1, tol=2.0, y_min=0.0,
         m = payload
         op = _next_op(text, m.end())
         if op in ("W", "W*", "n", ""):
-            continue                                  
+            continue
         a, b, c, d = (float(m.group(i)) for i in range(1, 5))
         if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9 or abs(ctm[3]) < 1e-9:
             stat["ctm_skipped"] += 1
@@ -476,9 +574,9 @@ def shift_vectors(content, y_bot, delta, x0, x1, tol=2.0, y_min=0.0,
         by0, by1 = min(py0, py1), max(py0, py1)
         bw, bh = bx1 - bx0, by1 - by0
         if bx1 < x0 - tol or bx0 > x1 + tol:
-            continue                                  
+            continue
         if by1 <= y_min + 1.0:
-            continue                                  
+            continue
 
         local_dy = -delta / ctm[3]
         local_h = delta / abs(ctm[3]) if stretch else 0.0
@@ -505,7 +603,6 @@ def shift_vectors(content, y_bot, delta, x0, x1, tol=2.0, y_min=0.0,
         last = e
     out.append(text[last:])
     return ''.join(out).encode('latin-1'), stat
-
 
 def take_vectors(content, y_cut, x0, x1, tol=2.0, y_min=0.0):
     text = content.decode("latin-1")
@@ -540,9 +637,9 @@ def take_vectors(content, y_cut, x0, x1, tol=2.0, y_min=0.0):
         m = payload
         op = _next_op(text, m.end())
         if op in ("W", "W*", "n", ""):
-            continue                                  
+            continue
         if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9:
-            continue                                  
+            continue
         a, b, c, d = (float(m.group(i)) for i in range(1, 5))
         (px0, py0) = _map_pt(ctm, a, b)
         (px1, py1) = _map_pt(ctm, a + c, b + d)
@@ -551,9 +648,9 @@ def take_vectors(content, y_cut, x0, x1, tol=2.0, y_min=0.0):
         if bx1 < x0 - tol or bx0 > x1 + tol:
             continue
         if by1 <= y_min + 1.0:
-            continue                                  
+            continue
         if (by0 + by1) / 2.0 >= y_cut - tol:
-            continue                                  
+            continue
         picked.append((bx0, by0, bx1 - bx0, by1 - by0))
         edits.append((m.start(), m.end(), m.group(0) + " n"))
 
@@ -567,7 +664,6 @@ def take_vectors(content, y_cut, x0, x1, tol=2.0, y_min=0.0):
     out.append(text[last:])
     return "".join(out).encode("latin-1"), picked
 
-
 def rect_ops(rects, dy, gray=0.0):
     if not rects:
         return b""
@@ -580,21 +676,17 @@ def rect_ops(rects, dy, gray=0.0):
     parts.append("Q")
     return ("\n".join(parts) + "\n").encode("latin-1")
 
-
 def shift_table_borders(content, p, delta, y_min=24.0):
     ty0 = p.get("_table_y0", p["bottom"])
     ty1 = p.get("_table_y1", p["top"])
     span = None
-    for m in _RE_RECT.finditer(content.decode("latin-1")):
-        if _next_op(content.decode("latin-1"), m.end()) in ("W", "W*", "n", ""):
+    for m in table_rules(content):
+        if None in (ty0, ty1):
+            break
+        if not (ty0 - 3.0 <= m["y"] <= ty1 + 3.0):
             continue
-        a, b, c, d = (float(m.group(i)) for i in range(1, 5))
-        if d > 1.5 or c < 5:
-            continue                                   
-        if b + d / 2.0 < ty0 - 3 or b + d / 2.0 > ty1 + 3:
-            continue
-        lo, hi = a, a + c
-        span = (lo, hi) if span is None else (min(span[0], lo), max(span[1], hi))
+        span = ((m["x0"], m["x1"]) if span is None
+                else (min(span[0], m["x0"]), max(span[1], m["x1"])))
 
     if span is None:
         x0 = p.get("_table_x0", p["left"]) - 2.0
@@ -614,35 +706,326 @@ def shift_table_borders(content, p, delta, y_min=24.0):
     stat["y_bot"] = y_bot
     return new_content, stat
 
+def _row_band(content, g):
+    top, bot = g["top"], g["bottom"]
+    rules = table_rules(content)
+    above = [m for m in rules if m["y"] >= top - 0.6]
+    below = [m for m in rules if m["y"] <= bot + 0.6]
+    if not above or not below:
+        return None, None, 0.0
+    upper = min(above, key=lambda m: m["y"])
+    lower = max(below, key=lambda m: m["y"])
+    return upper, lower, upper["y"] - lower["y"]
 
+def _footer_line(rows, bottom_limit, col):
+    body = [r for r in rows
+            if r["y"] >= bottom_limit - 1 and r.get("col", 0) == col]
+    if len(body) < 2:
+        return None
+    ys = sorted(r["y"] for r in body)
+    diffs = [b - a for a, b in zip(ys, ys[1:])]
+    typical = statistics.median(diffs) if diffs else 0.0
+    if typical > 0 and (ys[1] - ys[0]) > typical * 3:
+        return ys[0]
+    return None
+
+def _row_vbars(content, lower, upper):
+    text = content.decode("latin-1")
+    masked = _mask_strings(text)
+    events = []
+    for m in _QS_RE.finditer(masked):
+        events.append((m.start(), "q" if m.group(1) == "q" else "Q", m))
+    for m in _CTM_RE.finditer(masked):
+        events.append((m.start(), "cm",
+                       tuple(float(m.group(i)) for i in range(1, 7))))
+    for m in _RE_RECT.finditer(masked):
+        events.append((m.start(), "re", m))
+    events.sort(key=lambda e: e[0])
+
+    out = []
+    stack = []
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for _pos, kind, payload in events:
+        if kind == "q":
+            stack.append(ctm)
+            continue
+        if kind == "Q":
+            if stack:
+                ctm = stack.pop()
+            continue
+        if kind == "cm":
+            ctm = _mat_mul(ctm, payload)
+            continue
+        if _next_op(text, payload.end()) in ("W", "W*", "n", ""):
+            continue
+        if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9:
+            continue
+        a, b, c, d = (float(payload.group(i)) for i in range(1, 5))
+        x0, y0 = _map_pt(ctm, a, b)
+        x1, y1 = _map_pt(ctm, a + c, b + d)
+        bx0, bx1 = min(x0, x1), max(x0, x1)
+        by0, by1 = min(y0, y1), max(y0, y1)
+        if (bx1 - bx0) > 1.5 or (by1 - by0) < 1.5:
+            continue
+        if by0 < lower["top"] - 1.5 or by1 > upper["bottom"] + 1.5:
+            continue
+        out.append((bx0, bx1 - bx0, by0, by1 - by0))
+    seen, uniq = set(), []
+    for vb in sorted(out, key=lambda t: t[0]):
+        k = round(vb[0], 2)
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(vb)
+    return uniq
+
+def _insert_row_ops(rule, height, vbars=(), above=False):
+    th = max(rule["top"] - rule["bottom"], 0.3)
+    if above:
+        y_line = rule["bottom"]
+        shifted = [(x, w, y0 + h - height, h) for (x, w, y0, h) in vbars]
+    else:
+        y_line = rule["bottom"] - height
+        shifted = [(x, w, y0 - height, h) for (x, w, y0, h) in vbars]
+    parts = ["q", "0 g", "0 G"]
+    parts.append("%s %s %s %s re f*" % (_fmt_num(rule["x0"]),
+                                        _fmt_num(y_line),
+                                        _fmt_num(rule["x1"] - rule["x0"]),
+                                        _fmt_num(th)))
+    for (x, w, y0, h) in shifted:
+        parts.append("%s %s %s %s re f*" % (_fmt_num(x),
+                                            _fmt_num(y0),
+                                            _fmt_num(w), _fmt_num(h)))
+    parts.append("Q")
+    return ("\n".join(parts) + "\n").encode("latin-1")
+
+def insert_table_row(src_path, out_path, page_no, para_index, gid,
+                     bottom_limit=24.0, where="below"):
+    above = (where == "above")
+    if where not in ("below", "above"):
+        raise ValueError("where 只能是 below 或 above。")
+    doc, pref, content, ip, rows, paras = load_page_model(src_path, page_no)
+    if not (0 <= para_index < len(paras)):
+        raise ValueError("段号超出范围。")
+    p = paras[para_index]
+    if not p.get("table_like"):
+        raise ValueError("这一段不是表格，不能加行。")
+
+    cells, _cols = table_cells(p)
+    tgt = [cl for cl in cells if cl.get("gid") == gid]
+    if not tgt:
+        raise ValueError("没找到这一行（表格结构可能已变化），请刷新后重试。")
+    gs_all = [g for cl in tgt for g in cl["glyphs"]]
+    if not gs_all:
+        raise ValueError("这一行没有文字，定位不到它的上下边框。")
+
+    box = {"top": max(g.y1 for g in gs_all),
+           "bottom": min(g.y0 for g in gs_all)}
+    upper, lower, height = _row_band(content, box)
+    if upper is None:
+        raise ValueError("这一行缺少完整的上下表格线，暂时不能加行。")
+    if height <= 1.0:
+        raise ValueError("算不出这一行的高度（上下线贴在一起）。")
+
+    col = p.get("col", 0)
+    footer_y = _footer_line(rows, bottom_limit, col)
+    y_min = (footer_y + 1.0) if footer_y is not None else bottom_limit
+
+    body = [r for r in rows if r["y"] >= y_min - 0.5 and r.get("col", 0) == col]
+    lowest = min((r["y"] for r in body), default=None)
+    if lowest is not None and lowest - height < y_min - 0.5:
+        raise ValueError(
+            "页底放不下了：这一行高 %.1fpt，但最下面一行离页底只剩 %.1fpt。\n"
+            "可以先删掉几行、或把下面的内容改短一点。"
+            % (height, max(0.0, lowest - y_min)))
+
+    x0 = min(upper["x0"], lower["x0"]) - 1.0
+    x1 = max(upper["x1"], lower["x1"]) + 1.0
+    vbars = _row_vbars(content, lower, upper)
+
+    code_bytes = {a: fi.code_bytes for a, fi in ip.fonts.items()}
+    killed = {(g.op_index, g.char_index) for g in ip.glyphs}
+
+    out_content = _rewrite_text(content, killed, code_bytes)
+
+    cut_y = (upper["y"] + 2.0) if above else (lower["y"] - 4.0)
+    out_content, stat = shift_vectors(out_content, cut_y, height,
+                                      x0, x1, y_min=y_min, stretch=False)
+
+    out_content = out_content + _insert_row_ops(lower if not above else upper,
+                                                height, vbars, above=above)
+
+    cut_row = (upper["y"] + 0.5) if above else (lower["y"] - 0.5)
+    copy_dy = 0.0 if above else -height
+    hit_ids = {id(r) for r in rows
+               if any(id(g) in {id(x) for cl in tgt for x in cl["glyphs"]}
+                      for g in r["g"])}
+    items = []
+    moved_rows = 0
+    for r in rows:
+        dy = 0.0
+        if (r.get("col", 0) == col and r["y"] < cut_row
+                and r["y"] > y_min):
+            dy = -height
+            moved_rows += 1
+        items += _row_items([r], code_bytes, dy=dy)
+        if id(r) in hit_ids:
+            items += _row_items([r], code_bytes, dy=copy_dy)
+    ops = runs_to_ops(items)
+
+    page = doc.resolve(pref)
+    page["Contents"] = [
+        doc.new_obj(({"Length": len(out_content)}, out_content)),
+        doc.new_obj(({"Length": len(ops)}, ops)),
+    ]
+
+    from pdfedit import build_pdf
+    size_bytes = build_pdf(doc, {}, out_path)
+
+    return {
+        "ok": True,
+        "page": page_no,
+        "para": para_index,
+        "gid": gid,
+        "where": "above" if above else "below",
+        "height": round(height, 2),
+        "above": round(upper["y"], 2),
+        "below": round(lower["y"], 2),
+        "moved_rows": moved_rows,
+        "vlines": len(vbars),
+        "border_shift": stat,
+        "size": size_bytes,
+    }
+
+def delete_table_row(src_path, out_path, page_no, para_index, gid,
+                     bottom_limit=24.0):
+    doc, pref, content, ip, rows, paras = load_page_model(src_path, page_no)
+    if not (0 <= para_index < len(paras)):
+        raise ValueError("段号超出范围。")
+    p = paras[para_index]
+    if not p.get("table_like"):
+        raise ValueError("这一段不是表格，没有行可删。")
+
+    cells, _cols = table_cells(p)
+    tgt = [cl for cl in cells if cl.get("gid") == gid]
+    if not tgt:
+        raise ValueError("没找到这一行（表格结构可能已变化），请刷新后重试。")
+
+    kill_ids = {id(g) for cl in tgt for g in cl["glyphs"]}
+    if not kill_ids:
+        raise ValueError("这一行没有文字。")
+
+    hit = [r for r in p["rows"] if any(id(g) in kill_ids for g in r["g"])]
+    if not hit:
+        raise ValueError("没找到这一行的文字。")
+
+    ch = char_of(ip)
+    gs_all = [g for cl in tgt for g in cl["glyphs"]]
+    text = "".join(ch(g) for g in sorted(
+        gs_all, key=lambda g: (-round(g.y0, 2), g.x0)))
+
+    box = {"top": max(g.y1 for g in gs_all),
+           "bottom": min(g.y0 for g in gs_all)}
+    upper, lower, height = _row_band(content, box)
+    if upper is None:
+        raise ValueError("这一行缺少完整的上下表格线，暂时不能删。")
+    if height <= 1.0:
+        raise ValueError("算不出这一行的高度（上下线贴在一起）。")
+
+    col = p.get("col", 0)
+    footer_y = _footer_line(rows, bottom_limit, col)
+    y_min = (footer_y + 1.0) if footer_y is not None else bottom_limit
+
+    x0 = min(upper["x0"], lower["x0"]) - 1.0
+    x1 = max(upper["x1"], lower["x1"]) + 1.0
+
+    code_bytes = {a: fi.code_bytes for a, fi in ip.fonts.items()}
+    killed = {(g.op_index, g.char_index) for g in ip.glyphs}
+
+    out_content = _rewrite_text(content, killed, code_bytes)
+
+    out_content = drop_rules(out_content, [lower["y"]], tol=1.5)
+
+    out_content, stat = shift_vectors(out_content, lower["y"] - 4.0, -height,
+                                      x0, x1, y_min=y_min, stretch=False)
+
+    hit_ids = {id(r) for r in hit}
+    items = []
+    moved_rows = 0
+    for r in rows:
+        if id(r) in hit_ids:
+            continue
+        dy = 0.0
+        if (r.get("col", 0) == col and r["y"] < lower["y"] - 0.5
+                and r["y"] > y_min):
+            dy = height
+            moved_rows += 1
+        items += _row_items([r], code_bytes, dy=dy)
+    ops = runs_to_ops(items)
+
+    page = doc.resolve(pref)
+    page["Contents"] = [
+        doc.new_obj(({"Length": len(out_content)}, out_content)),
+        doc.new_obj(({"Length": len(ops)}, ops)),
+    ]
+
+    from pdfedit import build_pdf
+    size_bytes = build_pdf(doc, {}, out_path)
+
+    return {
+        "ok": True,
+        "page": page_no,
+        "para": para_index,
+        "gid": gid,
+        "text": text,
+        "height": round(height, 2),
+        "upper": round(upper["y"], 2),
+        "lower": round(lower["y"], 2),
+        "moved_rows": moved_rows,
+        "lines_removed": 1,
+        "border_shift": stat,
+        "size": size_bytes,
+    }
 
 def _cell_as_para(p, cl):
-    orig = p["rows"][cl["row"]]
+    grow = cl.get("rows") or [p["rows"][cl["row"]]]
     ids = {id(g) for g in cl["glyphs"]}
 
-    sub = dict(orig)
-    sub["g"] = list(cl["glyphs"])
-    sub["x0"], sub["x1"] = cl["x0"], cl["x1"]
-    sub["cols"], sub["maxgap"] = 1, 0.0
+    sub_rows = []
+    rest_rows = []
+    for r in grow:
+        gs = [g for g in r["g"] if id(g) in ids]
+        if gs:
+            sub = dict(r)
+            sub["g"] = gs
+            sub["x0"], sub["x1"] = gs[0].x0, gs[-1].x1
+            sub["cols"], sub["maxgap"] = 1, 0.0
+            sub_rows.append(sub)
+        other = [g for g in r["g"] if id(g) not in ids]
+        if other:
+            rest = dict(r)
+            rest["g"] = other
+            rest["x0"] = other[0].x0
+            rest["x1"] = other[-1].x1
+            rest_rows.append(rest)
 
-    rest = dict(orig)
-    rest["g"] = [g for g in orig["g"] if id(g) not in ids]
-    rest["x0"] = rest["g"][0].x0 if rest["g"] else orig["x0"]
-    rest["x1"] = rest["g"][-1].x1 if rest["g"] else orig["x1"]
+    if not sub_rows:
+        sub_rows = [dict(grow[0])]
 
     pseudo = dict(p)
     pseudo.update({
-        "rows": [sub],
+        "rows": sub_rows,
         "left": cl["x0"],
         "right": cl["right"],
-        "top": cl["y1"],
-        "bottom": cl["y0"],
+        "top": sub_rows[0]["y"] + cl["size"],
+        "bottom": sub_rows[-1]["y"],
         "size": cl["size"],
         "gap": cl["size"] * 1.25,
         "table_like": False,
         "_cell": True,
-        "_orig_row": orig,
-        "_extra_rows": [rest] if rest["g"] else [],
+        "_orig_row": grow[0] if len(grow) == 1 else None,
+        "_orig_rows": list(grow),
+        "_extra_rows": rest_rows,
         "_force_right": cl["right"],
         "_table_x0": p.get("left", cl["x0"]),
         "_table_x1": p.get("right", cl["right"]),
@@ -650,7 +1033,6 @@ def _cell_as_para(p, cl):
         "_table_y1": p.get("top", cl["y1"]),
     })
     return pseudo
-
 
 def _prepare_edit(src_path, page_no, para_index, new_text,
                   orig_text=None, page_text=None, cell=None):
@@ -729,13 +1111,13 @@ def _prepare_edit(src_path, page_no, para_index, new_text,
                 pmap = {}
             if pmap:
                 merged = dict(pmap)
-                merged.update(extra_map)       
+                merged.update(extra_map)
                 extra_map = merged
                 map_source = "aligned-page"
 
     size = p["size"]
-    first_x = p["rows"][0]["x0"]                      
-    cont_x = min(r["x0"] for r in p["rows"])          
+    first_x = p["rows"][0]["x0"]
+    cont_x = min(r["x0"] for r in p["rows"])
     if p.get("_force_right"):
         right = p["_force_right"]
     elif len(p["rows"]) > 1:
@@ -786,7 +1168,6 @@ def _prepare_edit(src_path, page_no, para_index, new_text,
         "shift_x0": shift_x0, "shift_x1": shift_x1,
     }
 
-
 def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
                          bottom_limit=24.0, orig_text=None, page_text=None,
                          cell=None):
@@ -800,10 +1181,9 @@ def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
     extra_map = ctx["extra_map"]
     map_source, conflicts = ctx["map_source"], ctx["conflicts"]
 
-
     old_n = len(p["rows"])
     new_n = len(lines)
-    delta = (new_n - old_n) * gap        
+    delta = (new_n - old_n) * gap
 
     pcol = p.get("col", 0)
     body_rows = [r for r in rows
@@ -820,7 +1200,7 @@ def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
 
     below = [r for r in body_rows if r["y"] < p["bottom"] - 0.5]
     lowest = min((r["y"] for r in body_rows), default=bottom_limit)
-    avail = lowest - bottom_limit          
+    avail = lowest - bottom_limit
     if delta > avail + 1e-6:
         if p.get("_cell"):
             raise ValueError(
@@ -834,7 +1214,9 @@ def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
             % (delta, max(0.0, avail)))
 
     own = {id(r) for r in p["rows"]}
-    skip = {id(p["_orig_row"])} if p.get("_orig_row") is not None else set()
+    skip = {id(r) for r in (p.get("_orig_rows") or [])}
+    if p.get("_orig_row") is not None:
+        skip.add(id(p["_orig_row"]))
 
     items = []
     extra_dy = -delta / 2.0 if p.get("_cell") else 0.0
@@ -842,14 +1224,14 @@ def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
         items += _row_items([r], code_bytes, dy=extra_dy)
     for r in rows:
         if id(r) in own or id(r) in skip:
-            continue                                   
+            continue
         if r.get("col", 0) != pcol:
-            dy = 0.0                                   
+            dy = 0.0
         elif r["y"] < bottom_limit - 1 or (
                 footer_y is not None and abs(r["y"] - footer_y) < 1.0):
-            dy = 0.0                                   
+            dy = 0.0
         elif r["y"] < p["bottom"] - 0.5:
-            dy = -delta                                
+            dy = -delta
         else:
             dy = 0.0
         items += _row_items([r], code_bytes, dy=dy)
@@ -914,7 +1296,6 @@ def apply_paragraph_edit(src_path, out_path, page_no, para_index, new_text,
         "fallback_chars": "".join(sorted(miss)),
     }
 
-
 def list_paragraphs(src_path, page_no=1):
     doc, pref, content, ip, rows, paras = load_page_model(src_path, page_no)
     ch = char_of(ip)
@@ -941,14 +1322,13 @@ def list_paragraphs(src_path, page_no=1):
             cs, _cstarts = table_cells(p)
             item["cells"] = [{
                 "row": cl["row"], "col": cl["col"],
+                "gid": cl.get("gid", cl["row"]),
                 "x0": round(cl["x0"], 2), "y0": round(cl["y0"], 2),
                 "x1": round(cl["right"], 2), "y1": round(cl["y1"], 2),
                 "text": "".join(ch(g) for g in cl["glyphs"]),
             } for cl in cs]
         out.append(item)
     return {"ok": True, "page": page_no, "count": len(out), "paragraphs": out}
-
-
 
 def _font_resources(doc, pref):
     page = doc.resolve(pref)
@@ -959,7 +1339,6 @@ def _font_resources(doc, pref):
     if not isinstance(fonts, dict):
         return {}
     return {str(k): v for k, v in fonts.items()}
-
 
 def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
                          orig_text=None, page_text=None,
@@ -981,7 +1360,7 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
 
     refs = doc.page_refs()
     total = len(refs)
-    total0 = total                     
+    total0 = total
 
     page_h = 842.0
     mb = doc.inherited(refs[0], "MediaBox")
@@ -1023,10 +1402,10 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
     def items_for(k):
         m = model_of(k)
         out = []
-        fixed = []          
+        fixed = []
         prev_y = None
         replaced = False
-        after_y = None      
+        after_y = None
         for r in m["rows"]:
             if r["y"] < bottom - 1:
                 fixed.append(r)
@@ -1054,8 +1433,8 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
 
     page = page_no
     carry = []
-    plan = []                     
-    moved = []                    
+    plan = []
+    moved = []
     carry_cut, carry_from = None, None
     while True:
         m = model_of(page)
@@ -1113,10 +1492,10 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
                 new_line_aliases.add(a)
     font_src = _font_resources(doc, ctx["pref"])
     floor_alias = ctx.get("floor_alias") or FALLBACK_ALIAS
-    font_src.setdefault(floor_alias, None)         
+    font_src.setdefault(floor_alias, None)
 
-    taken = {}      
-    give = {}       
+    taken = {}
+    give = {}
     for (src, cut, dst, dy) in moved:
         if src in taken:
             continue
@@ -1131,7 +1510,7 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
         taken[src] = (new_raw, picked)
         give[dst] = (picked, dy)
 
-    cache_amap = {}     
+    cache_amap = {}
 
     def _carry_font(doc_, dst_ref, dst_pg, src_pg, alias, model_of_, cache_):
         key = (dst_pg, src_pg, alias)
@@ -1156,7 +1535,7 @@ def apply_paragraph_flow(src_path, out_path, page_no, para_index, new_text,
             if v is not None:
                 need[a] = v
         if pg == page_no:
-            need[floor_alias] = None               
+            need[floor_alias] = None
         need = {k: v for k, v in need.items() if v is not None}
         if need:
             _attach_font_resource(doc, ref, need)

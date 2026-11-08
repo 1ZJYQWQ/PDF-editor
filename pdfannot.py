@@ -1,3 +1,4 @@
+
 import time
 
 from pdfedit import Name, Ref
@@ -15,7 +16,6 @@ TEXT_TYPES = ("Highlight", "Underline", "Squiggly", "StrikeOut")
 
 AUTHOR = "PDF Viewer"
 
-
 def _rgb(color):
     fallback = [1.0, 0.75, 0.1]
     if not isinstance(color, str):
@@ -29,7 +29,6 @@ def _rgb(color):
         return [int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
     except ValueError:
         return fallback
-
 
 def _norm_rects(rects):
     out = []
@@ -45,7 +44,6 @@ def _norm_rects(rects):
         out.append((x0, y0, x1, y1))
     return out
 
-
 def _pdf_text(s):
     if not s:
         return b"()"
@@ -57,17 +55,15 @@ def _pdf_text(s):
         return b"<" + raw.hex().upper().encode("ascii") + b">"
     out = bytearray(b"(")
     for byte in raw:
-        if byte in (0x28, 0x29, 0x5C):        
+        if byte in (0x28, 0x29, 0x5C):
             out += b"\\" + bytes([byte])
         else:
             out += bytes([byte])
     out += b")"
     return bytes(out)
 
-
 def _r(v):
     return round(float(v), 2)
-
 
 def _annot_dict(sub, rects, color, note, stamp):
     x0 = min(r[0] for r in rects)
@@ -107,7 +103,6 @@ def _annot_dict(sub, rects, color, note, stamp):
         d["Contents"] = _pdf_text(note or "笔记")
 
     return d
-
 
 def apply_annotations(doc, page_refs, items):
     stamp = time.strftime("D:%Y%m%d%H%M%S+08'00'")
@@ -151,7 +146,7 @@ def apply_annotations(doc, page_refs, items):
         if not isinstance(annots, list):
             annots = []
         else:
-            annots = list(annots)          
+            annots = list(annots)
         for d in dicts:
             annots.append(doc.new_obj(d))
             written += 1

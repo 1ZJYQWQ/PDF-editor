@@ -1,4 +1,7 @@
 
+
+
+
 import { state, $, escapeHtml, toast } from '/static/core.js';
 import { exportPdf, downloadServerFile } from '/static/edit.js';
 
@@ -16,6 +19,8 @@ export function initBatchUI(h) {
 }
 
 
+
+
 const keyOf = (h) =>
   `${h.page}:${h.para}:${h.cell ? h.cell[0] + '.' + h.cell[1] : ''}`;
 
@@ -25,6 +30,8 @@ const labelOf = (h) =>
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+
 
 function markPreview(text, term, ignoreCase) {
   if (!term) return escapeHtml(text);
@@ -43,6 +50,7 @@ function markPreview(text, term, ignoreCase) {
   return out;
 }
 
+
 function placePop(pop, anchor) {
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
@@ -55,6 +63,8 @@ function placePop(pop, anchor) {
   pop.style.left = Math.max(12, left) + 'px';
   pop.style.top = top + 'px';
 }
+
+
 
 
 let hits = [];
@@ -90,6 +100,7 @@ function bindFindReplace() {
       syncPickButtons();
       return;
     }
+    
     hooks.goToPage(h.page);
     hooks.flashBoxes(h.page, h.boxes);
   });
@@ -191,6 +202,7 @@ async function doReplace(onlyPicked) {
       name: state.fileName,
     };
     if (targets) body.targets = targets;
+    
     if (state.stage && state.stage.id) body.stage = state.stage.id;
 
     const r = await fetch('/api/replace_all', {
@@ -228,6 +240,7 @@ async function doReplace(onlyPicked) {
       (skipped ? `；跳过：${decodeURIComponent(skipped)}` : ''),
       skipped ? 6000 : 3800);
 
+    
     await doFind();
   } catch (e) {
     $('bpCount').textContent = before;
@@ -238,6 +251,8 @@ async function doReplace(onlyPicked) {
     syncPickButtons();
   }
 }
+
+
 
 
 function bindTermRedact() {
@@ -253,6 +268,8 @@ function bindTermRedact() {
   $('termCancel').addEventListener('click', () => { pop.hidden = true; });
   $('termOk').addEventListener('click', runTermRedact);
 
+  
+  
   const sel = $('termMode');
   if (sel) {
     const paint = () => {
@@ -278,6 +295,8 @@ async function runTermRedact() {
   const src = state.contentPath || state.filePath;
   if (!src) { toast('请先打开一个文档', 1600); return; }
 
+  
+  
   const sel = ($('termMode') && $('termMode').value) || 'delete';
   const style = sel.startsWith('redact') ? 'redact' : 'delete';
   const mode = style === 'redact' ? sel.slice(7) : null;
@@ -334,6 +353,7 @@ async function runTermRedact() {
 
     $('termPop').hidden = true;
 
+    
     let msg;
     let bad;
     if (style === 'delete') {
@@ -345,6 +365,8 @@ async function runTermRedact() {
       const skipped = r.headers.get('X-Delete-Skipped') || '';
       const check = residue == null ? '' :
         (residue === '0' ? '，复查残留 0 处' : `，⚠ 复查仍有 ${residue} 处残留`);
+      
+      
       const more = remaining > 0 ? `；还有 ${remaining} 段没处理，请再点一次` : '';
       msg = `已删掉 ${removed} 处（${edits} 段）${check}` +
         (missing ? `；没找到：${decodeURIComponent(missing)}` : '') +
@@ -369,6 +391,8 @@ async function runTermRedact() {
     btn.textContent = '删除并另存为…';
   }
 }
+
+
 
 
 function bindRangeExport() {
@@ -415,6 +439,7 @@ async function runSplit() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `拆分失败 (${r.status})`);
 
+    
     const pop = $('rangePop');
     let box = pop.querySelector('.split-list');
     if (!box) {

@@ -20,14 +20,26 @@
 | **阅读** | 缩放、翻页、单页 / 双栏、缩略图、目录、搜索、阅读书签、反色 |
 | **标注** | 高亮 / 下划线 / 波浪线 / 删除线 / 便签 / 方框 → 写成 PDF 原生注释（或许你需要用鼠标选择文字？） |
 | **编辑** | 图形对象（矩形/椭圆/直线/文字/涂白）、页面管理、原位替换、段落重排、整篇查找替换 |
+| **表格** | 一格一格改字（改长会自动撑高整行，边框跟着走）、按表格线认行、插一行 / 删一行（下面的内容跟着走、边框自动补齐） |
 | **涂黑** | 删文字（不是涂白）。可框选，也可给一串关键词全篇处理：**删掉并重排**（后面的字补位）或**涂黑留痕**（版面不动、盖黑块）。零命中直接报错 |
+| **新建** | 从零生成空白 PDF（A4/A3/A5/Letter/Legal，可横向，1~200 页），建好直接进编辑模式 |
 | **导出** | 一键导出，批注与编辑一并写入，撞名不覆盖；可按页码范围导出、按份拆分、多份合并 |
 
 ---
 
 ## 快速开始
 
-很明显，首先，你需要一个python3.12+
+**Windows 安装版**：`PDFViewer-1.0.0-pre-setup.exe`，装完有桌面图标，能从「应用和功能」卸载。
+安装时可以选「仅为我安装」（`%LOCALAPPDATA%\Programs`，不弹 UAC）或「为所有用户安装」。
+启动后是一个**独立窗口**（没有地址栏和标签页），借 Edge 的 `--app` 模式，不需要额外装任何东西。
+
+**Windows 免安装**：`PDFViewer-1.0.0-pre-win64.zip`，解压后双击 `PDFViewer.exe`。别只把 exe 拖出来，旁边的 `_internal` 是运行库。
+
+编辑数据、导出暂存都在 `%APPDATA%\PDFViewer`，删程序文件夹不影响它们。
+卸载时会问一句要不要一并删掉，不点「是」就留着。
+没买签名证书，第一次运行 Windows 会拦一下：**更多信息 → 仍要运行**。
+
+**或者直接跑源码**（任意平台）：
 
 ```bash
 python server.py --dir "你的 PDF 目录"
@@ -40,10 +52,13 @@ python server.py --dir "你的 PDF 目录"
 常用命令：
 
 ```bash
-python run_tests.py        # 全部测试（14 个套件）
-python check.py            # 前端静态自检
+python check.py            # 前端静态自检（需要 node）
 python fontcheck.py x.ttf  # 换字体前体检
+pip install pyinstaller && python -m PyInstaller pdfviewer.spec   # 自己打 exe
 ```
+
+打安装包要另外装 Inno Setup（`winget install JRSoftware.InnoSetup`），然后：
+`ISCC.exe pdfviewer.iss` → `dist\PDFViewer-1.0.0-pre-setup.exe`。
 
 ---
 
@@ -52,7 +67,7 @@ python fontcheck.py x.ttf  # 换字体前体检
 | | |
 |---|---|
 | 扫描件 | 不支持。涂黑对图片里的文字无效，需 OCR |
-| 整篇重排 | 不支持。跨栏、表格、图文绕排需要真正的排版引擎（是目前的TODO） |
+| 整篇重排 | 不支持（表格可以一格一格改、可以删行；整篇重排要真正的排版引擎） |
 | 表单 / 加密 / 签名 | 不支持 |
 | 改过的段落 | 字体是替换成标准字体的，字形与原上下文会有细微差异（或许你可以删除整段文字重排？） |
 
@@ -62,13 +77,18 @@ python fontcheck.py x.ttf  # 换字体前体检
 
 ```
 server.py      HTTP 路由 + API + 路径白名单
+launcher.py    exe 入口（起服务 + 开浏览器）
+appenv.py      源码跑 / exe 跑 的路径规则（资源只读、数据进 AppData）
 pdfedit.py     PDF 读写引擎（解析 / 序列化 / 内容流追加）
 pdfredact.py   涂黑引擎（内容流解释器 + 整字删除 + 泄漏面清理）
-pdfreflow.py   段落重排（折行 + 页内下移 + 跨页续排）
+pdfreflow.py   段落重排（折行 + 页内下移 + 跨页续排）、表格插行/删行
+pdfpara.py     把字形聚成段落与表格单元格
 pdfbatch.py    批量：查找替换 / 按词删除或涂黑 / 范围导出 / 拆分 / 合并
+pdfnew.py      从零生成空白 PDF
 pdfannot.py    批注 → PDF 原生注释
 pdffont.py     TrueType 子集化
 static/        前端（原生 ES Module，无框架无构建）
+packaging/     图标生成脚本与 .ico
 ```
 
 架构细节、核心模型与测试理念见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。

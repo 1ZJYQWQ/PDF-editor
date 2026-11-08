@@ -1,4 +1,9 @@
 
+
+
+
+
+
 export function screenToNorm(clientX, clientY, left, top, rw, rh) {
   return {
     x: (clientX - left) / (rw || 1),
@@ -6,6 +11,7 @@ export function screenToNorm(clientX, clientY, left, top, rw, rh) {
     w: 0, h: 0,
   };
 }
+
 
 export function normToScreen(nx, ny, nw, nh, rw, rh) {
   return {
@@ -16,6 +22,7 @@ export function normToScreen(nx, ny, nw, nh, rw, rh) {
   };
 }
 
+
 export function normToPdf(nx, ny, nw, nh, pw, ph) {
   return {
     x: nx * pw,
@@ -24,6 +31,7 @@ export function normToPdf(nx, ny, nw, nh, pw, ph) {
     h: nh * ph,
   };
 }
+
 
 export function pdfToNorm(x, y, w, h, pw, ph) {
   if (!pw || !ph) return { x: 0, y: 0, w: 0, h: 0 };
@@ -35,6 +43,7 @@ export function pdfToNorm(x, y, w, h, pw, ph) {
   };
 }
 
+
 export function distToSegment(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
@@ -45,7 +54,10 @@ export function distToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+
 export const HIT_LINE_TOL = 0.012;
+
+
 
 export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   const mine = objects.filter(o => o.page === pageNum);
@@ -77,11 +89,14 @@ export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   return null;
 }
 
+
+
 export function payloadObjects(objects) {
   return objects
     .filter(o => o.kind !== 'redact' && o.kind !== 'replace')
     .map(o => {
       const out = { ...o };
+      
       delete out._norm;
       delete out._box;
       delete out.id;
@@ -94,6 +109,7 @@ export function payloadObjects(objects) {
     });
 }
 
+
 export function hasAnyEdit(payload) {
   if (payload.objects && payload.objects.length > 0) return true;
   const p = payload.pages || {};
@@ -104,12 +120,16 @@ export function hasAnyEdit(payload) {
   return false;
 }
 
+
+
 export function dragDeltaToPdf(dxScreen, dyScreen, rw, rh, pw, ph) {
   return {
     dx: (dxScreen / (rw || 1)) * pw,
     dy: -(dyScreen / (rh || 1)) * ph,
   };
 }
+
+
 
 export function movedPosition(orig, d) {
   const out = { x: orig.x + d.dx, y: orig.y + d.dy };
@@ -119,6 +139,8 @@ export function movedPosition(orig, d) {
   }
   return out;
 }
+
+
 
 export function resizedRect(orig, corner, d) {
   const MIN = 6;
@@ -140,6 +162,7 @@ export function resizedRect(orig, corner, d) {
     h = h - d.dy;
   }
 
+  
   if (w < MIN) {
     w = MIN;
     if (!east) x = orig.x + orig.w - MIN;    
@@ -151,6 +174,8 @@ export function resizedRect(orig, corner, d) {
   return { x, y, w, h };
 }
 
+
+
 export function makeTextBoxAuto(el) {
   el.style.width = 'auto';
   el.style.height = 'auto';
@@ -158,6 +183,8 @@ export function makeTextBoxAuto(el) {
   el.style.whiteSpace = 'pre';
   return el;
 }
+
+
 
 export function wrapText(text, measure, maxWidth) {
   const src = String(text == null ? '' : text);
@@ -184,6 +211,8 @@ export function wrapText(text, measure, maxWidth) {
   }
   return out.join('\n');
 }
+
+
 
 export function paginateText(lines, opts) {
   const { page, firstBaseline, pageW, pageH, size } = opts;

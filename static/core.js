@@ -1,4 +1,5 @@
 
+
 import * as pdfjsLib from '/static/vendor/pdf.min.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdf.worker.min.mjs';
@@ -31,8 +32,16 @@ export const state = {
   annotMode: false,
   bookmarks: new Set(), 
 
+  
+  
+  
+  
+  
   contentPath: null,
+  
+  
   savedPath: null,
+  
   stage: { id: null, path: null },
 };
 

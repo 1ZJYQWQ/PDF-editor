@@ -1,21 +1,17 @@
+
 import os
 
 from pdfedit import (PDFDocument, Ref, build_pdf, reorder_pages)
 from pdfredact import (ContentStreamInterpreter, read_page_content)
 from pdfpara import build_page_model, table_cells
 from pdfreflow import (apply_paragraph_edit, apply_paragraph_flow,
-                       char_of)
+                       char_of, page_rules)
 
-
-MAX_EDITS_DEFAULT = 300          
-
-
-
+MAX_EDITS_DEFAULT = 300
 
 def open_doc(path):
     with open(path, "rb") as fp:
         return PDFDocument.load(fp.read())
-
 
 def page_model(doc, page_no, refs=None):
     if refs is None:
@@ -27,11 +23,8 @@ def page_model(doc, page_no, refs=None):
     resources = doc.resolve(doc.inherited(pref, "Resources"))
     ip = ContentStreamInterpreter(doc, resources)
     ip.run(content)
-    rows, paras = build_page_model(ip.glyphs)
+    rows, paras = build_page_model(ip.glyphs, rules=page_rules(content))
     return pref, content, ip, rows, paras
-
-
-
 
 def _segments(paras, ch):
     out = []
@@ -62,9 +55,6 @@ def _segments(paras, ch):
             })
     return out
 
-
-
-
 def _flat(lines):
     s = "".join(lines)
     breaks = []
@@ -73,7 +63,6 @@ def _flat(lines):
         acc += len(t)
         breaks.append(acc)
     return s, breaks
-
 
 def _spans(text, term, ignore_case):
     hay = text
@@ -88,7 +77,6 @@ def _spans(text, term, ignore_case):
         out.append((at, at + len(needle)))
         at = hay.find(needle, at + len(needle))
     return out
-
 
 def _rebuild(lines, spans, repl):
     s, breaks = _flat(lines)
@@ -122,7 +110,6 @@ def _rebuild(lines, spans, repl):
     out.append(new_s[prev:])
     return out
 
-
 def _char_map(glyph_rows, ch, breaks):
     out = []
     row_start = 0
@@ -135,7 +122,6 @@ def _char_map(glyph_rows, ch, breaks):
             pos += n
         row_start = breaks[i] if i < len(breaks) else pos
     return out
-
 
 def _merge_boxes(glyphs, tol=2.0):
     items = sorted(glyphs, key=lambda g: (-round(g.y0, 1), g.x0))
@@ -151,9 +137,6 @@ def _merge_boxes(glyphs, tol=2.0):
                 continue
         out.append({"x0": g.x0, "y0": g.y0, "x1": g.x1, "y1": g.y1})
     return out
-
-
-
 
 def find_text(src_path, term, ignore_case=False, first_page=1,
               last_page=None, max_hits=2000):
@@ -208,9 +191,6 @@ def find_text(src_path, term, ignore_case=False, first_page=1,
                 return {"hits": hits, "pages": total_pages, "truncated": True}
     return {"hits": hits, "pages": total_pages, "truncated": False}
 
-
-
-
 def _apply_one(src, out, page, para, text, cell, orig_text):
     try:
         return apply_paragraph_edit(src, out, page, para, text,
@@ -220,7 +200,6 @@ def _apply_one(src, out, page, para, text, cell, orig_text):
             raise
         return apply_paragraph_flow(src, out, page, para, text,
                                     orig_text=orig_text)
-
 
 def replace_all(src_path, out_path, term, repl, ignore_case=False,
                 targets=None, max_edits=MAX_EDITS_DEFAULT):
@@ -270,7 +249,7 @@ def replace_all(src_path, out_path, term, repl, ignore_case=False,
             _apply_one(cur, tmp, h["page"], h["para"], new_text, cell,
                        h["text"])
             os.replace(tmp, out_path)
-        except Exception as exc:  
+        except Exception as exc:
             skipped.append("第 %d 页第 %d 段：%s" %
                            (h["page"], h["para"] + 1, exc))
             try:
@@ -294,7 +273,6 @@ def replace_all(src_path, out_path, term, repl, ignore_case=False,
         "truncated": found["truncated"],
     }
 
-
 def _locate_cell(cur_path, page, orig_text):
     _pref, _c, ip, rows, paras = page_model(open_doc(cur_path), page)
     ch = char_of(ip)
@@ -306,7 +284,6 @@ def _locate_cell(cur_path, page, orig_text):
             if "".join(ch(g) for g in cl["glyphs"]) == orig_text:
                 return pi, (cl["row"], cl["col"])
     return None, None
-
 
 def scan_terms(src_path, terms, ignore_case=False, max_hits=4000):
     words = []
@@ -358,7 +335,6 @@ def scan_terms(src_path, terms, ignore_case=False, max_hits=4000):
                 return segs, per_term, len(refs)
 
     return segs, per_term, len(refs)
-
 
 def delete_terms(src_path, out_path, terms, ignore_case=False,
                  max_edits=40, targets=None):
@@ -418,7 +394,7 @@ def delete_terms(src_path, out_path, terms, ignore_case=False,
             _apply_one(cur, tmp, slot["page"], para_now, new_text,
                        cell_now, slot["text"])
             os.replace(tmp, out_path)
-        except Exception as exc:  
+        except Exception as exc:
             skipped.append("第 %d 页第 %d 段：%s" %
                            (slot["page"], slot["para"] + 1, exc))
             try:
@@ -439,7 +415,7 @@ def delete_terms(src_path, out_path, terms, ignore_case=False,
     for w in per_term:
         try:
             residue[w] = len(find_text(out_path, w, ignore_case)["hits"])
-        except Exception:  
+        except Exception:
             residue[w] = -1
 
     return {
@@ -453,9 +429,6 @@ def delete_terms(src_path, out_path, terms, ignore_case=False,
         "skipped": skipped,
         "pages": total_pages,
     }
-
-
-
 
 def term_regions(src_path, terms, ignore_case=True, mode="term", inset=0.02,
                  max_regions=4000):
@@ -540,9 +513,6 @@ def term_regions(src_path, terms, ignore_case=True, mode="term", inset=0.02,
                     return regions, per_term
     return regions, per_term
 
-
-
-
 def parse_pages(spec, total):
     if spec is None:
         return list(range(1, total + 1))
@@ -579,7 +549,6 @@ def parse_pages(spec, total):
         raise ValueError("页码范围里没有有效页（本文档共 %d 页）" % total)
     return out
 
-
 def export_pages(src_path, out_path, pages):
     doc = open_doc(src_path)
     refs = doc.page_refs()
@@ -598,7 +567,6 @@ def export_pages(src_path, out_path, pages):
     reorder_pages(doc, order)
     build_pdf(doc, {}, out_path)
     return {"pages": len(order), "total": total}
-
 
 def split_document(src_path, out_dir, per=1, base_name=None):
     try:
@@ -635,7 +603,6 @@ def split_document(src_path, out_dir, per=1, base_name=None):
                      "pages": len(pages)})
     return made
 
-
 def _rewrite_refs(val, offset):
     if isinstance(val, Ref):
         return Ref(val[0] + offset, val[1])
@@ -646,7 +613,6 @@ def _rewrite_refs(val, offset):
     if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], dict):
         return (_rewrite_refs(val[0], offset), val[1])
     return val
-
 
 def merge_documents(paths, out_path):
     if not isinstance(paths, (list, tuple)) or len(paths) < 2:

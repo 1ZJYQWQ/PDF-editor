@@ -1,5 +1,9 @@
 
+
+
+
 import { state, els, api, toast, uid } from '/static/core.js';
+
 import {
   screenToNorm as gScreenToNorm,
   normToScreen as gNormToScreen,
@@ -10,7 +14,10 @@ import {
   hasAnyEdit,
   makeTextBoxAuto,
 } from '/static/geom.js';
+
 import { annotationsToPdfItems } from '/static/annot.js';
+
+
 
 
 export const editState = {
@@ -32,6 +39,7 @@ export const editState = {
 let bound = false;
 let saveTimer = null;
 
+
 let deps = {
   goToPage: () => {},
   renderPage: () => {},
@@ -43,11 +51,16 @@ export function bindEditHelpers(inject) {
 }
 
 
+
+
+
 export function pageSize(pageNum) {
   const info = editState.pageInfo[pageNum - 1];
   if (info && info.width > 0 && info.height > 0) {
     return { width: info.width, height: info.height };
   }
+  
+  
   const base = Array.isArray(editState.pageInfo) ? editState.pageInfo.length : 0;
   const ins = editState.pages && editState.pages.insert;
   if (ins && pageNum > base) {
@@ -56,23 +69,30 @@ export function pageSize(pageNum) {
       return { width: spec.width, height: spec.height };
     }
   }
+  
   return { width: 595, height: 842 };
 }
+
+
 
 export function screenToNorm(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   return gScreenToNorm(clientX, clientY, r.left, r.top, r.width, r.height);
 }
 
+
 export function normToScreen(rec, nx, ny, nw, nh) {
   const r = rec.wrap.getBoundingClientRect();
   return gNormToScreen(nx, ny, nw, nh, r.width, r.height);
 }
 
+
+
 export function normToPdf(pageNum, nx, ny, nw, nh) {
   const { width, height } = pageSize(pageNum);
   return gNormToPdf(nx, ny, nw, nh, width, height);
 }
+
 
 export function pdfToNorm(pageNum, x, y, w, h) {
   const { width, height } = pageSize(pageNum);
@@ -80,7 +100,11 @@ export function pdfToNorm(pageNum, x, y, w, h) {
 }
 
 
+
+
 export async function loadEdits(docId) {
+  
+  
   editState.objects = [];
   editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
   editState.selectedId = null;
@@ -143,10 +167,14 @@ function updateSaveHint() {
 }
 
 
+
+
 const MAX_HISTORY = 60;
 const history = { past: [], future: [] };
 let lastSnap = null;
 let histTimer = null;
+
+
 
 function takeSnapshot() {
   const objects = editState.objects.map(o => {
@@ -158,9 +186,13 @@ function takeSnapshot() {
   return JSON.stringify({ objects, pages: editState.pages });
 }
 
+
+
 function ensureHistoryBaseline() {
   if (lastSnap === null) lastSnap = takeSnapshot();
 }
+
+
 
 function resetHistory() {
   history.past = [];
@@ -181,6 +213,8 @@ function commitHistory() {
   syncHistoryButtons();
 }
 
+
+
 export function scheduleHistory() {
   if (histTimer) clearTimeout(histTimer);
   histTimer = setTimeout(commitHistory, 350);
@@ -198,7 +232,11 @@ function restoreSnapshot(json) {
   syncHistoryButtons();
 }
 
+
+
 let stageUndoHandler = null;
+
+
 let stagePresent = false;
 
 export function setStageUndoHandler(fn) {
@@ -213,6 +251,7 @@ export function setStagePresent(v) {
 export async function undoEdit() {
   commitHistory();                                   
   if (!history.past.length) {
+    
     if (stageUndoHandler) {
       let done = false;
       try { done = await stageUndoHandler(); } catch (e) { done = false; }
@@ -238,6 +277,8 @@ function syncHistoryButtons() {
   if (els.btnEditUndo) els.btnEditUndo.disabled = !history.past.length && !stagePresent;
   if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
 }
+
+
 
 
 let clipboard = null;
@@ -267,6 +308,7 @@ export function pasteObject() {
   pasteObj(cloneObj(clipboard));
 }
 
+
 function pasteObj(base) {
   const D = 14;
   const o = { ...base, id: uid(), page: state.currentPage };
@@ -280,6 +322,8 @@ function pasteObj(base) {
   repaintEdits();
   toast('已粘贴对象', 900);
 }
+
+
 
 
 export function addObject(obj) {
@@ -309,6 +353,9 @@ export function updateObject(id, patch) {
   if (!obj) return false;
   ensureHistoryBaseline();
   Object.assign(obj, patch);
+  
+  
+  
   if (!('_norm' in patch)) obj._norm = null;
   scheduleHistory();
   scheduleSave();
@@ -325,6 +372,8 @@ export function clearAllObjects() {
 }
 
 
+
+
 const EDIT_LAYER_CLASS = 'edit-layer';
 
 function ensureLayer(rec) {
@@ -337,11 +386,14 @@ function ensureLayer(rec) {
   return layer;
 }
 
+
 export function repaintEdits() {
   for (const rec of state.pages) {
     if (!rec.rendered) continue;
     paintPageEdits(rec);
   }
+  
+  
   syncRedactCount();
   syncReplaceCount();
 }
@@ -350,6 +402,7 @@ export function paintPageEdits(rec) {
   if (!rec) return;
   const layer = ensureLayer(rec);
 
+  
   layer.innerHTML = '';
 
   const mine = editState.objects.filter(o => o.page === rec.num);
@@ -357,19 +410,26 @@ export function paintPageEdits(rec) {
     const el = renderObjectEl(obj, rec);
     if (!el) continue;
     layer.appendChild(el);
+    
+    
+    
     measureTextBox(obj, el, rec);
   }
 
+  
   const sel = mine.find(o => o.id === editState.selectedId);
   if (sel && editState.tool === 'select' && RESIZABLE_KINDS.has(sel.kind)) {
     renderResizeHandles(layer, sel, rec);
   }
 
+  
   if (editState.tempShape && editState.tempShape.page === rec.num) {
     const t = renderObjectEl(editState.tempShape, rec, true);
     if (t) layer.appendChild(t);
   }
 }
+
+
 
 function measureTextBox(obj, el, rec) {
   if (obj.kind !== 'text') return;
@@ -387,6 +447,8 @@ function measureTextBox(obj, el, rec) {
   };
 }
 
+
+
 function textBaselineOffset(fontSize, lineHeight) {
   try {
     const ctx = document.createElement('canvas').getContext('2d');
@@ -397,6 +459,7 @@ function textBaselineOffset(fontSize, lineHeight) {
     const content = asc + desc;
     return (fontSize * lineHeight - content) / 2 + asc;
   } catch (e) {
+    
     return fontSize * 0.925;
   }
 }
@@ -411,6 +474,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
   const s = normToScreen(rec, p.x, p.y, p.w, p.h);
 
   if (obj.kind === 'line') {
+    
     return renderLineEl(obj, rec, isTemp);
   }
 
@@ -423,6 +487,11 @@ function renderObjectEl(obj, rec, isTemp = false) {
   if (obj.kind === 'whiteout') {
     el.style.background = '#ffffff';
   } else if (obj.kind === 'redact') {
+    
+    
+    
+    
+    
     el.style.border = '1.5px dashed #dc2626';
     el.style.background = 'rgba(220, 38, 38, 0.14)';
     el.classList.add('ed-redact');
@@ -438,6 +507,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
       el.style.background = hexWithAlpha(obj.color || '#000000', 0.18);
     }
   } else if (obj.kind === 'text') {
+    
     const size = (obj.size || 12) * (rec.wrap.getBoundingClientRect().width /
       (pageSize(obj.page).width || 595));
     const fs = Math.max(6, size);
@@ -445,9 +515,19 @@ function renderObjectEl(obj, rec, isTemp = false) {
     el.style.color = obj.color || '#000000';
     el.style.lineHeight = '1.25';
     el.textContent = obj.text || '';
+    
+    
+    
+    
+    
     el.style.top = (s.top - textBaselineOffset(fs, 1.25)) + 'px';
+    
+    
     makeTextBoxAuto(el);
   } else if (obj.kind === 'replace') {
+    
+    
+    
     el.style.border = '1.5px dashed #d97706';
     el.style.background = 'rgba(217, 119, 6, 0.12)';
     el.classList.add('ed-replace');
@@ -463,7 +543,11 @@ function renderObjectEl(obj, rec, isTemp = false) {
   return el;
 }
 
+
+
 const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact', 'replace']);
+
+
 
 function renderResizeHandles(layer, obj, rec) {
   const p = obj._norm || pdfToNorm(obj.page, obj.x, obj.y, obj.w, obj.h);
@@ -495,6 +579,7 @@ function renderLineEl(obj, rec, isTemp) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
 
+  
   const n1 = obj._norm ? { x: obj._norm.x, y: obj._norm.y }
     : pdfToNorm(obj.page, obj.x, obj.y, 0, 0);
   const n2 = obj._norm
@@ -521,6 +606,9 @@ function hexWithAlpha(hex, alpha) {
   const b = parseInt(full.slice(4, 6), 16) || 0;
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
+
+
 
 
 export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
@@ -552,6 +640,7 @@ export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
   };
 }
 
+
 export function makeLineObject(rec, pageNum, start, end, opts = {}) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
@@ -573,12 +662,17 @@ export function makeLineObject(rec, pageNum, start, end, opts = {}) {
   };
 }
 
+
+
 export function hitTest(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   const nx = (clientX - r.left) / (r.width || 1);
   const ny = (clientY - r.top) / (r.height || 1);
   return hitTestNorm(editState.objects, rec.num, nx, ny, pageSize);
 }
+
+
+
 
 
 export function effectiveOrder() {
@@ -632,9 +726,11 @@ export function insertBlank(afterIndex) {
   toast('已在末尾插入空白页（滚动到最下方可见）', 2000);
 }
 
+
 function notifyPagesChanged() {
   document.dispatchEvent(new CustomEvent('pdf:pages-changed'));
 }
+
 
 export function refreshPagePanel() {
   const box = els.pageListBody;
@@ -645,6 +741,7 @@ export function refreshPagePanel() {
   const del = new Set(editState.pages.delete);
   const order = editState.pages.order;
 
+  
   const seq = order ? [...order] : Array.from({ length: total }, (_, i) => i);
 
   const head = document.createElement('div');
@@ -686,6 +783,7 @@ export function refreshPagePanel() {
     box.appendChild(row);
   });
 
+  
   if (editState.pages.insert.length) {
     const ins = document.createElement('div');
     ins.className = 'pm-insert-note';
@@ -719,6 +817,12 @@ export function refreshPagePanel() {
 
 
 
+
+
+
+
+
+
 export function downloadServerFile(path, name) {
   const q = new URLSearchParams({ path, download: '1' });
   if (name) q.set('name', name);
@@ -727,10 +831,12 @@ export function downloadServerFile(path, name) {
   a.download = name || '';
   a.rel = 'noopener';
   a.style.display = 'none';
+  
   document.body.appendChild(a);
   a.click();
   setTimeout(() => a.remove(), 0);
 }
+
 
 function downloadBlob(blob, name) {
   const url = URL.createObjectURL(blob);
@@ -740,12 +846,21 @@ function downloadBlob(blob, name) {
   document.body.appendChild(a);
   a.click();
   a.remove();
+  
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export function buildExportPayload() {
+  
+  
+  
+  
   return {
+    
+    
+    
     path: state.contentPath || state.filePath,
+    
     name: state.fileName,
     pages: editState.pages,
     objects: payloadObjects(editState.objects),
@@ -759,11 +874,16 @@ export async function exportPdf(opts = {}) {
   }
 
   const payload = buildExportPayload();
+  
+  
   if (opts.range) payload.range = String(opts.range);
   const nRedact = redactCount();
   const nReplace = replaceCount();
   const hasSpecial = nRedact > 0 || nReplace > 0;
 
+  
+  
+  
   let annots = [];
   try {
     annots = await annotationsToPdfItems();
@@ -772,6 +892,9 @@ export async function exportPdf(opts = {}) {
   }
   if (annots.length) payload.annotations = annots;
 
+  
+  
+  
   const noChange = !hasAnyEdit(payload) && !annots.length;
   if (noChange && hasSpecial) {
     toast('「导出 PDF」不含涂黑 / 替换。要保存它们请点对应的「并另存为…」' +
@@ -779,6 +902,10 @@ export async function exportPdf(opts = {}) {
     return;
   }
 
+  
+  
+  
+  
   if (hasSpecial) {
     const parts = [];
     if (nRedact > 0) parts.push(`涂黑 ${nRedact} 处`);
@@ -795,6 +922,9 @@ export async function exportPdf(opts = {}) {
     }
   }
 
+  
+  
+  
   const btns = [els.btnExportTop, els.btnExportPdf].filter(Boolean);
   if (btns.some(b => b.disabled)) return;
   const setBusy = (on) => btns.forEach(b => {
@@ -826,6 +956,7 @@ export async function exportPdf(opts = {}) {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
+    
     const rawOut = r.headers.get('X-Export-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -833,6 +964,8 @@ export async function exportPdf(opts = {}) {
     }
 
     if (outPath) {
+      
+      
       downloadServerFile(outPath, name);
     } else {
       downloadBlob(await r.blob(), name);
@@ -841,12 +974,15 @@ export async function exportPdf(opts = {}) {
     const pages = r.headers.get('X-Export-Pages');
     const dropped = r.headers.get('X-Export-Dropped');
 
+    
+    
     const missRaw = r.headers.get('X-Export-CJK-Missing') || '';
     let miss = '';
     if (missRaw) {
       try { miss = decodeURIComponent(missRaw); } catch (e) { miss = missRaw; }
     }
 
+    
     let msg = (noChange ? `已导出原样副本：${name}` : `已导出：${name}`) +
               (pages ? `（${pages} 页）` : '');
     const nAnn = r.headers.get('X-Export-Annots');
@@ -859,6 +995,8 @@ export async function exportPdf(opts = {}) {
       toast(msg, 3200);
     }
 
+    
+    
     if (outPath) {
       state.contentPath = outPath;
       state.savedPath = outPath;
@@ -872,6 +1010,9 @@ export async function exportPdf(opts = {}) {
     setBusy(false);
   }
 }
+
+
+
 
 
 export function redactRegions() {
@@ -890,6 +1031,8 @@ export function redactRegions() {
 export function redactCount() {
   return redactRegions().length;
 }
+
+
 
 export async function redactPdf() {
   if (!state.filePath) {
@@ -911,9 +1054,15 @@ export async function redactPdf() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        
+        
+        
+        
         path: state.contentPath || state.filePath,
+        
         name: state.fileName,
         regions,
+        
         overwrite: false,
       }),
     });
@@ -927,6 +1076,7 @@ export async function redactPdf() {
       throw new Error(msg);
     }
 
+    
     const rawOut = r.headers.get('X-Out-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -949,6 +1099,8 @@ export async function redactPdf() {
     const glyphs = r.headers.get('X-Redact-Glyphs') || '0';
     const pages = r.headers.get('X-Redact-Pages') || '0';
     const outline = r.headers.get('X-Redact-Outline') || '0';
+    
+    
     const merged = (state.stage && state.stage.id)
       ? '（已包含尚未保存的段落编辑）' : '';
     toast(`涂黑完成${merged}：${pages} 页，移除 ${glyphs} 个字形` +
@@ -959,6 +1111,9 @@ export async function redactPdf() {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
 }
+
+
+
 
 
 export function replaceRegions() {
@@ -1000,6 +1155,7 @@ export async function replacePdf() {
       body: JSON.stringify({
         path: state.filePath,
         replacements: regions,
+        
         overwrite: false,
       }),
     });
@@ -1013,6 +1169,7 @@ export async function replacePdf() {
       throw new Error(msg);
     }
 
+    
     const rawOut = r.headers.get('X-Out-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -1042,6 +1199,7 @@ export async function replacePdf() {
   }
 }
 
+
 export function syncReplaceCount() {
   const el = els.replaceCount;
   if (!el) return;
@@ -1050,6 +1208,8 @@ export function syncReplaceCount() {
   const btn = els.btnReplacePdf;
   if (btn) btn.disabled = n === 0;
 }
+
+
 
 
 export function setEditMode(on) {
@@ -1061,8 +1221,12 @@ export function setEditMode(on) {
   }
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
+  
   if (els.sidePanel) els.sidePanel.hidden = !editState.on;
 
+  
+  
+  
   if (editState.on) {
     document.dispatchEvent(new CustomEvent('pdf:edit-on'));
   }
@@ -1070,6 +1234,14 @@ export function setEditMode(on) {
   syncToolButtons();
   repaintEdits();
   if (editState.on) {
+    
+    
+    
+    
+    
+    
+    
+    
     if (lastSnap === null) lastSnap = takeSnapshot();
     syncHistoryButtons();
     refreshPagePanel();
@@ -1099,10 +1271,15 @@ export function currentColor() {
 }
 
 
+
+
 export function bindEditUI() {
   if (bound) return;
   bound = true;
 
+  
+  
+  
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => { if (editState.on) repaintEdits(); });
   }
@@ -1138,6 +1315,7 @@ export function bindEditUI() {
 
   els.btnExportPdf && els.btnExportPdf.addEventListener('click', exportPdf);
 
+  
   els.btnRedactPdf && els.btnRedactPdf.addEventListener('click',
     openRedactConfirm);
   els.redactCancel && els.redactCancel.addEventListener('click',
@@ -1146,15 +1324,18 @@ export function bindEditUI() {
     closeRedactConfirm();
     redactPdf();
   });
+  
   els.redactConfirm && els.redactConfirm.addEventListener('click', (e) => {
     if (e.target === els.redactConfirm) closeRedactConfirm();
   });
 
+  
   els.btnReplacePdf && els.btnReplacePdf.addEventListener('click', replacePdf);
 
   syncRedactCount();
   syncReplaceCount();
 }
+
 
 export function syncRedactCount() {
   const el = els.redactCount;
@@ -1165,6 +1346,8 @@ export function syncRedactCount() {
   if (btn) btn.disabled = n === 0;
 }
 
+
+
 function openRedactConfirm() {
   const regions = redactRegions();
   if (!regions.length) {
@@ -1172,12 +1355,14 @@ function openRedactConfirm() {
     return;
   }
   if (!els.redactConfirm) {
+    
     if (confirm(`确定永久删除 ${regions.length} 处涂黑区域内的文字？`)) {
       redactPdf();
     }
     return;
   }
 
+  
   const byPage = {};
   regions.forEach(r => {
     byPage[r.page] = (byPage[r.page] || 0) + 1;
@@ -1197,6 +1382,8 @@ function closeRedactConfirm() {
   if (els.redactConfirm) els.redactConfirm.hidden = true;
 }
 
+
+
 export async function reflowParagraph(page, para, text, orig, pageText, cell) {
   if (!state.filePath) {
     toast('请先打开一个文档', 1600);
@@ -1213,11 +1400,18 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     const r = await fetch('/api/reflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      
+      
+      
+      
+      
+      
       body: JSON.stringify({ path: state.contentPath || state.filePath,
                              name: state.fileName,
                              page, para, text,
                              orig: orig || null,
                              page_text: pageText || null,
+                             
                              cell: cell || null,
                              stage: state.stage.id || null }),
     });
@@ -1245,6 +1439,8 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     state.stage = { id: sid, path: spath };
     state.contentPath = spath;
 
+    
+    
     try { await r.arrayBuffer(); } catch (e) {  }
 
     const lb = r.headers.get('X-Reflow-Lines-Before');
@@ -1270,6 +1466,121 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
 }
+
+
+
+export async function dropTableRow(page, para, gid) {
+  if (!state.filePath) {
+    toast('请先打开一个文档', 1600);
+    return null;
+  }
+  const btn = els.paraDropRow;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  try {
+    const r = await fetch('/api/table/drop_row', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.contentPath || state.filePath,
+                             name: state.fileName,
+                             page, para, gid,
+                             stage: state.stage.id || null }),
+    });
+    if (!r.ok) {
+      let msg = `删行失败 (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j.error) msg = j.error;
+      } catch (e) {  }
+      toast(msg, 8000);
+      return null;
+    }
+    const sid = r.headers.get('X-Stage-Id') || '';
+    const rawPath = r.headers.get('X-Stage-Path') || '';
+    let spath = rawPath;
+    if (rawPath) {
+      try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
+    }
+    if (!sid || !spath) {
+      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      return null;
+    }
+    state.stage = { id: sid, path: spath };
+    state.contentPath = spath;
+    try { await r.arrayBuffer(); } catch (e) {  }
+
+    let dropped = r.headers.get('X-Drop-Text') || '';
+    if (dropped) { try { dropped = decodeURIComponent(dropped); } catch (e) {} }
+    return {
+      stageId: sid,
+      stagePath: spath,
+      dropped,
+      height: parseFloat(r.headers.get('X-Drop-Height') || '0') || 0,
+      movedRows: parseInt(r.headers.get('X-Drop-Rows') || '0', 10) || 0,
+    };
+  } catch (e) {
+    toast(`删行失败：${e.message || e}`, 5000);
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  }
+}
+
+
+
+export async function insertTableRow(page, para, gid, where = 'below') {
+  if (!state.filePath) {
+    toast('请先打开一个文档', 1600);
+    return null;
+  }
+  const btn = where === 'above' ? els.paraInsertAbove : els.paraInsertBelow;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  try {
+    const r = await fetch('/api/table/insert_row', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.contentPath || state.filePath,
+                             name: state.fileName,
+                             page, para, gid, where,
+                             stage: state.stage.id || null }),
+    });
+    if (!r.ok) {
+      let msg = `插入行失败 (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j.error) msg = j.error;
+      } catch (e) {  }
+      toast(msg, 8000);
+      return null;
+    }
+    const sid = r.headers.get('X-Stage-Id') || '';
+    const rawPath = r.headers.get('X-Stage-Path') || '';
+    let spath = rawPath;
+    if (rawPath) {
+      try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
+    }
+    if (!sid || !spath) {
+      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      return null;
+    }
+    state.stage = { id: sid, path: spath };
+    state.contentPath = spath;
+    try { await r.arrayBuffer(); } catch (e) {  }
+
+    return {
+      stageId: sid,
+      stagePath: spath,
+      height: parseFloat(r.headers.get('X-Insert-Height') || '0') || 0,
+      movedRows: parseInt(r.headers.get('X-Insert-Rows') || '0', 10) || 0,
+    };
+  } catch (e) {
+    toast(`插入行失败：${e.message || e}`, 5000);
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  }
+}
+
+
 
 export async function discardStage() {
   const sid = state.stage.id;

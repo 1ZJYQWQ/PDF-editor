@@ -1,8 +1,10 @@
 
 import hashlib
+import os
 import re
 import zlib
 
+import pdfimage
 import pdffont
 
 WHITESPACE = b"\x00\t\n\x0c\r "
@@ -582,6 +584,7 @@ class ContentBuilder:
         self.cid_subset = None
         self.cid_used = False
         self.missing_chars = set()
+        self.xobjects = {}
 
     def set_cid_font(self, font_ref, subset):
         self.cid_ref = font_ref
@@ -652,6 +655,13 @@ class ContentBuilder:
             f"{x1:.3f} {y1:.3f} m {x2:.3f} {y2:.3f} l S"
         )
 
+    def image(self, alias, x, y, w, h, ref):
+        self.xobjects[alias] = ref
+        self.ops.append("q")
+        self.ops.append(f"{w:.3f} 0 0 {h:.3f} {x:.3f} {y:.3f} cm")
+        self.ops.append(f"/{alias} Do")
+        self.ops.append("Q")
+
     def text(self, x, y, s, size, rgb, base_font="Helvetica"):
         if s and self.cid_subset is not None and has_non_latin(s):
             self._text_cid(x, y, s, size, rgb)
@@ -706,6 +716,9 @@ class ContentBuilder:
         if self.cid_used and self.cid_ref is not None:
             out[self.CID_ALIAS] = self.cid_ref
         return out or None
+
+    def xobject_resources(self):
+        return dict(self.xobjects) or None
 
 STANDARD_WIDTHS = {
     "Helvetica": {
@@ -999,7 +1012,7 @@ def build_cjk_font(doc, chars, base_name="NotoSansSC"):
     ref = embed_cid_font(doc, subset, ps_name=ps_name, unicode_map=used)
     return ref, subset
 
-def apply_edits(src_path, out_path, edits):
+def apply_edits(src_path, out_path, edits, image_dir=None):
     with open(src_path, "rb") as fp:
         data = fp.read()
 
@@ -1076,11 +1089,29 @@ def apply_edits(src_path, out_path, edits):
 
     extra_streams = {}
     missing_cjk = set()
+    image_cache = {}
+    image_failed = []
+    image_count = 0
     for pidx, objs in per_page.items():
         builder = ContentBuilder()
         if cjk_subset is not None:
             builder.set_cid_font(cjk_ref, cjk_subset)
         for obj in objs:
+            if (obj.get("kind") or "").lower() == "image":
+                ref = _resolve_image(doc, obj, image_dir, image_cache,
+                                     image_failed)
+                if ref is None:
+                    continue
+                x = _num(obj.get("x"))
+                y = _num(obj.get("y"))
+                w = _num(obj.get("w"))
+                h = _num(obj.get("h"))
+                if w <= 0 or h <= 0:
+                    continue
+                alias = "Im%d" % (len(builder.xobjects) + 1)
+                builder.image(alias, x, y, w, h, ref)
+                image_count += 1
+                continue
             _emit_object(builder, obj)
         content = builder.to_bytes()
         if not content.strip():
@@ -1090,6 +1121,9 @@ def apply_edits(src_path, out_path, edits):
         fr = builder.font_resources()
         if fr:
             _attach_font_resource(doc, refs[pidx], fr)
+        xr = builder.xobject_resources()
+        if xr:
+            _attach_xobject_resource(doc, refs[pidx], xr)
         missing_cjk |= builder.missing_chars
 
     annot_stat = {"written": 0, "pages": 0, "skipped": 0}
@@ -1104,6 +1138,8 @@ def apply_edits(src_path, out_path, edits):
         "size": size,
         "pages": len(doc.page_refs()),
         "objects": sum(len(v) for v in per_page.values()),
+        "images": image_count,
+        "images_failed": image_failed,
         "annotations": annot_stat,
         "cjk_glyphs": cjk_subset.num_glyphs if cjk_subset else 0,
         "cjk_chars": len(cjk_chars) if cjk_subset else 0,
@@ -1169,3 +1205,86 @@ def _attach_font_resource(doc, page_ref, font_map, overwrite=False):
         if alias in fonts and not overwrite:
             continue
         fonts[alias] = val
+
+def _attach_xobject_resource(doc, page_ref, xobj_map):
+    page = doc.resolve(page_ref)
+    if not isinstance(page, dict):
+        return
+    res = page.get("Resources")
+    if isinstance(res, Ref):
+        shared = doc.resolve(res)
+        res = dict(shared) if isinstance(shared, dict) else {}
+        page["Resources"] = res
+    elif not isinstance(res, dict):
+        res = {}
+        page["Resources"] = res
+
+    xobjs = res.get("XObject")
+    if isinstance(xobjs, Ref):
+        shared = doc.resolve(xobjs)
+        xobjs = dict(shared) if isinstance(shared, dict) else {}
+        res["XObject"] = xobjs
+    elif not isinstance(xobjs, dict):
+        xobjs = {}
+        res["XObject"] = xobjs
+
+    for alias, ref in (xobj_map or {}).items():
+        xobjs[alias] = ref
+
+def _image_dict(spec, stream, smask=None):
+    d = {
+        "Type": Name("XObject"),
+        "Subtype": Name("Image"),
+        "Width": int(spec["width"]),
+        "Height": int(spec["height"]),
+        "ColorSpace": Name(spec["colorSpace"]),
+        "BitsPerComponent": 8,
+        "Filter": Name(spec["filter"]),
+        "Length": len(stream),
+    }
+    parms = spec.get("parms")
+    if parms:
+        d["DecodeParms"] = dict(parms)
+    if smask is not None:
+        d["SMask"] = smask
+    return d
+
+def _embed_image(doc, data):
+    spec = pdfimage.decode(data)
+    smask_ref = None
+    alpha = spec.get("alpha")
+    if alpha:
+        adict = _image_dict({
+            "width": spec["width"], "height": spec["height"],
+            "colorSpace": alpha["colorSpace"],
+            "filter": alpha["filter"],
+            "parms": alpha.get("parms"),
+        }, alpha["stream"])
+        smask_ref = doc.new_obj((adict, alpha["stream"]))
+    d = _image_dict(spec, spec["stream"], smask=smask_ref)
+    return doc.new_obj((d, spec["stream"]))
+
+IMG_NAME = re.compile(r"^[0-9a-f]{40}\.(?:png|jpg)$")
+
+def _resolve_image(doc, obj, image_dir, cache, failed):
+    name = str(obj.get("img") or "")
+    if not IMG_NAME.match(name):
+        failed.append(name or "（无文件名）")
+        return None
+    if name in cache:
+        return cache[name]
+    if not image_dir:
+        failed.append(name)
+        return None
+    path = os.path.join(image_dir, name)
+    if not os.path.isfile(path):
+        failed.append(name)
+        return None
+    try:
+        with open(path, "rb") as fp:
+            ref = _embed_image(doc, fp.read())
+    except Exception:
+        failed.append(name)
+        return None
+    cache[name] = ref
+    return ref

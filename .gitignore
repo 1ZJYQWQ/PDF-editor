@@ -48,3 +48,4 @@ Thumbs.db
 #   documents/    原始 PDF —— 要进版本库（测试基准）
 #   annotations/  标注数据 —— 要进版本库（用户资产）
 #   edits/        编辑数据 —— 要进版本库（用户资产）
+#   images/       插入的图片 —— 要进版本库（edits 里按文件名引用它们）

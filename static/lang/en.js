@@ -502,4 +502,14 @@ export default {
   '已是最新（{v}）': 'Up to date ({v})',
   '检查更新失败': 'Update check failed',
   '去下载': 'Open the download page',
+
+  
+  '图片': 'Image',
+  '图片 — 插入 PNG / JPEG（可拖动、拖四角缩放）':
+    'Image — insert a PNG / JPEG (drag to move, drag corners to resize)',
+  '只支持 PNG 和 JPEG 图片': 'Only PNG and JPEG images are supported',
+  '读取文件失败': 'Could not read the file',
+  '上传失败': 'Upload failed',
+  '已插入图片：拖动移动，拖四角缩放':
+    'Image inserted — drag to move, drag the corners to resize',
 };

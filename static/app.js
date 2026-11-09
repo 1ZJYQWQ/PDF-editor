@@ -1,7 +1,5 @@
 
 
-
-
 import { t, initI18n, currentLang, nextLang, setLang, LANG_SHORT } from '/static/i18n.js';
 import {
   pdfjsLib, state, els, cacheEls, $, uid, escapeHtml, debounce,
@@ -24,18 +22,14 @@ import {
   exportPdf, buildExportPayload, pdfToNorm, reflowParagraph, discardStage,
   undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
   setStageUndoHandler, setStagePresent, redactCount, dropTableRow,
-  insertTableRow,
+  insertTableRow, insertImageFile,
 } from '/static/edit.js';
-
 
 import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } from '/static/geom.js';
 
-
 import { initBatchUI } from '/static/batch.js';
 
-
 import * as tabs from '/static/tabs.js';
-
 
 import { bindWelcomeUpdate } from '/static/update.js';
 
@@ -43,19 +37,12 @@ const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
 
-
-
 let welcomeReady = false;
-
-
-
-
 
 function pageSizeAt(page, scale) {
   const vp = page.getViewport({ scale, rotation: state.rotation });
   return { width: vp.width, height: vp.height };
 }
-
 
 async function computeScale(mode) {
   if (!state.pdf) return 1;
@@ -79,7 +66,6 @@ async function computeScale(mode) {
   }
   return parseFloat(mode) || 1;
 }
-
 
 function posKey() {
   return LS_PREFIX + 'pos:' + (state.docId || state.fileName);
@@ -105,7 +91,6 @@ function readPosition() {
     return raw ? JSON.parse(raw) : null;
   } catch (e) { return null; }
 }
-
 
 function bookmarkKey() {
   return LS_PREFIX + 'bm:' + (state.docId || state.fileName);
@@ -142,15 +127,20 @@ function updateBookmarkBtn() {
   }
 }
 
-
-
-
 async function loadPdfFromPath(path, name, docId) {
   
   const dup = tabs.findByPath(path);
   if (dup) { hideLoading(); tabs.activate(dup.id); return; }
   showLoading(t('正在打开文档…'));
   try {
+    
+    
+    if (!docId) {
+      try {
+        const info = await api('/api/pdfinfo?path=' + encodeURIComponent(path));
+        if (info && info.docId) docId = info.docId;
+      } catch (e) {  }
+    }
     const url = '/api/file?path=' + encodeURIComponent(path);
     const task = pdfjsLib.getDocument({
       url,
@@ -201,9 +191,6 @@ async function loadPdfFromFile(file) {
   }
 }
 
-
-
-
 function openNewPop(anchor) {
   const pop = els.newPop;
   if (!pop) return;
@@ -215,8 +202,6 @@ function openNewPop(anchor) {
   pop.hidden = false;
   placeNewPop(pop, anchor);
 }
-
-
 
 function placeNewPop(pop, anchor) {
   const pad = 12;
@@ -240,8 +225,6 @@ function placeNewPop(pop, anchor) {
 function closeNewPop() {
   if (els.newPop) els.newPop.hidden = true;
 }
-
-
 
 async function createNewPdf() {
   const size = (els.newSize && els.newSize.value) || 'a4';
@@ -285,7 +268,6 @@ async function createNewPdf() {
   }
 }
 
-
 async function localDocId(file) {
   const raw = `${file.name}|${file.size}`;
   const buf = new TextEncoder().encode(raw);
@@ -293,8 +275,6 @@ async function localDocId(file) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0'))
     .join('').slice(0, 16);
 }
-
-
 
 async function openDocument(task, name, docId, path) {
   const pdf = await task.promise;
@@ -401,20 +381,16 @@ async function fillTab(pdf, name, docId, path) {
   updateProgress();
 }
 
-
 function goHome() {
   const hid = tabs.homeId();
   if (hid) tabs.activate(hid);
 }
-
 
 function closeDocument() {
   const cur = tabs.active();
   if (!cur || cur.home) return;
   tabs.close(cur.id);
 }
-
-
 
 function confirmCloseTab(tab) {
   const cur = tabs.active();
@@ -427,7 +403,6 @@ function confirmCloseTab(tab) {
   return true;
 }
 
-
 function cycleTab(dir) {
   const list = tabs.list();
   if (!list.length) return;
@@ -436,8 +411,6 @@ function cycleTab(dir) {
   const n = (i + dir + list.length) % list.length;
   tabs.activate(list[n].id);
 }
-
-
 
 function beforeCloseTab(tab, wasActive) {
   if (wasActive) {
@@ -459,8 +432,6 @@ function beforeCloseTab(tab, wasActive) {
   if (st.observer) { try { st.observer.disconnect(); } catch (e) {  } }
   if (st.pdf) { try { st.pdf.destroy(); } catch (e) {  } }
 }
-
-
 
 function refreshChrome() {
   const has = !!state.pdf;
@@ -526,9 +497,6 @@ function refreshChrome() {
   document.title = has ? state.fileName + t(' - PDF 查看器') : t('PDF 查看器');
 }
 
-
-
-
 async function buildPages() {
   const container = els.pages;
   container.innerHTML = '';
@@ -565,8 +533,6 @@ async function buildPages() {
   }
   container.appendChild(frag);
 }
-
-
 
 function syncBlankPages() {
   if (!els.pages) return;
@@ -624,7 +590,6 @@ function syncBlankPages() {
   if (editState.on) repaintEdits();
 }
 
-
 document.addEventListener('pdf:pages-changed', syncBlankPages);
 
 function setupObserver() {
@@ -654,7 +619,6 @@ function setupObserver() {
 
   for (const rec of state.pages) state.observer.observe(rec.wrap);
 }
-
 
 async function renderPage(rec) {
   if (rec.rendered || rec.rendering) return;
@@ -761,7 +725,6 @@ async function renderPage(rec) {
   }
 }
 
-
 function buildTextLayer(rec, textContent, viewport) {
   const layer = rec.textLayer;
   layer.innerHTML = '';
@@ -823,7 +786,6 @@ function buildTextLayer(rec, textContent, viewport) {
   layer.appendChild(frag);
 }
 
-
 function updateCurrentPage() {
   if (!state.pages.length) return;
   const viewerRect = els.viewer.getBoundingClientRect();
@@ -846,7 +808,6 @@ function updateCurrentPage() {
   }
 }
 
-
 function updateProgress() {
   if (!els.progressFill || !state.pageCount) return;
   const v = els.viewer;
@@ -854,9 +815,6 @@ function updateProgress() {
   const ratio = max > 0 ? Math.min(1, v.scrollTop / max) : 0;
   els.progressFill.style.width = (ratio * 100) + '%';
 }
-
-
-
 
 async function applyScale(mode, anchor) {
   if (!state.pdf) return;
@@ -936,9 +894,6 @@ function toggleInvert() {
   els.btnDark.classList.toggle('on', state.invert);
 }
 
-
-
-
 async function applyViewMode(mode, silent = false) {
   state.viewMode = mode;
   document.body.classList.toggle('view-double', mode === 'double');
@@ -956,9 +911,6 @@ async function applyViewMode(mode, silent = false) {
     savePosition();
   }
 }
-
-
-
 
 let autoScrollRAF = null;
 let autoScrollSpeed = 0.55;   
@@ -991,9 +943,6 @@ function stopAutoScroll() {
   els.btnScrollPlay && els.btnScrollPlay.classList.remove('scrolling');
 }
 
-
-
-
 function goToPage(num, smooth = false) {
   if (!state.pdf) return;
   num = Math.min(Math.max(1, parseInt(num, 10) || 1), state.pageCount);
@@ -1010,9 +959,6 @@ function goToPage(num, smooth = false) {
   if (state.pages[num]) renderPage(state.pages[num]);
   updateThumbActive();
 }
-
-
-
 
 let thumbObserver = null;
 
@@ -1115,9 +1061,6 @@ function updateThumbActive() {
   }
 }
 
-
-
-
 async function buildOutline() {
   const box = els.outlineList;
   box.innerHTML = '';
@@ -1149,7 +1092,6 @@ async function buildOutline() {
   rendered.forEach(n => n && frag.appendChild(n));
   box.appendChild(frag);
 }
-
 
 function renderMyBookmarks(box) {
   const pages = [...state.bookmarks].sort((a, b) => a - b);
@@ -1225,12 +1167,6 @@ async function buildOutlineNode(item, depth) {
   }
   return btn;
 }
-
-
-
-
-
-
 
 async function runSearch(keyword) {
   clearSearchHighlights();
@@ -1325,14 +1261,12 @@ async function runSearch(keyword) {
   }
 }
 
-
 function restoreSpan(span) {
   if (span.dataset.orig !== undefined) {
     span.textContent = span.dataset.orig;
     delete span.dataset.orig;
   }
 }
-
 
 function clearSearchHighlights() {
   for (const rec of state.pages) {
@@ -1348,12 +1282,10 @@ function clearSearchHighlights() {
   state.hitIndex = -1;
 }
 
-
 function findSpanForItem(rec, itemIndex) {
   if (!rec || !rec.textLayer) return null;
   return rec.textLayer.querySelector(`span[data-item-index="${itemIndex}"]`);
 }
-
 
 function paintHitsOnPage(rec, hit) {
   if (!rec || !rec.rendered) return;
@@ -1384,7 +1316,6 @@ function paintHitsOnPage(rec, hit) {
   }
 }
 
-
 function applySearchHighlight() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
@@ -1395,7 +1326,6 @@ function applySearchHighlight() {
   markCurrentHit();
 }
 
-
 function markCurrentHit() {
   document.querySelectorAll('.text-layer mark.cur').forEach(m => m.classList.remove('cur'));
   if (state.hitIndex < 0 || !state.searchHits.length) return;
@@ -1405,7 +1335,6 @@ function markCurrentHit() {
   const mark = rec.textLayer.querySelector(`mark.hl[data-seq="${hit.seq}"]`);
   if (mark) mark.classList.add('cur');
 }
-
 
 function gotoHit(index) {
   const n = state.searchHits.length;
@@ -1449,9 +1378,6 @@ function gotoHit(index) {
   locate();
 }
 
-
-
-
 let pendingSel = null;   
 let popAnnotId = null;   
 let currentAnnotColor = 'yellow';
@@ -1464,8 +1390,6 @@ function hideSelMenu() {
   if (selMenuTimer) { clearTimeout(selMenuTimer); selMenuTimer = null; }
   if (els.selMenu) els.selMenu.hidden = true;
 }
-
-
 
 function showSelMenu(rect) {
   const menu = els.selMenu;
@@ -1532,7 +1456,6 @@ function showSelMenu(rect) {
   }, 6000);
 }
 
-
 function onSelectionChange() {
   
   if (menuBusy) return;
@@ -1575,15 +1498,11 @@ function onSelectionChange() {
   showSelMenu(anchorRect || range.getBoundingClientRect());
 }
 
-
 function finishMenuAction() {
   hideSelMenu();
   pendingSel = null;
   try { window.getSelection()?.removeAllRanges(); } catch (e) {  }
 }
-
-
-
 
 let dragState = null;      
 let moveState = null;      
@@ -1591,10 +1510,7 @@ let resizeState = null;
 let textPopInfo = null;    
 let objBarId = null;       
 
-
-
 const MOVE_THRESHOLD = 3;
-
 
 function pageAt(clientX, clientY) {
   for (const rec of state.pages) {
@@ -1606,8 +1522,6 @@ function pageAt(clientX, clientY) {
   }
   return null;
 }
-
-
 
 function showObjBar(rec, obj) {
   const bar = els.objBar;
@@ -1659,8 +1573,6 @@ function hideObjBar() {
   if (els.objBar) els.objBar.hidden = true;
 }
 
-
-
 function onEditDoubleClick(e) {
   if (!editState.on || editState.tool !== 'select') return;
   if (!e.target.closest('.page')) return;
@@ -1677,9 +1589,6 @@ function onEditDoubleClick(e) {
     openReplacePop(obj, e.clientX, e.clientY);
   }
 }
-
-
-
 
 function setAnnotMode(on, silent = false) {
   const next = !!on;
@@ -1802,8 +1711,6 @@ function onEditMouseDown(e) {
   document.body.classList.add('dragging-edit');
 }
 
-
-
 function dragMoveObject(e) {
   const st = moveState;
   const dxs = e.clientX - st.startX;
@@ -1821,7 +1728,6 @@ function dragMoveObject(e) {
   updateObject(st.id, movedPosition(st.orig, d));
 }
 
-
 function dragResizeObject(e) {
   const st = resizeState;
   const dxs = e.clientX - st.startX;
@@ -1829,7 +1735,6 @@ function dragResizeObject(e) {
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
   updateObject(st.id, resizedRect(st.orig, st.corner, d));
 }
-
 
 function onEditMouseMove(e) {
   if (resizeState) { dragResizeObject(e); return; }
@@ -1865,7 +1770,6 @@ function onEditMouseMove(e) {
   editState.tempShape = temp;
   paintPageEdits(rec);
 }
-
 
 function onEditMouseUp(e) {
   
@@ -1942,11 +1846,6 @@ function onEditMouseUp(e) {
   }
 }
 
-
-
-
-
-
 let paraPopInfo = null;             
 const paraCache = new Map();        
 
@@ -1971,17 +1870,12 @@ async function fetchParagraphs(page) {
   return list;
 }
 
-
 function itemRectPdf(item) {
   const t = item.transform || [1, 0, 0, 1, 0, 0];
   const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
   const w = Math.abs(item.width || 0);
   return [t[4], t[5], t[4] + w, t[5] + h];
 }
-
-
-
-
 
 function joinItemsByLines(picked) {
   if (!picked.length) return '';
@@ -2031,8 +1925,6 @@ function paragraphTextFromDom(rec, box) {
   return joinItemsByLines(picked);
 }
 
-
-
 function flashParaRange(rec, p, label) {
   const { width: pw, height: ph } = pageSize(rec.num);
   if (!pw || !ph || !rec.wrap) return;
@@ -2052,7 +1944,6 @@ function flashParaRange(rec, p, label) {
   rec.wrap.appendChild(el);
   setTimeout(() => el.remove(), 2300);
 }
-
 
 function flashBoxes(pageNum, boxes) {
   const rec = state.pages[pageNum - 1];
@@ -2192,11 +2083,6 @@ function updateParaCount() {
   els.paraCount.textContent = t('{n} 字', { n });
 }
 
-
-
-
-
-
 async function reloadContentFrom(path) {
   const keepPage = state.currentPage;
   const keepScroll = els.viewer.scrollTop;
@@ -2245,7 +2131,6 @@ async function reloadContentFrom(path) {
   return pdf;
 }
 
-
 async function applyStagePreview(res) {
   showLoading(t('正在刷新预览…'));
   try {
@@ -2281,8 +2166,6 @@ async function applyStagePreview(res) {
     toast(msg + t('。满意就点顶部「保存为 PDF」'), 3600);
   }
 }
-
-
 
 async function undoStagePreview() {
   if (!state.stage || !state.stage.id) return false;
@@ -2322,7 +2205,6 @@ async function undoStagePreview() {
 
 setStageUndoHandler(undoStagePreview);
 
-
 function updateStageBar(saved = false) {
   const bar = els.stageBar;
   if (!bar) return;
@@ -2342,12 +2224,10 @@ function updateStageBar(saved = false) {
   }
 }
 
-
 async function saveStagePreview() {
   const res = await exportPdf();
   if (res && res.ok) updateStageBar(true);
 }
-
 
 async function exitStagePreview() {
   await discardStage();
@@ -2391,9 +2271,6 @@ async function confirmParaPop() {
   closeParaPop();
   await applyStagePreview(res);
 }
-
-
-
 
 async function confirmInsertRow(where) {
   if (!paraPopInfo || paraPopInfo.gid == null) return;
@@ -2479,9 +2356,6 @@ function closeTextPop() {
   if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
 
-
-
-
 function textMargins(pageW, pageH) {
   return {
     mX: Math.max(12, pageW * 0.025),
@@ -2490,14 +2364,12 @@ function textMargins(pageW, pageH) {
   };
 }
 
-
 function pageElScale(pageNum) {
   const W = pageSize(pageNum).width || 595;
   const rec = (state.pages || []).find(r => r.num === pageNum);
   const px = rec && rec.wrap ? rec.wrap.getBoundingClientRect().width : 0;
   return (px || W) / W;
 }
-
 
 let _textMeasureCtx = null;
 function makeMeasurer(sizePdf, scale) {
@@ -2508,7 +2380,6 @@ function makeMeasurer(sizePdf, scale) {
     return (s) => _textMeasureCtx.measureText(s).width;
   } catch (e) { return () => 0; }
 }
-
 
 function layoutText(text, page, xPdf, firstBaseline, size) {
   const { width: W, height: H } = pageSize(page);
@@ -2522,14 +2393,12 @@ function layoutText(text, page, xPdf, firstBaseline, size) {
   });
 }
 
-
 function ensurePageExists(num) {
   let guard = 0;
   while (state.pages.length < num && guard++ < 500) {
     insertBlank(state.pages.length - 1);
   }
 }
-
 
 function placeTextPlacements(placements, common) {
   for (const pl of placements) {
@@ -2606,8 +2475,6 @@ function confirmTextPop() {
   toast(pages > 1 ? t('已添加文字（跨 {pages} 页）', { pages }) : t('已添加文字'), 1100);
 }
 
-
-
 let replacePopInfo = null;   
 
 function openReplacePop(obj, clientX, clientY) {
@@ -2652,7 +2519,6 @@ function confirmReplacePop() {
   toast(t('已设置替换文字'), 1100);
 }
 
-
 function applyAnnotation(sel, type, color) {
   if (!sel || !sel.parts || !sel.parts.length) {
     toast(t('选区已失效，请重新选择文字'), 1800);
@@ -2671,7 +2537,6 @@ function applyAnnotation(sel, type, color) {
                   strike: t('删除线') }[type] || t('标注');
   toast(t('已添加{label}', { label }), 1100);
 }
-
 
 function openAnnotPop(id) {
   const an = annState.items.find(a => a.id === id);
@@ -2719,9 +2584,6 @@ function closeAnnotPop() {
   els.annotPop && (els.annotPop.hidden = true);
   popAnnotId = null;
 }
-
-
-
 
 let boxStart = null;
 let boxEl = null;
@@ -2803,10 +2665,7 @@ function onBoxDown(e) {
   document.addEventListener('mouseup', up);
 }
 
-
-
 let serverFiles = [];
-
 
 let mergeSel = [];
 let mergeMode = false;
@@ -3014,7 +2873,10 @@ function paintFileList() {
           .catch(() => toast(t('打开失败')));
         return;
       }
-      loadPdfFromPath(f.path, f.name);
+      
+      
+      
+      loadPdfFromPath(f.path, f.name, f.docId);
     });
   });
 }
@@ -3049,9 +2911,6 @@ async function handleLocalFile(file) {
   }
   await loadPdfFromFile(file);
 }
-
-
-
 
 function bindToolbar() {
   
@@ -3520,7 +3379,6 @@ function bindToolbar() {
 
   
 
-
   if (els.langLabel) {
     els.langLabel.textContent = LANG_SHORT[currentLang()] || currentLang().toUpperCase();
   }
@@ -3613,7 +3471,24 @@ function bindToolbar() {
       if (ev === 'dragover') { e.preventDefault(); return; }
       e.preventDefault();
       const f = e.dataTransfer?.files?.[0];
-      if (f) handleLocalFile(f);
+      if (!f) return;
+      
+      if (editState.on && /^image\//.test(f.type || '')) {
+        const rec = pageAt(e.clientX, e.clientY);
+        if (rec) {
+          const r = rec.wrap.getBoundingClientRect();
+          const ps = pageSize(rec.num);
+          const nx = (e.clientX - r.left) / (r.width || 1);
+          const ny = (e.clientY - r.top) / (r.height || 1);
+          insertImageFile(f, {
+            page: rec.num,
+            pdfX: nx * ps.width,
+            pdfY: ps.height * (1 - ny),
+          });
+          return;
+        }
+      }
+      handleLocalFile(f);
     });
   });
 
@@ -3716,13 +3591,9 @@ function stepZoom(dir) {
   applyScale(String(target));
 }
 
-
 const onResize = debounce(() => {
   if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
 }, 220);
-
-
-
 
 function cacheAllEls() {
   cacheEls([
@@ -3764,6 +3635,8 @@ function cacheAllEls() {
     'paraCancel', 'paraOk', 'paraDropRow', 'paraInsertAbove', 'paraInsertBelow',
     'btnNewPdf', 'newPop', 'newSize', 'newPages', 'newLandscape',
     'newOk', 'newCancel',
+    
+    'btnInsertImage', 'imagePicker',
   ]);
   els.sideBody = document.querySelector('.side-body');
 }
@@ -3798,7 +3671,6 @@ async function init() {
 
   
 
-
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     const k = String(e.key).toLowerCase();
@@ -3831,7 +3703,6 @@ async function init() {
   if (direct) {
     
 
-
     try {
       await api('/api/allow', { method: 'POST', body: { path: direct } });
     } catch (e) {  }
@@ -3841,8 +3712,6 @@ async function init() {
     renderWelcome();
   }
 }
-
-
 
 window.__openPdfTab = (path, name) => {
   if (!path) return;

@@ -563,6 +563,16 @@ function renderObjectEl(obj, rec, isTemp = false) {
     t.className = 'ed-replace-text';
     t.textContent = obj.text || '';
     el.appendChild(t);
+  } else if (obj.kind === 'image') {
+    
+    
+    
+    el.classList.add('ed-image');
+    const im = document.createElement('img');
+    im.alt = '';
+    im.draggable = false;
+    im.src = '/api/image?id=' + encodeURIComponent(obj.img || '');
+    el.appendChild(im);
   }
 
   if (!isTemp && editState.selectedId === obj.id) {
@@ -573,7 +583,8 @@ function renderObjectEl(obj, rec, isTemp = false) {
 
 
 
-const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact', 'replace']);
+const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact',
+                                 'replace', 'image']);
 
 
 
@@ -688,6 +699,89 @@ export function makeLineObject(rec, pageNum, start, end, opts = {}) {
     color: opts.color || '#000000',
     lineWidth: opts.lineWidth || 1.5,
   };
+}
+
+
+
+export function makeImageObject(pageNum, info) {
+  const { width: pw, height: ph } = pageSize(pageNum);
+  const iw = Number(info && info.width) || 1;
+  const ih = Number(info && info.height) || 1;
+  const maxW = pw * 0.6;
+  const maxH = ph * 0.6;
+  let w = maxW;
+  let h = w * (ih / iw);
+  if (h > maxH) {
+    h = maxH;
+    w = h * (iw / ih);
+  }
+  return {
+    page: pageNum,
+    kind: 'image',
+    img: info.id,
+    x: (pw - w) / 2,
+    y: (ph - h) / 2,
+    w, h,
+  };
+}
+
+
+
+export async function insertImageFile(file, at) {
+  if (!file) return;
+  if (!/^image\/(png|jpeg)$/.test(file.type || '')
+      && !/\.(png|jpe?g)$/i.test(file.name || '')) {
+    toast(t('只支持 PNG 和 JPEG 图片'), 2600);
+    return;
+  }
+  let dataUrl = '';
+  try {
+    dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result || ''));
+      fr.onerror = () => reject(new Error(t('读取文件失败')));
+      fr.readAsDataURL(file);
+    });
+  } catch (e) {
+    toast(e.message || t('读取文件失败'), 2600);
+    return;
+  }
+  let info = null;
+  try {
+    const r = await fetch('/api/image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: dataUrl }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(errText(d) || t('上传失败'));
+    info = d;
+  } catch (e) {
+    toast(e.message || t('上传失败'), 3200);
+    return;
+  }
+
+  const page = (at && at.page)
+    ? at.page
+    : Math.min(Math.max(state.currentPage || 1, 1),
+               Math.max(1, editState.pageInfo.length || 1));
+  const fresh = makeImageObject(page, info);
+  if (at && Number.isFinite(at.pdfX) && Number.isFinite(at.pdfY)) {
+    
+    
+    const ps = pageSize(page);
+    fresh.x = Math.min(Math.max(at.pdfX - fresh.w / 2, 0),
+                       Math.max(0, ps.width - fresh.w));
+    fresh.y = Math.min(Math.max(at.pdfY - fresh.h / 2, 0),
+                       Math.max(0, ps.height - fresh.h));
+  }
+  const obj = addObject(fresh);
+  
+  editState.selectedId = obj.id;
+  editState.tool = 'select';
+  syncToolButtons();
+  repaintEdits();
+  toast(t('已插入图片：拖动移动，拖四角缩放'), 2600);
 }
 
 
@@ -1322,6 +1416,18 @@ export function bindEditUI() {
       });
     });
   }
+
+  
+  els.btnInsertImage && els.btnInsertImage.addEventListener('click', () => {
+    if (els.imagePicker) els.imagePicker.click();
+  });
+  els.imagePicker && els.imagePicker.addEventListener('change', () => {
+    const f = els.imagePicker.files && els.imagePicker.files[0];
+    
+    
+    els.imagePicker.value = '';
+    if (f) insertImageFile(f);
+  });
 
   els.editColor && els.editColor.addEventListener('input', () => {
     const cv = els.editColorValue;

@@ -1928,6 +1928,18 @@ body.dark .ed-redact::after { background: rgba(0, 0, 0, 0.65); }
   
 }
 
+
+
+.ed-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
 .ed-replace-text {
   font-size: 13px;
   line-height: 1.25;

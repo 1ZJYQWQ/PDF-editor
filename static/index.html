@@ -313,6 +313,17 @@
           <svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/></svg>
           <em data-i18n="直线">直线</em>
         </button>
+        
+        <button class="ep-tool" id="btnInsertImage"
+          title="图片 — 插入 PNG / JPEG（可拖动、拖四角缩放）"
+          data-i18n-title="图片 — 插入 PNG / JPEG（可拖动、拖四角缩放）">
+          <svg viewBox="0 0 24 24">
+            <rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/>
+            <circle cx="9" cy="10" r="1.4" fill="currentColor" stroke="none"/>
+            <path d="M4 17l5-5 4 4 3-2.5 4 3.5"/>
+          </svg>
+          <em data-i18n="图片">图片</em>
+        </button>
         <button class="ep-tool danger" data-tool="redact"
           title="涂黑 — 永久销毁该区域的文字（不可逆！）" data-i18n-title="涂黑 — 永久销毁该区域的文字（不可逆！）">
           <svg viewBox="0 0 24 24">
@@ -586,6 +597,7 @@
     </div>
 
 <input type="file" id="filePicker" accept="application/pdf,.pdf" hidden multiple>
+<input type="file" id="imagePicker" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
 
 <script type="module" src="/static/app.js"></script>
 </body>

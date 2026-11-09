@@ -1,5 +1,6 @@
 
 import argparse
+import base64
 import hashlib
 import json
 import mimetypes
@@ -15,6 +16,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pdfedit
+import pdfimage
 import pdfredact
 import appenv
 import appversion
@@ -27,6 +29,7 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 ANNOT_DIR = os.path.join(DATA_DIR, "annotations")
 EDIT_DIR = os.path.join(DATA_DIR, "edits")
 EXPORT_DIR = os.path.join(DATA_DIR, "exports")
+IMAGE_DIR = os.path.join(DATA_DIR, "images")
 
 STAGE_DIR = os.path.join(DATA_DIR, "_stage")
 STAGE_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
@@ -89,6 +92,8 @@ PORT_SCAN_RANGE = 20
 MAX_LIST = 2000
 CHUNK = 64 * 1024
 MAX_BODY = 8 * 1024 * 1024
+MAX_IMAGE_BODY = 24 * 1024 * 1024
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
 
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
@@ -225,7 +230,7 @@ TAG_LABEL = {
     "box": "区域",
 }
 
-EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line"}
+EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line", "image"}
 
 ANNOT_KINDS = {"highlight", "underline", "wavy", "strike", "box", "note"}
 
@@ -380,6 +385,15 @@ def sanitize_edits(pages, objects):
             out["size"] = min(max(_safe_float(obj.get("size"), 12.0),
                                   4.0), 200.0)
             out["font"] = _safe_font(obj.get("font"))
+        if kind == "image":
+            name = str(obj.get("img") or "")
+            if not pdfedit.IMG_NAME.match(name):
+                dropped += 1
+                continue
+            if out["w"] <= 0 or out["h"] <= 0:
+                dropped += 1
+                continue
+            out["img"] = name
 
         out["color"] = _safe_color(obj.get("color"))
         clean_objs.append(out)
@@ -625,6 +639,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_pdfinfo(query)
             if route == "/api/paragraphs":
                 return self.api_paragraphs(query)
+            if route == "/api/image":
+                return self.api_image(query)
             if route.startswith("/static/"):
                 rel = urllib.parse.unquote(route[len("/static/"):])
                 target = os.path.join(STATIC_DIR, rel.replace("/", os.sep))
@@ -655,14 +671,15 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/stage", "/api/stage/undo",
                          "/api/find", "/api/replace_all", "/api/redact_terms",
                          "/api/table/drop_row", "/api/table/insert_row",
-                         "/api/new", "/api/allow",
+                         "/api/new", "/api/allow", "/api/image",
                          "/api/split", "/api/merge"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        if length <= 0 or length > MAX_BODY:
+        limit = MAX_IMAGE_BODY if route == "/api/image" else MAX_BODY
+        if length <= 0 or length > limit:
             return self.send_error_json(413, "请求体过大或为空")
 
         raw = self.rfile.read(length)
@@ -693,6 +710,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_new(payload)
         if route == "/api/allow":
             return self._post_allow(payload)
+        if route == "/api/image":
+            return self._post_image(payload)
         if route == "/api/find":
             return self._post_find(payload)
         if route == "/api/replace_all":
@@ -721,6 +740,49 @@ class Handler(BaseHTTPRequestHandler):
                             "updated": saved["updated"]})
         except Exception as exc:
             self.send_error_json(500, f"保存失败: {exc}")
+
+    def _post_image(self, payload):
+        raw = payload.get("data")
+        if not isinstance(raw, str) or not raw.strip():
+            return self.send_error_json(400, "缺少图片数据")
+        s = raw.strip()
+        if s.startswith("data:"):
+            comma = s.find(",")
+            if comma < 0:
+                return self.send_error_json(400, "图片数据格式不对")
+            s = s[comma + 1:]
+        try:
+            data = base64.b64decode(s, validate=True)
+        except Exception:
+            return self.send_error_json(400, "图片数据不是合法的 base64")
+        if not data:
+            return self.send_error_json(400, "图片是空的")
+        if len(data) > MAX_IMAGE_BYTES:
+            return self.send_error_json(413, "图片太大（超过 16 MB）")
+        try:
+            info = pdfimage.inspect(data)
+        except ValueError as exc:
+            return self.send_error_json(400, str(exc))
+
+        ext = "jpg" if info["format"] == "jpeg" else "png"
+        name = hashlib.sha1(data).hexdigest() + "." + ext
+        try:
+            os.makedirs(IMAGE_DIR, exist_ok=True)
+            path = os.path.join(IMAGE_DIR, name)
+            if not os.path.exists(path):
+                tmp = path + ".part"
+                with open(tmp, "wb") as fp:
+                    fp.write(data)
+                os.replace(tmp, path)
+        except OSError as exc:
+            return self.send_error_json(500, "保存图片失败: %s" % exc)
+
+        return self.send_json({
+            "ok": True, "id": name,
+            "width": info["width"], "height": info["height"],
+            "format": info["format"], "alpha": bool(info.get("alpha")),
+            "size": len(data),
+        })
 
     def _post_edits(self, payload):
         did = payload.get("docId")
@@ -1425,7 +1487,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = pdfedit.apply_edits(
                     real, out_path,
                     {"pages": pages, "objects": objects,
-                     "annotations": annots})
+                     "annotations": annots},
+                    image_dir=IMAGE_DIR)
         except Exception as exc:
             return self.send_error_json(500, f"导出失败: {exc}")
 
@@ -1476,6 +1539,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Export-Dropped", str(dropped))
         self.send_header("X-Export-Annots",
                          str((result.get("annotations") or {}).get("written", 0)))
+        self.send_header("X-Export-Images", str(result.get("images", 0)))
+        failed = result.get("images_failed") or []
+        if failed:
+            self.send_header("X-Export-Images-Failed", str(len(failed)))
         self.send_header("X-Export-CJK-Glyphs",
                          str(result.get("cjk_glyphs", 0)))
         miss = str(result.get("cjk_missing") or "")
@@ -2053,6 +2120,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def api_image(self, query):
+        name = (query.get("id") or [""])[0]
+        if not pdfedit.IMG_NAME.match(name):
+            return self.send_error_json(400, "id 无效")
+        path = os.path.join(IMAGE_DIR, name)
+        if not os.path.isfile(path):
+            return self.send_error_json(404, "图片不存在")
+        return self.serve_file(path)
+
     def api_get_edits(self, query):
         did = (query.get("doc") or [""])[0]
         if not valid_doc_id(did):
@@ -2076,6 +2152,10 @@ class Handler(BaseHTTPRequestHandler):
             info = pdf_page_info(real)
         except Exception as exc:
             return self.send_error_json(500, f"解析失败: {exc}")
+        try:
+            info["docId"] = doc_id(real)
+        except Exception:
+            pass
         self.send_json(info)
 
     def api_open(self, query):
@@ -2227,6 +2307,7 @@ def clean_stage_orphans():
 
 def main():
     global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR
+    global IMAGE_DIR
 
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -2254,6 +2335,8 @@ def main():
                     help="标注数据目录，默认 <项目>/annotations")
     ap.add_argument("--stage-dir", default=None,
                     help="预览暂存目录，默认 <项目>/_stage（测试必须重定向）")
+    ap.add_argument("--image-dir", default=None,
+                    help="插入图片的存放目录，默认 <数据目录>/images")
     args = ap.parse_args()
 
     for _f in getattr(args, "allow", []) or []:
@@ -2269,7 +2352,9 @@ def main():
         ANNOT_DIR = os.path.realpath(args.annot_dir)
     if args.stage_dir:
         STAGE_DIR = os.path.realpath(args.stage_dir)
-    for _d in (EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR):
+    if args.image_dir:
+        IMAGE_DIR = os.path.realpath(args.image_dir)
+    for _d in (EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR, IMAGE_DIR):
         os.makedirs(_d, exist_ok=True)
 
     if appenv.FROZEN:

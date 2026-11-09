@@ -26,7 +26,7 @@ Local-only, offline PDF tool with **zero third-party dependencies**.
 | **Read** | Zoom, paging, single / two-page view, thumbnails, outline, search, bookmarks, invert colors |
 | **Tabs** | Several documents in one window, each keeping its own scroll position, zoom, edit mode and undo stack (Ctrl+Tab to cycle, Ctrl+W to close) |
 | **Annotate** | Highlight / underline / wavy / strikethrough / note / box → written as native PDF comments |
-| **Edit** | Shape objects (rectangle / ellipse / line / text / whiteout), page management, replace in place, paragraph reflow, document-wide find & replace |
+| **Edit** | Shape objects (rectangle / ellipse / line / text / whiteout), **insert images / signatures** (PNG/JPEG, transparency preserved), page management, replace in place, paragraph reflow, document-wide find & replace |
 | **Tables** | Edit cell by cell (a longer value grows the row and the borders follow), rows detected by ruling lines, insert / delete a row (content moves, borders redrawn) |
 | **Redact** | Removes text (not whiteout). Frame an area, or give it a list of terms for the whole document: **delete and reflow** (following text closes the gap) or **redact in place** (layout unchanged, black box). Zero matches is an error, not a silent no-op |
 | **Create** | Blank PDF from scratch (A4/A3/A5/Letter/Legal, landscape, 1–200 pages), opens straight into edit mode |
@@ -83,7 +83,8 @@ The installer needs Inno Setup (`winget install JRSoftware.InnoSetup`), then:
 |---|---|
 | Scanned documents | Not supported. Redaction can't touch text inside images — that needs OCR |
 | Whole-document reflow | Not supported (tables can be edited cell by cell and rows can be deleted; reflowing a whole document needs a real layout engine) |
-| Forms / encryption / signatures | Not supported |
+| Forms / encryption | Not supported (a signature can be pasted as a transparent PNG, but that is a picture, not a verifiable signature field) |
+| Insert images | PNG / JPEG only. CMYK JPEG, 16-bit and interlaced PNGs are rejected with a hint to re-save as a plain PNG |
 | Edited paragraphs | Glyphs are substituted with a standard font, so they differ subtly from the surrounding text |
 
 ---

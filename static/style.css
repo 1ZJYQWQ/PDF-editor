@@ -887,6 +887,47 @@ body.dark .file-item .fi-icon { background: #451a1a; color: #f87171; }
   flex-wrap: wrap;
 }
 
+
+.update-foot {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.ver-label {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.uf-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.update-msg { color: var(--text-muted); }
+.update-msg.ok { color: var(--text-muted); }
+.update-msg.warn { color: #b45309; }
+body.dark .update-msg.warn { color: #fbbf24; }
+
+.update-msg.new {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.update-msg.new:hover { text-decoration: underline; }
+
+.uf-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.uf-auto input { margin: 0; }
+
 .link-btn {
   border: none;
   background: none;

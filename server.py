@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pdfedit
 import pdfredact
 import appenv
+import appversion
 
 BASE_DIR = appenv.resource_dir()
 DATA_DIR = appenv.data_dir()
@@ -91,6 +92,10 @@ MAX_BODY = 8 * 1024 * 1024
 
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
+
+UPDATE_REPO = "1ZJYQWQ/PDF-editor"
+UPDATE_TTL = 6 * 3600
+_update_cache = {"at": 0.0, "data": None}
 
 def norm(path):
     return os.path.normcase(os.path.abspath(path))
@@ -598,9 +603,14 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/":
                 return self.serve_file(os.path.join(STATIC_DIR, "index.html"))
             if route == "/api/ping":
-                return self.send_json({"app": "pdfviewer", "ok": True})
+                return self.send_json({
+                    "app": "pdfviewer", "ok": True,
+                    "version": appversion.VERSION,
+                })
             if route == "/api/files":
                 return self.api_files(query)
+            if route == "/api/update":
+                return self.api_update(query)
             if route == "/api/file":
                 return self.api_file(query)
             if route == "/api/open":
@@ -1900,6 +1910,49 @@ class Handler(BaseHTTPRequestHandler):
             "count": len(files),
             "truncated": len(files) >= MAX_LIST,
         })
+
+    def api_update(self, query):
+        now = time.time()
+        if _update_cache["data"] and now - _update_cache["at"] < UPDATE_TTL:
+            return self.send_json(_update_cache["data"])
+
+        url = ("https://api.github.com/repos/%s/releases?per_page=20"
+               % UPDATE_REPO)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "PDFViewer/" + appversion.VERSION,
+            "Accept": "application/vnd.github+json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                releases = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return self.send_json({
+                "ok": False,
+                "current": appversion.VERSION,
+                "error": "检查更新失败：%s" % exc,
+            })
+
+        if not isinstance(releases, list):
+            return self.send_json({
+                "ok": False, "current": appversion.VERSION,
+                "error": "Releases 返回格式不对",
+            })
+
+        hit = appversion.pick_latest(releases, appversion.VERSION) or {}
+        data = {
+            "ok": True,
+            "current": appversion.VERSION,
+            "repo": UPDATE_REPO,
+            "hasUpdate": bool(hit),
+            "latest": hit.get("tag_name") or "",
+            "name": hit.get("name") or "",
+            "url": hit.get("html_url")
+                   or ("https://github.com/%s/releases" % UPDATE_REPO),
+            "published": hit.get("published_at") or "",
+        }
+        _update_cache["at"] = now
+        _update_cache["data"] = data
+        return self.send_json(data)
 
     def api_file(self, query, head_only=False):
         paths = query.get("path", [])

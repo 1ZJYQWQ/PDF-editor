@@ -493,4 +493,13 @@ export default {
   '有未保存的改动': 'Unsaved changes',
   '这份文档还有未保存的预览，关闭标签页会丢弃它。仍要关闭？':
     'This document has an unsaved preview. Closing the tab discards it. Close anyway?',
+
+  
+  '检查更新': 'Check for updates',
+  '检查中…': 'Checking…',
+  '启动时检查': 'Check on startup',
+  '有新版本 {v}': 'Version {v} is available',
+  '已是最新（{v}）': 'Up to date ({v})',
+  '检查更新失败': 'Update check failed',
+  '去下载': 'Open the download page',
 };

@@ -36,6 +36,9 @@ import { initBatchUI } from '/static/batch.js';
 
 import * as tabs from '/static/tabs.js';
 
+
+import { bindWelcomeUpdate } from '/static/update.js';
+
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
@@ -2894,9 +2897,22 @@ async function renderWelcome() {
       <span id="scanInfo"></span>
       <button class="link-btn" id="btnRescan">${t('重新扫描')}</button>
     </div>
+
+    <div class="welcome-foot update-foot" id="updateBox">
+      <span class="ver-label" id="verLabel"></span>
+      <span class="uf-right">
+        <span class="update-msg" id="updateMsg"></span>
+        <button class="link-btn" id="btnCheckUpdate">${t('检查更新')}</button>
+        <label class="uf-auto">
+          <input type="checkbox" id="chkAutoUpdate">
+          <span>${t('启动时检查')}</span>
+        </label>
+      </span>
+    </div>
   </div>`;
 
   bindWelcome();
+  bindWelcomeUpdate();
   await loadServerFiles();
 }
 

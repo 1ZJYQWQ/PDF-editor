@@ -1,14 +1,49 @@
 
 
+
+
+import { t } from '/static/i18n.js';
 import * as pdfjsLib from '/static/vendor/pdf.min.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdf.worker.min.mjs';
 
 export { pdfjsLib };
 
+
 if (typeof window !== 'undefined' && window.__PDFVIEW_DEBUG__ === undefined) {
   window.__PDFVIEW_DEBUG__ = false;
 }
+
+
+
+export function blankState() {
+  return {
+    pdf: null,
+    filePath: null,
+    fileName: '',
+    docId: null,
+    pageCount: 0,
+    scale: 1,
+    scaleMode: 'auto',
+    rotation: 0,
+    invert: false,
+    currentPage: 1,
+    pages: [],
+    observer: null,
+    renderQueue: new Set(),
+    searchHits: [],
+    searchHitsByPage: new Map(),
+    hitIndex: -1,
+    outlinMap: new Map(),
+    viewMode: 'single',
+    annotMode: false,
+    bookmarks: new Set(),
+    contentPath: null,
+    savedPath: null,
+    stage: { id: null, path: null },
+  };
+}
+
 
 export const state = {
   pdf: null,
@@ -72,23 +107,31 @@ export function debounce(fn, ms) {
 }
 
 export function toast(msg, ms = 1800) {
-  const t = els.toast;
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._tid);
-  t._tid = setTimeout(() => t.classList.remove('show'), ms);
+  const el = els.toast;
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._tid);
+  el._tid = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 export function showLoading(text) {
   if (!els.loading) return;
-  els.loadingText.textContent = text || '正在加载…';
+  els.loadingText.textContent = text || t('正在加载…');
   els.loading.classList.remove('hide');
 }
 
 export function hideLoading() {
   if (els.loading) els.loading.classList.add('hide');
 }
+
+
+
+export function errText(d) {
+  const raw = d && (d.code || d.error);
+  return raw ? t(raw) : '';
+}
+
 
 export async function api(url, opts = {}) {
   const init = { method: opts.method || 'GET' };
@@ -101,10 +144,10 @@ export async function api(url, opts = {}) {
   try {
     data = await r.json();
   } catch (e) {
-    throw new Error(`服务返回异常 (${r.status})`);
+    throw new Error(t('服务返回异常 ({status})', { status: r.status }));
   }
   if (!r.ok || data.ok === false) {
-    throw new Error(data.error || `请求失败 (${r.status})`);
+    throw new Error(errText(data) || t('请求失败 ({status})', { status: r.status }));
   }
   return data;
 }

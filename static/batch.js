@@ -2,7 +2,8 @@
 
 
 
-import { state, $, escapeHtml, toast } from '/static/core.js';
+import { t } from '/static/i18n.js';
+import { state, $, escapeHtml, toast , errText} from '/static/core.js';
 import { exportPdf, downloadServerFile } from '/static/edit.js';
 
 let hooks = {
@@ -25,7 +26,7 @@ const keyOf = (h) =>
   `${h.page}:${h.para}:${h.cell ? h.cell[0] + '.' + h.cell[1] : ''}`;
 
 const labelOf = (h) =>
-  `第 ${h.page} 页 · 第 ${h.para + 1} 段` + (h.cell ? `（表格第 ${h.cell[0] + 1} 行第 ${h.cell[1] + 1} 列）` : '');
+  t('第 {page} 页 · 第 {v} 段', { page: h.page, v: h.para + 1 }) + (h.cell ? t('（表格第 {v} 行第 {v2} 列）', { v: h.cell[0] + 1, v2: h.cell[1] + 1 }) : '');
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -113,18 +114,18 @@ function syncPickButtons() {
   const btnAll = $('bpReplaceAll');
   if (btnAll) btnAll.disabled = hits.length === 0;
   const scope = document.querySelector('.bp-scope');
-  if (scope) scope.textContent = n === hits.length ? '整篇' : `选中 ${n}`;
+  if (scope) scope.textContent = n === hits.length ? t('整篇') : t('选中 {n}', { n });
 }
 
 async function doFind() {
   const term = ($('bpFind').value || '').trim();
-  if (!term) { toast('先输入要查找的内容', 1600); return; }
+  if (!term) { toast(t('先输入要查找的内容'), 1600); return; }
   const src = state.contentPath || state.filePath;
-  if (!src) { toast('请先打开一个文档', 1600); return; }
+  if (!src) { toast(t('请先打开一个文档'), 1600); return; }
 
   const btn = $('bpSearch');
   btn.disabled = true;
-  $('bpCount').textContent = '查找中…';
+  $('bpCount').textContent = t('查找中…');
   try {
     const r = await fetch('/api/find', {
       method: 'POST',
@@ -134,7 +135,7 @@ async function doFind() {
       }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || `查找失败 (${r.status})`);
+    if (!r.ok || !d.ok) throw new Error(errText(d) || t('查找失败 ({status})', { status: r.status }));
 
     lastTerm = term;
     lastIgnoreCase = !!$('bpIgnoreCase').checked;
@@ -143,14 +144,14 @@ async function doFind() {
 
     const total = hits.reduce((a, h) => a + h.count, 0);
     $('bpCount').textContent = hits.length
-      ? `${hits.length} 段 / ${total} 处`
-      : '没有找到';
+      ? t('{length} 段 / {total} 处', { length: hits.length, total })
+      : t('没有找到');
     paintHits();
     syncPickButtons();
-    if (!hits.length) toast(`「${term}」没有找到`, 2200);
+    if (!hits.length) toast(t('「{term}」没有找到', { term }), 2200);
   } catch (e) {
-    $('bpCount').textContent = '查找失败';
-    toast(e.message || '查找失败', 4000);
+    $('bpCount').textContent = t('查找失败');
+    toast(e.message || t('查找失败'), 4000);
   } finally {
     btn.disabled = false;
   }
@@ -161,7 +162,7 @@ function paintHits() {
   if (!box) return;
   if (!hits.length) {
     box.hidden = false;
-    box.innerHTML = '<div class="bp-empty">没有匹配的段落</div>';
+    box.innerHTML = t('<div class="bp-empty">没有匹配的段落</div>');
     return;
   }
   box.hidden = false;
@@ -176,10 +177,10 @@ function paintHits() {
 async function doReplace(onlyPicked) {
   const term = ($('bpFind').value || '').trim();
   const repl = $('bpRepl').value || '';
-  if (!term) { toast('先输入要查找的内容', 1600); return; }
-  if (!hits.length) { toast('先点「查找」', 1600); return; }
+  if (!term) { toast(t('先输入要查找的内容'), 1600); return; }
+  if (!hits.length) { toast(t('先点「查找」'), 1600); return; }
 
-  if (onlyPicked && !picked.size) { toast('没有勾选任何一处', 1600); return; }
+  if (onlyPicked && !picked.size) { toast(t('没有勾选任何一处'), 1600); return; }
 
   const targets = onlyPicked
     ? hits.filter(h => picked.has(keyOf(h)))
@@ -192,7 +193,7 @@ async function doReplace(onlyPicked) {
   btnAll.disabled = true;
   btnSel.disabled = true;
   const before = $('bpCount').textContent;
-  $('bpCount').textContent = '替换中…';
+  $('bpCount').textContent = t('替换中…');
 
   try {
     const body = {
@@ -212,8 +213,8 @@ async function doReplace(onlyPicked) {
     });
 
     if (!r.ok) {
-      let msg = `替换失败 (${r.status})`;
-      try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {}
+      let msg = t('替换失败 ({status})', { status: r.status });
+      try { const j = await r.json(); const m2 = errText(j); if (m2) msg = m2; } catch (e) {}
       throw new Error(msg);
     }
 
@@ -225,7 +226,7 @@ async function doReplace(onlyPicked) {
     }
     try { await r.arrayBuffer(); } catch (e) {  }
 
-    if (!sid || !spath) throw new Error('服务端没有返回预览位置');
+    if (!sid || !spath) throw new Error(t('服务端没有返回预览位置'));
     state.stage = { id: sid, path: spath };
     state.contentPath = spath;
 
@@ -236,15 +237,15 @@ async function doReplace(onlyPicked) {
     if (hooks.applyStagePreview) {
       await hooks.applyStagePreview({ stagePath: spath });
     }
-    toast(`已替换 ${edits} 段（${occ} 处）` +
-      (skipped ? `；跳过：${decodeURIComponent(skipped)}` : ''),
+    toast(t('已替换 {edits} 段（{occ} 处）', { edits, occ }) +
+      (skipped ? t('；跳过：{v}', { v: decodeURIComponent(skipped) }) : ''),
       skipped ? 6000 : 3800);
 
     
     await doFind();
   } catch (e) {
     $('bpCount').textContent = before;
-    toast(e.message || '替换失败', 5000);
+    toast(e.message || t('替换失败'), 5000);
   } finally {
     btnAll.disabled = false;
     btnSel.disabled = false;
@@ -277,11 +278,11 @@ function bindTermRedact() {
       const hint = $('termHint');
       if (hint) {
         hint.textContent = del
-          ? '删掉：文字消失、段落重新折行，不留黑块'
-          : '涂黑：版面不动，盖一块黑（字形同样会被删）';
+          ? t('删掉：文字消失、段落重新折行，不留黑块')
+          : t('涂黑：版面不动，盖一块黑（字形同样会被删）');
       }
       const ok = $('termOk');
-      if (ok) ok.textContent = del ? '删除并另存为…' : '涂黑并另存为…';
+      if (ok) ok.textContent = del ? t('删除并另存为…') : t('涂黑并另存为…');
     };
     sel.addEventListener('change', paint);
     paint();
@@ -291,9 +292,9 @@ function bindTermRedact() {
 async function runTermRedact() {
   const raw = $('termText').value || '';
   const terms = raw.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!terms.length) { toast('先输入要删除的词（一行一个）', 2000); return; }
+  if (!terms.length) { toast(t('先输入要删除的词（一行一个）'), 2000); return; }
   const src = state.contentPath || state.filePath;
-  if (!src) { toast('请先打开一个文档', 1600); return; }
+  if (!src) { toast(t('请先打开一个文档'), 1600); return; }
 
   
   
@@ -302,23 +303,23 @@ async function runTermRedact() {
   const mode = style === 'redact' ? sel.slice(7) : null;
 
   const scopeText = style === 'delete'
-    ? '删掉这些词，该段落重新折行，后面的文字往前补位，不留黑块'
+    ? t('删掉这些词，该段落重新折行，后面的文字往前补位，不留黑块')
     : {
-      term: '涂黑命中的那几个字（版面不动，盖一块黑）',
-      line: '连命中的整行一起涂黑（版面不动）',
-      para: '连命中的整段一起涂黑（版面不动）',
+      term: t('涂黑命中的那几个字（版面不动，盖一块黑）'),
+      line: t('连命中的整行一起涂黑（版面不动）'),
+      para: t('连命中的整段一起涂黑（版面不动）'),
     }[mode];
 
   const ok = confirm(
-    `将从文档里永久删除这些词命中的每一处：\n\n${terms.join('、')}\n\n` +
-    `处理方式：${scopeText}\n` +
-    `· 文字会被真正删掉，另存为新文件；\n` +
-    `· 图片/扫描件里的文字删不掉。\n\n继续吗？`);
+    t('将从文档里永久删除这些词命中的每一处：\n\n{v}\n\n', { v: terms.join(t('、')) }) +
+    t('处理方式：{scopeText}\n', { scopeText }) +
+    t('· 文字会被真正删掉，另存为新文件；\\n') +
+    t('· 图片/扫描件里的文字删不掉。\\n\\n继续吗？'));
   if (!ok) return;
 
   const btn = $('termOk');
   btn.disabled = true;
-  btn.textContent = '处理中…';
+  btn.textContent = t('处理中…');
   try {
     const r = await fetch('/api/redact_terms', {
       method: 'POST',
@@ -326,8 +327,8 @@ async function runTermRedact() {
       body: JSON.stringify({ path: src, terms, ignore_case: true, style, mode }),
     });
     if (!r.ok) {
-      let msg = `删除失败 (${r.status})`;
-      try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {}
+      let msg = t('删除失败 ({status})', { status: r.status });
+      try { const j = await r.json(); const m2 = errText(j); if (m2) msg = m2; } catch (e) {}
       throw new Error(msg);
     }
 
@@ -337,7 +338,7 @@ async function runTermRedact() {
       try { outPath = decodeURIComponent(rawOut); } catch (e) { outPath = rawOut; }
     }
     const cd = r.headers.get('Content-Disposition') || '';
-    let name = `${state.fileName}-${style === 'delete' ? '已删除' : '已涂黑'}.pdf`;
+    let name = t('{fileName}-{v}.pdf', { fileName: state.fileName, v: style === 'delete' ? t('已删除') : t('已涂黑') });
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) { try { name = decodeURIComponent(m[1]); } catch (e) {} }
 
@@ -364,13 +365,13 @@ async function runTermRedact() {
       const missing = r.headers.get('X-Delete-Missing') || '';
       const skipped = r.headers.get('X-Delete-Skipped') || '';
       const check = residue == null ? '' :
-        (residue === '0' ? '，复查残留 0 处' : `，⚠ 复查仍有 ${residue} 处残留`);
+        (residue === '0' ? t('，复查残留 0 处') : t('，⚠ 复查仍有 {residue} 处残留', { residue }));
       
       
-      const more = remaining > 0 ? `；还有 ${remaining} 段没处理，请再点一次` : '';
-      msg = `已删掉 ${removed} 处（${edits} 段）${check}` +
-        (missing ? `；没找到：${decodeURIComponent(missing)}` : '') +
-        (skipped ? `；跳过：${decodeURIComponent(skipped)}` : '') + more;
+      const more = remaining > 0 ? t('；还有 {remaining} 段没处理，请再点一次', { remaining }) : '';
+      msg = t('已删掉 {removed} 处（{edits} 段）{check}', { removed, edits, check }) +
+        (missing ? t('；没找到：{v}', { v: decodeURIComponent(missing) }) : '') +
+        (skipped ? t('；跳过：{v}', { v: decodeURIComponent(skipped) }) : '') + more;
       bad = !!missing || (residue && residue !== '0') || !!skipped || remaining > 0;
     } else {
       const regions = r.headers.get('X-Redact-Regions') || '0';
@@ -378,17 +379,17 @@ async function runTermRedact() {
       const missing = r.headers.get('X-Redact-Missing') || '';
       const residue = r.headers.get('X-Redact-Residue');
       const check = residue == null ? '' :
-        (residue === '0' ? '；复查残留 0 处' : `；⚠ 复查仍有 ${residue} 处残留`);
-      msg = `已涂黑 ${regions} 处 / ${glyphs} 个字形${check}` +
-        (missing ? `；没找到：${decodeURIComponent(missing)}` : '');
+        (residue === '0' ? t('；复查残留 0 处') : t('；⚠ 复查仍有 {residue} 处残留', { residue }));
+      msg = t('已涂黑 {regions} 处 / {glyphs} 个字形{check}', { regions, glyphs, check }) +
+        (missing ? t('；没找到：{v}', { v: decodeURIComponent(missing) }) : '');
       bad = !!missing || (residue && residue !== '0');
     }
     toast(msg, bad ? 7000 : 4200);
   } catch (e) {
-    toast(e.message || '删除失败', 5000);
+    toast(e.message || t('删除失败'), 5000);
   } finally {
     btn.disabled = false;
-    btn.textContent = '删除并另存为…';
+    btn.textContent = t('删除并另存为…');
   }
 }
 
@@ -404,7 +405,7 @@ function bindRangeExport() {
     if (pop.hidden) {
       placePop(pop, btn);
       $('rangeHint').textContent = state.pageCount
-        ? `本文档 ${state.pageCount} 页` : '';
+        ? t('本文档 {pageCount} 页', { pageCount: state.pageCount }) : '';
       $('rangeSpec').focus();
     } else {
       pop.hidden = true;
@@ -423,13 +424,13 @@ function bindRangeExport() {
 
 async function runSplit() {
   const src = state.contentPath || state.filePath;
-  if (!src) { toast('请先打开一个文档', 1600); return; }
+  if (!src) { toast(t('请先打开一个文档'), 1600); return; }
   const per = parseInt($('splitPer').value || '0', 10);
-  if (!per || per < 1) { toast('先填每份几页', 1800); return; }
+  if (!per || per < 1) { toast(t('先填每份几页'), 1800); return; }
 
   const btn = $('splitOk');
   btn.disabled = true;
-  btn.textContent = '拆分中…';
+  btn.textContent = t('拆分中…');
   try {
     const r = await fetch('/api/split', {
       method: 'POST',
@@ -437,7 +438,7 @@ async function runSplit() {
       body: JSON.stringify({ path: src, per, name: state.fileName }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || `拆分失败 (${r.status})`);
+    if (!r.ok || !d.ok) throw new Error(errText(d) || t('拆分失败 ({status})', { status: r.status }));
 
     
     const pop = $('rangePop');
@@ -452,12 +453,12 @@ async function runSplit() {
         encodeURIComponent(f.path)}" title="${escapeHtml(f.path)}">
         ${escapeHtml(f.name)}
       </a>`).join('');
-    $('rangeHint').textContent = `已拆成 ${d.count} 份，点名字下载`;
-    toast(`已拆分 ${d.count} 份（每份 ${per} 页）`, 3200);
+    $('rangeHint').textContent = t('已拆成 {count} 份，点名字下载', { count: d.count });
+    toast(t('已拆分 {count} 份（每份 {per} 页）', { count: d.count, per }), 3200);
   } catch (e) {
-    toast(e.message || '拆分失败', 5000);
+    toast(e.message || t('拆分失败'), 5000);
   } finally {
     btn.disabled = false;
-    btn.textContent = '拆分整篇';
+    btn.textContent = t('拆分整篇');
   }
 }

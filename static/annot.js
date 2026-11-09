@@ -2,6 +2,7 @@
 
 
 
+import { t } from '/static/i18n.js';
 import { state, els, api, toast, uid, escapeHtml } from '/static/core.js';
 
 
@@ -33,7 +34,7 @@ export async function loadAnnotations(docId) {
     const data = await api(`/api/annotations?doc=${encodeURIComponent(docId)}`);
     if (data.ok) annState.items = data.items || [];
   } catch (err) {
-    console.warn('读取标注失败', err);
+    console.warn(t('读取标注失败'), err);
   }
   renderAnnotList();
   repaintAnnotations();
@@ -57,7 +58,7 @@ export async function doSave() {
       },
     });
   } catch (err) {
-    toast('标注保存失败：' + err.message, 2600);
+    toast(t('标注保存失败：') + err.message, 2600);
   }
 }
 
@@ -262,8 +263,8 @@ export function removeAnnotation(id) {
 
 
 const TYPE_LABEL = {
-  highlight: '高亮', underline: '下划线', wavy: '波浪线',
-  strike: '删除线', note: '笔记', box: '区域',
+  highlight: t('高亮'), underline: t('下划线'), wavy: t('波浪线'),
+  strike: t('删除线'), note: t('笔记'), box: t('区域'),
 };
 
 export function repaintAnnotations() {
@@ -274,7 +275,7 @@ export function repaintAnnotations() {
     painted += 1;
   }
   if (window.__PDFVIEW_DEBUG__) {
-    console.log(`[标注] 重绘 ${painted} 个已渲染页面，共 ${annState.items.length} 条标注`);
+    console.log(t('[标注] 重绘 {painted} 个已渲染页面，共 {length} 条标注', { painted, length: annState.items.length }));
   }
   return painted;
 }
@@ -337,7 +338,7 @@ export async function loadPagePdfAnnots(rec) {
   paintPageAnnotations(rec);
   if (!state.pdfAnnotHintShown) {
     state.pdfAnnotHintShown = true;
-    toast(`本文档自带 ${annState.ext.length} 条 PDF 注释，已列入左侧「标注」（只读）`, 3200);
+    toast(t('本文档自带 {length} 条 PDF 注释，已列入左侧「标注」（只读）', { length: annState.ext.length }), 3200);
   }
 }
 
@@ -478,11 +479,11 @@ export function paintPageAnnotations(rec) {
   }
 
   if (window.__PDFVIEW_DEBUG__) {
-    console.log(`[标注] 第 ${rec.num} 页 已有${dbg.total}条 绘制${dbg.drawn}个矩形 ` +
-                `找不到span:${dbg.noSpan} 无矩形:${dbg.noRect}`);
+    console.log(t('[标注] 第 {num} 页 已有{total}条 绘制{drawn}个矩形 ', { num: rec.num, total: dbg.total, drawn: dbg.drawn }) +
+                t('找不到span:{noSpan} 无矩形:{noRect}', { noSpan: dbg.noSpan, noRect: dbg.noRect }));
     if (dbg.noSpan) {
-      console.log('  可用 itemIndex:', [...spanByItem.keys()].slice(0, 30).join(','),
-                  ' 需要:', mine.flatMap(a => (a.parts || []).map(p => p.itemIndex)).join(','));
+      console.log(t('  可用 itemIndex:'), [...spanByItem.keys()].slice(0, 30).join(','),
+                  t(' 需要:'), mine.flatMap(a => (a.parts || []).map(p => p.itemIndex)).join(','));
     }
   }
 }
@@ -737,11 +738,9 @@ export function renderAnnotList() {
   els.annotCount.textContent = nAll ? `${list.length}/${nAll}` : '';
 
   if (!list.length) {
-    box.innerHTML = `<div class="annot-empty">${
-      nAll
-        ? '当前筛选下没有标注'
-        : '还没有标注<br><span style="font-size:11.5px">选中文字即可添加高亮或笔记</span>'
-    }</div>`;
+    box.innerHTML = t('<div class="annot-empty">{v}</div>', { v: nAll
+        ? t('当前筛选下没有标注')
+        : t('还没有标注<br><span style="font-size:11.5px">选中文字即可添加高亮或笔记</span>') });
     return;
   }
 
@@ -754,13 +753,13 @@ export function renderAnnotList() {
          style="--acard:${a.color || '#a1a1aa'}">
       <div class="ac-head">
         <span class="ac-type">${TYPE_LABEL[a.type] || a.type}</span>
-        ${a.isExt ? '<span class="ac-src">PDF 自带</span>' : ''}
-        <span class="ac-page">第 ${a.page} 页</span>
+        ${a.isExt ? `<span class="ac-src">${t('PDF 自带')}</span>` : ''}
+        <span class="ac-page">${t('第 {n} 页', { n: a.page })}</span>
       </div>
       ${a.text ? `<div class="ac-text">${escapeHtml(a.text)}</div>` : ''}
       ${a.note
         ? `<div class="ac-note">${escapeHtml(a.note)}</div>`
-        : (a.isExt ? '<div class="ac-note ac-none">无备注文字</div>' : '')}
+        : (a.isExt ? `<div class="ac-note ac-none">${t('无备注文字')}</div>` : '')}
     </div>`).join('');
 
   box.querySelectorAll('.annot-card').forEach(card => {
@@ -842,7 +841,7 @@ export function updateProgressMarkers() {
     const m = document.createElement('div');
     m.className = 'pm pm-annot';
     m.style.left = ((an.page - 1) / state.pageCount * 100) + '%';
-    m.title = `第 ${an.page} 页有标注`;
+    m.title = t('第 {page} 页有标注', { page: an.page });
     m.style.background = an.color || '#fbbf24';
     m.addEventListener('click', (e) => {
       e.stopPropagation();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF 查看器</title>
+<title data-i18n="PDF 查看器">PDF 查看器</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="/static/favicon.ico" sizes="16x16 32x32 48x48">
 </head>
@@ -14,13 +14,13 @@
   
   <div class="tb-scroll">
   <div class="tb-group">
-    <button class="btn" id="btnSidebar" title="收起/展开侧边栏 (S)">
+    <button class="btn" id="btnSidebar" title="收起/展开侧边栏 (S)" data-i18n-title="收起/展开侧边栏 (S)">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
     </button>
-    <button class="btn" id="btnHome" title="返回文件列表 (H)">
+    <button class="btn" id="btnHome" title="返回文件列表 (H)" data-i18n-title="返回文件列表 (H)">
       <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/></svg>
     </button>
-    <button class="btn" id="btnNewPdf" title="新建空白 PDF (N)">
+    <button class="btn" id="btnNewPdf" title="新建空白 PDF (N)" data-i18n-title="新建空白 PDF (N)">
       <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9.5" y1="14.5" x2="14.5" y2="14.5"/></svg>
     </button>
   </div>
@@ -29,18 +29,18 @@
 
   
   <div class="tb-group" id="navGroup" hidden>
-    <button class="btn" id="btnFirst" title="第一页 (Home)">
+    <button class="btn" id="btnFirst" title="第一页 (Home)" data-i18n-title="第一页 (Home)">
       <svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="5" y2="19"/><path d="M19 5l-9 7 9 7z"/></svg>
     </button>
-    <button class="btn" id="btnPrev" title="上一页 (PageUp)">
+    <button class="btn" id="btnPrev" title="上一页 (PageUp)" data-i18n-title="上一页 (PageUp)">
       <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
     </button>
-    <input type="number" class="page-input" id="pageInput" min="1" value="1" title="跳转到页码">
+    <input type="number" class="page-input" id="pageInput" min="1" value="1" title="跳转到页码" data-i18n-title="跳转到页码">
     <span class="page-total" id="pageTotal">/ 0</span>
-    <button class="btn" id="btnNext" title="下一页 (PageDown)">
+    <button class="btn" id="btnNext" title="下一页 (PageDown)" data-i18n-title="下一页 (PageDown)">
       <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
     </button>
-    <button class="btn" id="btnLast" title="最后一页 (End)">
+    <button class="btn" id="btnLast" title="最后一页 (End)" data-i18n-title="最后一页 (End)">
       <svg viewBox="0 0 24 24"><line x1="19" y1="5" x2="19" y2="19"/><path d="M5 5l9 7-9 7z"/></svg>
     </button>
   </div>
@@ -49,13 +49,13 @@
 
   
   <div class="tb-group" id="zoomGroup" hidden>
-    <button class="btn" id="btnZoomOut" title="缩小 (Ctrl -)">
+    <button class="btn" id="btnZoomOut" title="缩小 (Ctrl -)" data-i18n-title="缩小 (Ctrl -)">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.2" y1="16.2" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
     </button>
-    <select class="zoom-select" id="zoomSelect" title="缩放比例">
-      <option value="auto">自动</option>
-      <option value="page">适应页面</option>
-      <option value="width">适应宽度</option>
+    <select class="zoom-select" id="zoomSelect" title="缩放比例" data-i18n-title="缩放比例">
+      <option value="auto" data-i18n="自动">自动</option>
+      <option value="page" data-i18n="适应页面">适应页面</option>
+      <option value="width" data-i18n="适应宽度">适应宽度</option>
       <option value="0.5">50%</option>
       <option value="0.75">75%</option>
       <option value="1">100%</option>
@@ -65,7 +65,7 @@
       <option value="3">300%</option>
       <option value="4">400%</option>
     </select>
-    <button class="btn" id="btnZoomIn" title="放大 (Ctrl +)">
+    <button class="btn" id="btnZoomIn" title="放大 (Ctrl +)" data-i18n-title="放大 (Ctrl +)">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.2" y1="16.2" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
     </button>
   </div>
@@ -74,13 +74,13 @@
 
   
   <div class="tb-group" id="toolGroup" hidden>
-    <button class="btn" id="btnRotate" title="顺时针旋转 (R)">
+    <button class="btn" id="btnRotate" title="顺时针旋转 (R)" data-i18n-title="顺时针旋转 (R)">
       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
     </button>
-    <button class="btn" id="btnDark" title="反转颜色 (D)">
+    <button class="btn" id="btnDark" title="反转颜色 (D)" data-i18n-title="反转颜色 (D)">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button class="btn" id="btnFitWidth" title="适应宽度 (W)">
+    <button class="btn" id="btnFitWidth" title="适应宽度 (W)" data-i18n-title="适应宽度 (W)">
       <svg viewBox="0 0 24 24"><polyline points="4 8 4 16"/><polyline points="20 8 20 16"/><path d="M8 12h8"/><polyline points="10 10 8 12 10 14"/><polyline points="14 10 16 12 14 14"/></svg>
     </button>
   </div>
@@ -89,16 +89,16 @@
 
   
   <div class="tb-group" id="annotGroup" hidden>
-    <button class="btn" id="btnAnnotMode" title="标注模式 (A) — 开启后可直接框选区域">
+    <button class="btn" id="btnAnnotMode" title="标注模式 (A) — 开启后可直接框选区域" data-i18n-title="标注模式 (A) — 开启后可直接框选区域">
       <svg viewBox="0 0 24 24"><path d="M4 20l4-1 10-10a2.5 2.5 0 0 0-3.5-3.5L4.5 15.5z"/><path d="M14 7l3 3"/></svg>
-      <span class="lbl">标注</span>
+      <span class="lbl" data-i18n="标注">标注</span>
     </button>
     <div class="color-picker" id="colorPicker">
-      <button class="color-dot on" data-color="yellow" title="黄色高亮" style="--c:#fbbf24"></button>
-      <button class="color-dot" data-color="green" title="绿色高亮" style="--c:#4ade80"></button>
-      <button class="color-dot" data-color="blue" title="蓝色高亮" style="--c:#60a5fa"></button>
-      <button class="color-dot" data-color="pink" title="粉色高亮" style="--c:#f472b6"></button>
-      <button class="color-dot" data-color="red" title="红色高亮" style="--c:#f87171"></button>
+      <button class="color-dot on" data-color="yellow" title="黄色高亮" data-i18n-title="黄色高亮" style="--c:#fbbf24"></button>
+      <button class="color-dot" data-color="green" title="绿色高亮" data-i18n-title="绿色高亮" style="--c:#4ade80"></button>
+      <button class="color-dot" data-color="blue" title="蓝色高亮" data-i18n-title="蓝色高亮" style="--c:#60a5fa"></button>
+      <button class="color-dot" data-color="pink" title="粉色高亮" data-i18n-title="粉色高亮" style="--c:#f472b6"></button>
+      <button class="color-dot" data-color="red" title="红色高亮" data-i18n-title="红色高亮" style="--c:#f87171"></button>
     </div>
   </div>
 
@@ -106,9 +106,9 @@
 
   
   <div class="tb-group" id="editGroup" hidden>
-    <button class="btn" id="btnEditMode" title="进入编辑模式 (E)">
+    <button class="btn" id="btnEditMode" title="进入编辑模式 (E)" data-i18n-title="进入编辑模式 (E)">
       <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="13" y2="9"/><line x1="7" y1="13" x2="17" y2="13"/><line x1="7" y1="17" x2="10" y2="17"/></svg>
-      <span class="lbl">编辑</span>
+      <span class="lbl" data-i18n="编辑">编辑</span>
     </button>
   </div>
 
@@ -116,16 +116,16 @@
 
   
   <div class="tb-group" id="viewGroup" hidden>
-    <button class="btn" id="btnViewSingle" title="单页视图" class="on">
+    <button class="btn" id="btnViewSingle" title="单页视图" data-i18n-title="单页视图" class="on">
       <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2"/></svg>
     </button>
-    <button class="btn" id="btnViewDouble" title="双栏对照 (2)">
+    <button class="btn" id="btnViewDouble" title="双栏对照 (2)" data-i18n-title="双栏对照 (2)">
       <svg viewBox="0 0 24 24"><rect x="2" y="4" width="9" height="16" rx="2"/><rect x="13" y="4" width="9" height="16" rx="2"/></svg>
     </button>
-    <button class="btn" id="btnScrollPlay" title="自动滚动 (空格暂停)">
+    <button class="btn" id="btnScrollPlay" title="自动滚动 (空格暂停)" data-i18n-title="自动滚动 (空格暂停)">
       <svg viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button class="btn" id="btnBookmark" title="本页加书签 (B)">
+    <button class="btn" id="btnBookmark" title="本页加书签 (B)" data-i18n-title="本页加书签 (B)">
       <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
     </button>
   </div>
@@ -135,15 +135,15 @@
   
   <div class="search-wrap" id="searchWrap">
     <svg class="search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.2" y1="16.2" x2="21" y2="21"/></svg>
-    <input type="text" class="search-input" id="searchInput" placeholder="搜索文档…" autocomplete="off">
-    <button class="search-clear" id="searchClear" title="清除">&times;</button>
+    <input type="text" class="search-input" id="searchInput" placeholder="搜索文档…" data-i18n-ph="搜索文档…" autocomplete="off">
+    <button class="search-clear" id="searchClear" title="清除" data-i18n-title="清除">&times;</button>
   </div>
   <span class="search-count" id="searchCount"></span>
   <div class="tb-group" id="searchNav" hidden>
-    <button class="btn" id="btnPrevHit" title="上一个匹配 (Shift+Enter)">
+    <button class="btn" id="btnPrevHit" title="上一个匹配 (Shift+Enter)" data-i18n-title="上一个匹配 (Shift+Enter)">
       <svg viewBox="0 0 24 24"><path d="M15 8l-7 7 7 7" transform="translate(0,-3)"/></svg>
     </button>
-    <button class="btn" id="btnNextHit" title="下一个匹配 (Enter)">
+    <button class="btn" id="btnNextHit" title="下一个匹配 (Enter)" data-i18n-title="下一个匹配 (Enter)">
       <svg viewBox="0 0 24 24"><path d="M9 8l7 7-7 7" transform="translate(0,-3)"/></svg>
     </button>
   </div>
@@ -160,18 +160,30 @@
 
 
     <button class="btn" id="btnExportTop"
-      title="导出为新的 PDF — 含编辑内容、页面改动与批注（Ctrl+S）">
+      title="导出为新的 PDF — 含编辑内容、页面改动与批注（Ctrl+S）" data-i18n-title="导出为新的 PDF — 含编辑内容、页面改动与批注（Ctrl+S）">
       <svg viewBox="0 0 24 24">
         <path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 20h16"/>
       </svg>
-      <span class="lbl">导出</span>
+      <span class="lbl" data-i18n="导出">导出</span>
     </button>
-    <button class="btn" id="btnPrint" title="打印">
+    <button class="btn" id="btnPrint" title="打印" data-i18n-title="打印">
       <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 17h12v4H6z"/></svg>
     </button>
   </div>
+  
+
+
+  <button class="btn lang-btn" id="btnLang" title="切换界面语言 / Switch language"
+    data-i18n-title="切换界面语言 / Switch language">
+    <span class="lbl" id="langLabel" data-i18n="中">中</span>
+  </button>
   </div>
 </div>
+
+
+
+
+<div class="tabstrip" id="tabStrip" hidden></div>
 
 
 <div class="main">
@@ -179,9 +191,9 @@
   
   <aside class="sidebar" id="sidebar">
     <div class="side-tabs">
-      <button class="side-tab on" data-tab="thumbs">缩略图</button>
-      <button class="side-tab" data-tab="outline">目录</button>
-      <button class="side-tab" data-tab="annots">标注</button>
+      <button class="side-tab on" data-tab="thumbs" data-i18n="缩略图">缩略图</button>
+      <button class="side-tab" data-tab="outline" data-i18n="目录">目录</button>
+      <button class="side-tab" data-tab="annots" data-i18n="标注">标注</button>
     </div>
     <div class="side-body">
       <div class="side-panel on" id="panelThumbs">
@@ -192,16 +204,16 @@
       </div>
       <div class="side-panel" id="panelAnnots">
         <div class="annot-filter" id="annotFilter">
-          <button class="af-chip on" data-filter="all">全部</button>
-          <button class="af-chip" data-filter="highlight">高亮</button>
-          <button class="af-chip" data-filter="underline">下划线</button>
-          <button class="af-chip" data-filter="note">笔记</button>
+          <button class="af-chip on" data-filter="all" data-i18n="全部">全部</button>
+          <button class="af-chip" data-filter="highlight" data-i18n="高亮">高亮</button>
+          <button class="af-chip" data-filter="underline" data-i18n="下划线">下划线</button>
+          <button class="af-chip" data-filter="note" data-i18n="笔记">笔记</button>
           <span class="af-count" id="annotCount"></span>
         </div>
         <div id="annotList"></div>
         <div class="annot-actions" id="annotActions" hidden>
-          <button class="mini-btn" id="btnExportMd" title="导出为 Markdown 笔记">导出笔记</button>
-          <button class="mini-btn" id="btnExportJson" title="导出原始标注数据">导出 JSON</button>
+          <button class="mini-btn" id="btnExportMd" title="导出为 Markdown 笔记" data-i18n="导出笔记" data-i18n-title="导出为 Markdown 笔记">导出笔记</button>
+          <button class="mini-btn" id="btnExportJson" title="导出原始标注数据" data-i18n="导出 JSON" data-i18n-title="导出原始标注数据">导出 JSON</button>
         </div>
       </div>
     </div>
@@ -218,26 +230,32 @@
 
     <div class="stage-bar" id="stageBar" hidden>
       <span class="stage-dot"></span>
-      <span class="stage-text" id="stageText">预览中 · 改动尚未保存</span>
-      <button class="stage-btn" id="stageSave">保存为 PDF</button>
-      <button class="stage-btn ghost" id="stageDrop">退出预览</button>
+      <span class="stage-text" id="stageText" data-i18n="预览中 · 改动尚未保存">预览中 · 改动尚未保存</span>
+      <button class="stage-btn" id="stageSave" data-i18n="保存为 PDF">保存为 PDF</button>
+      <button class="stage-btn ghost" id="stageDrop" data-i18n="退出预览">退出预览</button>
     </div>
+    
+
+
+
+    <div class="panes" id="panes">
     <div class="pages empty" id="pages">
       
     </div>
+    </div>
     <div class="loading hide" id="loading">
       <div class="spinner"></div>
-      <div id="loadingText">正在加载…</div>
+      <div id="loadingText" data-i18n="正在加载…">正在加载…</div>
     </div>
     <div class="toast" id="toast"></div>
 
     
     <aside class="edit-drawer" id="sidePanel" hidden>
       <div class="sp-resizer" id="spResizer"
-        title="拖动调整侧栏宽度（双击恢复默认）"></div>
+        title="拖动调整侧栏宽度（双击恢复默认）" data-i18n-title="拖动调整侧栏宽度（双击恢复默认）"></div>
       <div class="sp-head">
-        <span class="sp-title" id="sideTitle">编辑</span>
-        <button class="sp-close" id="sideClose" title="收起侧栏（Esc）">
+        <span class="sp-title" id="sideTitle" data-i18n="编辑">编辑</span>
+        <button class="sp-close" id="sideClose" title="收起侧栏（Esc）" data-i18n-title="收起侧栏（Esc）">
           <svg viewBox="0 0 24 24">
             <path d="M6 6l12 12M18 6L6 18"/>
           </svg>
@@ -248,143 +266,142 @@
       
       <div class="para-edit" id="paraEdit" hidden>
         <div class="para-head">
-          <span class="para-chip" id="paraPage">第 1 页</span>
-          <span class="para-tip" id="paraTip">段落</span>
-          <button class="para-fold" id="paraFold" title="收起">×</button>
+          <span class="para-chip" id="paraPage" data-i18n="第 1 页">第 1 页</span>
+          <span class="para-tip" id="paraTip" data-i18n="段落">段落</span>
+          <button class="para-fold" id="paraFold" title="收起" data-i18n-title="收起">×</button>
         </div>
         <textarea class="tip-textarea" id="paraText" rows="8"
-          placeholder="修改这一段文字…（会自动重新折行，后面的内容跟着移动）"></textarea>
+          placeholder="修改这一段文字…（会自动重新折行，后面的内容跟着移动）" data-i18n-ph="修改这一段文字…（会自动重新折行，后面的内容跟着移动）"></textarea>
         <div class="tip-foot">
-          <span class="para-hint" id="paraCount">0 字</span>
+          <span class="para-hint" id="paraCount" data-i18n="0 字">0 字</span>
           <span class="ep-gap"></span>
           <button class="tip-btn" id="paraInsertAbove" hidden
-            title="在这一行上面插一行（复制这一行，改掉里面的字即可）。在第一行上用它就是加表头">上插一行</button>
+            title="在这一行上面插一行（复制这一行，改掉里面的字即可）。在第一行上用它就是加表头" data-i18n="上插一行" data-i18n-title="在这一行上面插一行（复制这一行，改掉里面的字即可）。在第一行上用它就是加表头">上插一行</button>
           <button class="tip-btn" id="paraInsertBelow" hidden
-            title="在这一行下面插一行（复制这一行，改掉里面的字即可）">下插一行</button>
+            title="在这一行下面插一行（复制这一行，改掉里面的字即可）" data-i18n="下插一行" data-i18n-title="在这一行下面插一行（复制这一行，改掉里面的字即可）">下插一行</button>
           <button class="tip-btn danger" id="paraDropRow" hidden
-            title="删掉这一整行：文字和这条下边框一起消失，下面的内容往上走">删掉这一行</button>
-          <button class="tip-btn" id="paraCancel">取消</button>
-          <button class="tip-btn primary" id="paraOk">更新预览</button>
+            title="删掉这一整行：文字和这条下边框一起消失，下面的内容往上走" data-i18n="删掉这一行" data-i18n-title="删掉这一整行：文字和这条下边框一起消失，下面的内容往上走">删掉这一行</button>
+          <button class="tip-btn" id="paraCancel" data-i18n="取消">取消</button>
+          <button class="tip-btn primary" id="paraOk" data-i18n="更新预览">更新预览</button>
         </div>
       </div>
 
       <div class="edit-palette" id="editPalette">
       <div class="ep-row">
-        <span class="ep-label">工具</span>
-        <button class="ep-tool" data-tool="select" title="选择 / 删除对象">
+        <span class="ep-label" data-i18n="工具">工具</span>
+        <button class="ep-tool" data-tool="select" title="选择 / 删除对象" data-i18n-title="选择 / 删除对象">
           <svg viewBox="0 0 24 24"><path d="M5 3l14 7-6 1.5L10 19z"/></svg>
-          <em>选择</em>
+          <em data-i18n="选择">选择</em>
         </button>
-        <button class="ep-tool" data-tool="whiteout" title="涂白 — 盖住不需要的内容">
+        <button class="ep-tool" data-tool="whiteout" title="涂白 — 盖住不需要的内容" data-i18n-title="涂白 — 盖住不需要的内容">
           <svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="1" fill="currentColor" stroke="none"/></svg>
-          <em>涂白</em>
+          <em data-i18n="涂白">涂白</em>
         </button>
-        <button class="ep-tool" data-tool="text" title="文字 — 拖出文本框后输入">
+        <button class="ep-tool" data-tool="text" title="文字 — 拖出文本框后输入" data-i18n-title="文字 — 拖出文本框后输入">
           <svg viewBox="0 0 24 24"><path d="M6 5h12"/><line x1="12" y1="5" x2="12" y2="19"/></svg>
-          <em>文字</em>
+          <em data-i18n="文字">文字</em>
         </button>
-        <button class="ep-tool" data-tool="rect" title="矩形框">
+        <button class="ep-tool" data-tool="rect" title="矩形框" data-i18n-title="矩形框">
           <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
-          <em>矩形</em>
+          <em data-i18n="矩形">矩形</em>
         </button>
-        <button class="ep-tool" data-tool="ellipse" title="椭圆">
+        <button class="ep-tool" data-tool="ellipse" title="椭圆" data-i18n-title="椭圆">
           <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg>
-          <em>椭圆</em>
+          <em data-i18n="椭圆">椭圆</em>
         </button>
-        <button class="ep-tool" data-tool="line" title="直线">
+        <button class="ep-tool" data-tool="line" title="直线" data-i18n-title="直线">
           <svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/></svg>
-          <em>直线</em>
+          <em data-i18n="直线">直线</em>
         </button>
         <button class="ep-tool danger" data-tool="redact"
-          title="涂黑 — 永久销毁该区域的文字（不可逆！）">
+          title="涂黑 — 永久销毁该区域的文字（不可逆！）" data-i18n-title="涂黑 — 永久销毁该区域的文字（不可逆！）">
           <svg viewBox="0 0 24 24">
             <rect x="4" y="7" width="16" height="10" rx="1"
               fill="currentColor" stroke="none"/>
           </svg>
-          <em>涂黑</em>
+          <em data-i18n="涂黑">涂黑</em>
         </button>
         <button class="ep-tool replace" data-tool="replace"
-          title="原位替换 — 框选要改的文字，输入新文字（另存为新文件）">
+          title="原位替换 — 框选要改的文字，输入新文字（另存为新文件）" data-i18n-title="原位替换 — 框选要改的文字，输入新文字（另存为新文件）">
           <svg viewBox="0 0 24 24">
             <path d="M4 8h12l-3-3M20 16H8l3 3" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <em>替换</em>
+          <em data-i18n="替换">替换</em>
         </button>
         <button class="ep-tool" data-tool="para"
-          title="改段落 — 点一下段落改文字，自动重新折行、后面的内容跟着移动（另存为新文件）">
+          title="改段落 — 点一下段落改文字，自动重新折行、后面的内容跟着移动（另存为新文件）" data-i18n-title="改段落 — 点一下段落改文字，自动重新折行、后面的内容跟着移动（另存为新文件）">
           <svg viewBox="0 0 24 24">
             <path d="M5 6h14M5 11h9M5 16h14" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"/>
           </svg>
-          <em>段落</em>
+          <em data-i18n="段落">段落</em>
         </button>
       </div>
 
       <div class="ep-row">
-        <span class="ep-label">颜色</span>
+        <span class="ep-label" data-i18n="颜色">颜色</span>
         <label class="ep-colorwrap">
           <input type="color" id="editColor" value="#111111">
           <span class="ep-colorval" id="editColorValue">#111111</span>
         </label>
         <span class="ep-gap"></span>
-        <button class="ep-btn" id="btnEditUndo" title="撤销（Ctrl+Z）">撤销</button>
-        <button class="ep-btn" id="btnEditRedo" title="重做（Ctrl+Y）">重做</button>
-        <button class="ep-btn" id="btnEditClear" title="清空全部编辑对象">清空</button>
+        <button class="ep-btn" id="btnEditUndo" title="撤销（Ctrl+Z）" data-i18n="撤销" data-i18n-title="撤销（Ctrl+Z）">撤销</button>
+        <button class="ep-btn" id="btnEditRedo" title="重做（Ctrl+Y）" data-i18n="重做" data-i18n-title="重做（Ctrl+Y）">重做</button>
+        <button class="ep-btn" id="btnEditClear" title="清空全部编辑对象" data-i18n="清空" data-i18n-title="清空全部编辑对象">清空</button>
         <button class="ep-btn" id="btnRange"
-          title="只导出指定页 / 按份拆分">范围…</button>
+          title="只导出指定页 / 按份拆分" data-i18n="范围…" data-i18n-title="只导出指定页 / 按份拆分">范围…</button>
         <button class="ep-btn primary" id="btnExportPdf"
-          title="导出 PDF — 与工具栏「导出」是同一个出口：含编辑、页面改动与批注（原文件不改动）">导出 PDF</button>
+          title="导出 PDF — 与工具栏「导出」是同一个出口：含编辑、页面改动与批注（原文件不改动）" data-i18n="导出 PDF" data-i18n-title="导出 PDF — 与工具栏「导出」是同一个出口：含编辑、页面改动与批注（原文件不改动）">导出 PDF</button>
         <span class="edit-hint" id="editSaveHint"></span>
       </div>
 
       <div class="ep-row ep-redact-row">
-        <span class="ep-label danger">涂黑</span>
-        <span class="ep-warn">
-          涂黑会<strong>永久删除</strong>区域内文字，不可撤销
-        </span>
+        <span class="ep-label danger" data-i18n="涂黑">涂黑</span>
+        <span class="ep-warn"
+          data-i18n-html="涂黑会<strong>永久删除</strong>区域内文字，不可撤销">涂黑会<strong>永久删除</strong>区域内文字，不可撤销</span>
         <span class="ep-gap"></span>
-        <span class="ep-redact-count" id="redactCount">0 处</span>
+        <span class="ep-redact-count" id="redactCount" data-i18n="0 处">0 处</span>
         <button class="ep-btn danger" id="btnTermRedact"
-          title="按关键词全篇删除（不可逆，另存为新文件）">按词删除…</button>
+          title="按关键词全篇删除（不可逆，另存为新文件）" data-i18n="按词删除…" data-i18n-title="按关键词全篇删除（不可逆，另存为新文件）">按词删除…</button>
         <button class="ep-btn danger" id="btnRedactPdf"
-          title="执行涂黑并另存为新文件">涂黑并另存为…</button>
+          title="执行涂黑并另存为新文件" data-i18n="涂黑并另存为…" data-i18n-title="执行涂黑并另存为新文件">涂黑并另存为…</button>
       </div>
 
       <div class="ep-row ep-redact-row ep-replace-row">
-        <span class="ep-label replace">替换</span>
-        <span class="ep-warn">
+        <span class="ep-label replace" data-i18n="替换">替换</span>
+        <span class="ep-warn" data-i18n="替换会把区域内原文改写成新文字（另存为新文件，原文件不变）">
           替换会把区域内原文改写成新文字（另存为新文件，原文件不变）
         </span>
         <span class="ep-gap"></span>
-        <span class="ep-redact-count" id="replaceCount">0 处</span>
+        <span class="ep-redact-count" id="replaceCount" data-i18n="0 处">0 处</span>
         <button class="ep-btn replace" id="btnReplacePdf"
-          title="执行原位替换并另存为新文件">替换并另存为…</button>
+          title="执行原位替换并另存为新文件" data-i18n="替换并另存为…" data-i18n-title="执行原位替换并另存为新文件">替换并另存为…</button>
       </div>
 
       
       <div class="batch-panel" id="batchPanel">
         <div class="bp-head">
-          <span>查找替换</span>
-          <span class="bp-scope">整篇</span>
+          <span data-i18n="查找替换">查找替换</span>
+          <span class="bp-scope" data-i18n="整篇">整篇</span>
           <span class="bp-count" id="bpCount">—</span>
         </div>
         <div class="bp-row">
-          <input class="bp-input" id="bpFind" placeholder="查找内容…"
+          <input class="bp-input" id="bpFind" placeholder="查找内容…" data-i18n-ph="查找内容…"
             autocomplete="off">
         </div>
         <div class="bp-row">
-          <input class="bp-input" id="bpRepl" placeholder="替换为…（留空即删除这几个字）"
+          <input class="bp-input" id="bpRepl" placeholder="替换为…（留空即删除这几个字）" data-i18n-ph="替换为…（留空即删除这几个字）"
             autocomplete="off">
         </div>
         <div class="bp-row bp-ops">
           <label class="bp-check">
-            <input type="checkbox" id="bpIgnoreCase"> 忽略大小写
+            <input type="checkbox" id="bpIgnoreCase"> <span data-i18n="忽略大小写">忽略大小写</span>
           </label>
           <span class="ep-gap"></span>
-          <button class="mini-btn" id="bpSearch">查找</button>
-          <button class="mini-btn" id="bpReplaceSel" disabled>替换选中</button>
-          <button class="mini-btn danger" id="bpReplaceAll" disabled>全部替换</button>
+          <button class="mini-btn" id="bpSearch" data-i18n="查找">查找</button>
+          <button class="mini-btn" id="bpReplaceSel" disabled data-i18n="替换选中">替换选中</button>
+          <button class="mini-btn danger" id="bpReplaceAll" disabled data-i18n="全部替换">全部替换</button>
         </div>
         <div class="bp-list" id="bpList" hidden></div>
       </div>
@@ -392,7 +409,7 @@
 
       
       <div class="page-panel" id="pagePanel">
-        <div class="pp-head">页面管理</div>
+        <div class="pp-head" data-i18n="页面管理">页面管理</div>
         <div class="pp-body" id="pageListBody"></div>
       </div>
 
@@ -402,76 +419,77 @@
     
     <div class="text-input-pop" id="textPop" hidden>
       <textarea class="tip-textarea" id="tipText" rows="3"
-        placeholder="输入要添加的文字…（可多行）"></textarea>
+        placeholder="输入要添加的文字…（可多行）" data-i18n-ph="输入要添加的文字…（可多行）"></textarea>
       <div class="tip-foot">
-        <span class="tip-size">字号
+        <span class="tip-size"><span data-i18n="字号">字号</span>
           <input type="number" id="tipSize" min="6" max="120" value="14">
         </span>
         <span class="ep-gap"></span>
-        <button class="tip-btn" id="tipCancel">取消</button>
-        <button class="tip-btn primary" id="tipOk">确定</button>
+        <button class="tip-btn" id="tipCancel" data-i18n="取消">取消</button>
+        <button class="tip-btn primary" id="tipOk" data-i18n="确定">确定</button>
       </div>
     </div>
 
     
     <div class="text-input-pop" id="replaceTextPop" hidden>
       <textarea class="tip-textarea" id="replaceText" rows="3"
-        placeholder="输入要替换成的新文字…（可多行）"></textarea>
+        placeholder="输入要替换成的新文字…（可多行）" data-i18n-ph="输入要替换成的新文字…（可多行）"></textarea>
       <div class="tip-foot">
         <span class="ep-gap"></span>
-        <button class="tip-btn" id="replaceCancel">取消</button>
-        <button class="tip-btn primary" id="replaceOk">确定</button>
+        <button class="tip-btn" id="replaceCancel" data-i18n="取消">取消</button>
+        <button class="tip-btn primary" id="replaceOk" data-i18n="确定">确定</button>
       </div>
     </div>
 
     
     
     <div class="text-input-pop wide" id="termPop" hidden>
-      <div class="tip-title danger">按关键词删除<span>不可逆</span></div>
+      <div class="tip-title danger"
+        data-i18n-html="按关键词删除<span>不可逆</span>">按关键词删除<span>不可逆</span></div>
       <textarea class="tip-textarea" id="termText" rows="5"
-        placeholder="一行一个词，例如：&#10;张三&#10;13800000000&#10;某某科技有限公司"></textarea>
-      <label class="rp-label">处理方式
+        placeholder="一行一个词，例如：&#10;张三&#10;13800000000&#10;某某科技有限公司" data-i18n-ph="一行一个词，例如：&#10;张三&#10;13800000000&#10;某某科技有限公司"></textarea>
+      <label class="rp-label"><span data-i18n="处理方式">处理方式</span>
         <select class="rp-input" id="termMode">
-          <option value="delete">删掉，后面的字往前补位</option>
-          <option value="redact_term">涂黑留痕（只盖命中的字）</option>
-          <option value="redact_line">涂黑留痕（整行）</option>
-          <option value="redact_para">涂黑留痕（整段）</option>
+          <option value="delete" data-i18n="删掉，后面的字往前补位">删掉，后面的字往前补位</option>
+          <option value="redact_term" data-i18n="涂黑留痕（只盖命中的字）">涂黑留痕（只盖命中的字）</option>
+          <option value="redact_line" data-i18n="涂黑留痕（整行）">涂黑留痕（整行）</option>
+          <option value="redact_para" data-i18n="涂黑留痕（整段）">涂黑留痕（整段）</option>
         </select>
       </label>
       <div class="tip-foot">
-        <span class="tip-hint" id="termHint">删掉：文字消失、段落重新折行，不留黑块</span>
+        <span class="tip-hint" id="termHint" data-i18n="删掉：文字消失、段落重新折行，不留黑块">删掉：文字消失、段落重新折行，不留黑块</span>
         <span class="ep-gap"></span>
-        <button class="tip-btn" id="termCancel">取消</button>
-        <button class="tip-btn danger" id="termOk">删除并另存为…</button>
+        <button class="tip-btn" id="termCancel" data-i18n="取消">取消</button>
+        <button class="tip-btn danger" id="termOk" data-i18n="删除并另存为…">删除并另存为…</button>
       </div>
     </div>
 
     
     <div class="text-input-pop wide" id="rangePop" hidden>
-      <div class="tip-title">导出范围 / 拆分</div>
-      <label class="rp-label">页码
+      <div class="tip-title" data-i18n="导出范围 / 拆分">导出范围 / 拆分</div>
+      <label class="rp-label"><span data-i18n="页码">页码</span>
         <input class="rp-input" id="rangeSpec" autocomplete="off"
-          placeholder="例如 1-3,5,8-（留空=全部）">
+          placeholder="例如 1-3,5,8-（留空=全部）" data-i18n-ph="例如 1-3,5,8-（留空=全部）">
       </label>
-      <label class="rp-label">拆分
+      <label class="rp-label"><span data-i18n="拆分">拆分</span>
         <input class="rp-input short" id="splitPer" type="number" min="1"
-          value="10" autocomplete="off"> 页/份
+          value="10" autocomplete="off"> <span data-i18n="页/份">页/份</span>
       </label>
       <div class="tip-foot">
         <span class="tip-hint" id="rangeHint"></span>
         <span class="ep-gap"></span>
-        <button class="tip-btn" id="rangeCancel">取消</button>
-        <button class="tip-btn" id="splitOk">拆分整篇</button>
-        <button class="tip-btn primary" id="rangeOk">导出这几页</button>
+        <button class="tip-btn" id="rangeCancel" data-i18n="取消">取消</button>
+        <button class="tip-btn" id="splitOk" data-i18n="拆分整篇">拆分整篇</button>
+        <button class="tip-btn primary" id="rangeOk" data-i18n="导出这几页">导出这几页</button>
       </div>
     </div>
 
     
     <div class="obj-bar" id="objBar" hidden>
-      <span class="ob-name" id="objBarName">对象</span>
-      <button class="ob-btn" id="objBarFront" title="置顶">置顶</button>
-      <button class="ob-btn" id="objBarBack" title="置底">置底</button>
-      <button class="ob-btn danger" id="objBarDel" title="删除该对象">删除</button>
+      <span class="ob-name" id="objBarName" data-i18n="对象">对象</span>
+      <button class="ob-btn" id="objBarFront" title="置顶" data-i18n="置顶" data-i18n-title="置顶">置顶</button>
+      <button class="ob-btn" id="objBarBack" title="置底" data-i18n="置底" data-i18n-title="置底">置底</button>
+      <button class="ob-btn danger" id="objBarDel" title="删除该对象" data-i18n="删除" data-i18n-title="删除该对象">删除</button>
     </div>
 
     
@@ -483,61 +501,56 @@
             <line x1="12" y1="10" x2="12" y2="14"/>
             <circle cx="12" cy="16.6" r="0.9" fill="currentColor"/>
           </svg>
-          确认执行涂黑？
+          <span data-i18n="确认执行涂黑？">确认执行涂黑？</span>
         </div>
         <div class="cb-body">
-          <p>即将<strong>永久删除</strong>以下区域内的文字内容：</p>
+          <p data-i18n-html="即将<strong>永久删除</strong>以下区域内的文字内容：">即将<strong>永久删除</strong>以下区域内的文字内容：</p>
           <ul class="cb-stats" id="redactConfirmStats"></ul>
-          <p class="cb-note">
-            此操作<strong>不可撤销</strong>，被删除的文字会从文件里
-            彻底移除，无法通过复制、文本提取或字符串搜索找回。
-          </p>
-          <p class="cb-note">
-            结果将<strong>另存为新文件</strong>，你的原文件不会被修改。
-          </p>
+          <p class="cb-note" data-i18n-html="此操作<strong>不可撤销</strong>，被删除的文字会从文件里彻底移除，无法通过复制、文本提取或字符串搜索找回。">此操作<strong>不可撤销</strong>，被删除的文字会从文件里彻底移除，无法通过复制、文本提取或字符串搜索找回。</p>
+          <p class="cb-note" data-i18n-html="结果将<strong>另存为新文件</strong>，你的原文件不会被修改。">结果将<strong>另存为新文件</strong>，你的原文件不会被修改。</p>
         </div>
         <div class="cb-foot">
-          <button class="ep-btn" id="redactCancel">取消</button>
-          <button class="ep-btn danger" id="redactOk">确认涂黑</button>
+          <button class="ep-btn" id="redactCancel" data-i18n="取消">取消</button>
+          <button class="ep-btn danger" id="redactOk" data-i18n="确认涂黑">确认涂黑</button>
         </div>
       </div>
     </div>
 
     
     <div class="sel-menu" id="selMenu" hidden>
-      <button class="sm-btn" data-act="highlight" data-color="#fbbf24" title="高亮（黄）">
-        <span class="sm-swatch" style="background:#fbbf24"></span>高亮
+      <button class="sm-btn" data-act="highlight" data-color="#fbbf24" title="高亮（黄）" data-i18n-title="高亮（黄）">
+        <span class="sm-swatch" style="background:#fbbf24"></span><span data-i18n="高亮">高亮</span>
       </button>
-      <button class="sm-btn" data-act="underline" data-color="#ef4444" title="下划线（红）">
-        <span class="sm-swatch sm-underline" style="background:#ef4444"></span>下划线
+      <button class="sm-btn" data-act="underline" data-color="#ef4444" title="下划线（红）" data-i18n-title="下划线（红）">
+        <span class="sm-swatch sm-underline" style="background:#ef4444"></span><span data-i18n="下划线">下划线</span>
       </button>
-      <button class="sm-btn" data-act="wavy" data-color="#3b82f6" title="波浪线（蓝）">
-        <span class="sm-swatch sm-wavy" style="background:#3b82f6"></span>波浪线
+      <button class="sm-btn" data-act="wavy" data-color="#3b82f6" title="波浪线（蓝）" data-i18n-title="波浪线（蓝）">
+        <span class="sm-swatch sm-wavy" style="background:#3b82f6"></span><span data-i18n="波浪线">波浪线</span>
       </button>
-      <button class="sm-btn" data-act="strike" data-color="#71717a" title="删除线">
-        <span class="sm-swatch sm-strike" style="background:#71717a"></span>删除线
+      <button class="sm-btn" data-act="strike" data-color="#71717a" title="删除线" data-i18n-title="删除线">
+        <span class="sm-swatch sm-strike" style="background:#71717a"></span><span data-i18n="删除线">删除线</span>
       </button>
       <span class="sm-sep"></span>
-      <button class="sm-btn" data-act="note" title="添加笔记">
-        <span class="sm-swatch sm-note"></span>笔记
+      <button class="sm-btn" data-act="note" title="添加笔记" data-i18n-title="添加笔记">
+        <span class="sm-swatch sm-note"></span><span data-i18n="笔记">笔记</span>
       </button>
-      <button class="sm-btn" data-act="copy" title="复制文本">
-        <span class="sm-swatch sm-copy"></span>复制
+      <button class="sm-btn" data-act="copy" title="复制文本" data-i18n-title="复制文本">
+        <span class="sm-swatch sm-copy"></span><span data-i18n="复制">复制</span>
       </button>
     </div>
 
     
     <div class="annot-pop" id="annotPop" hidden>
       <div class="ap-head">
-        <span class="ap-tag" id="apTag">高亮</span>
+        <span class="ap-tag" id="apTag" data-i18n="高亮">高亮</span>
         <span class="ap-text" id="apText"></span>
       </div>
-      <textarea class="ap-note" id="apNote" placeholder="写下你的批注…" rows="3"></textarea>
+      <textarea class="ap-note" id="apNote" placeholder="写下你的批注…" data-i18n-ph="写下你的批注…" rows="3"></textarea>
       <div class="ap-foot">
-        <button class="ap-btn danger" id="apDelete">删除</button>
+        <button class="ap-btn danger" id="apDelete" data-i18n="删除">删除</button>
         <span class="ap-flex"></span>
-        <button class="ap-btn" id="apCancel">取消</button>
-        <button class="ap-btn primary" id="apSave">保存</button>
+        <button class="ap-btn" id="apCancel" data-i18n="取消">取消</button>
+        <button class="ap-btn primary" id="apSave" data-i18n="保存">保存</button>
       </div>
     </div>
   </div>
@@ -546,29 +559,29 @@
 
     
     <div class="text-input-pop wide" id="newPop" hidden>
-      <div class="tip-title">新建空白 PDF</div>
-      <label class="rp-label">纸张
+      <div class="tip-title" data-i18n="新建空白 PDF">新建空白 PDF</div>
+      <label class="rp-label"><span data-i18n="纸张">纸张</span>
         <select class="rp-input" id="newSize">
-          <option value="a4">A4（210 × 297 mm）</option>
-          <option value="a3">A3（297 × 420 mm）</option>
-          <option value="a5">A5（148 × 210 mm）</option>
-          <option value="letter">Letter（216 × 279 mm）</option>
-          <option value="legal">Legal（216 × 356 mm）</option>
+          <option value="a4" data-i18n="A4（210 × 297 mm）">A4（210 × 297 mm）</option>
+          <option value="a3" data-i18n="A3（297 × 420 mm）">A3（297 × 420 mm）</option>
+          <option value="a5" data-i18n="A5（148 × 210 mm）">A5（148 × 210 mm）</option>
+          <option value="letter" data-i18n="Letter（216 × 279 mm）">Letter（216 × 279 mm）</option>
+          <option value="legal" data-i18n="Legal（216 × 356 mm）">Legal（216 × 356 mm）</option>
         </select>
       </label>
-      <div class="rp-label">页数
+      <div class="rp-label"><span data-i18n="页数">页数</span>
         <input type="number" class="rp-input short" id="newPages"
           min="1" max="200" value="1">
-        <span>页</span>
+        <span data-i18n="页">页</span>
         <label class="bp-check" style="margin-left:auto">
-          <input type="checkbox" id="newLandscape"> 横向
+          <input type="checkbox" id="newLandscape"> <span data-i18n="横向">横向</span>
         </label>
       </div>
       <div class="tip-foot">
-        <span class="tip-hint">建好后用左侧工具加文字 / 图形，最后点「保存为 PDF」</span>
+        <span class="tip-hint" data-i18n="建好后用左侧工具加文字 / 图形，最后点「保存为 PDF」">建好后用左侧工具加文字 / 图形，最后点「保存为 PDF」</span>
         <span class="ep-gap"></span>
-        <button class="tip-btn" id="newCancel">取消</button>
-        <button class="tip-btn primary" id="newOk">新建</button>
+        <button class="tip-btn" id="newCancel" data-i18n="取消">取消</button>
+        <button class="tip-btn primary" id="newOk" data-i18n="新建">新建</button>
       </div>
     </div>
 

@@ -2,7 +2,8 @@
 
 
 
-import { state, els, api, toast, uid } from '/static/core.js';
+import { t } from '/static/i18n.js';
+import { state, els, api, toast, uid , errText} from '/static/core.js';
 
 import {
   screenToNorm as gScreenToNorm,
@@ -122,7 +123,7 @@ export async function loadEdits(docId) {
     };
     editState.dirty = false;
   } catch (e) {
-    console.warn('读取编辑数据失败：', e.message);
+    console.warn(t('读取编辑数据失败：'), e.message);
     editState.objects = [];
   }
 }
@@ -150,18 +151,20 @@ export async function doSave() {
     editState.dirty = false;
     updateSaveHint();
   } catch (e) {
-    toast('编辑数据保存失败：' + e.message, 2600);
+    toast(t('编辑数据保存失败：') + e.message, 2600);
   }
 }
 
 function updateSaveHint() {
   const el = els.editSaveHint;
+  
+  document.dispatchEvent(new CustomEvent('pdf:edit-dirty'));
   if (!el) return;
   if (editState.dirty) {
-    el.textContent = '有未保存的改动…';
+    el.textContent = t('有未保存的改动…');
     el.className = 'edit-hint dirty';
   } else {
-    el.textContent = '改动已保存';
+    el.textContent = t('改动已保存');
     el.className = 'edit-hint';
   }
 }
@@ -257,25 +260,50 @@ export async function undoEdit() {
       try { done = await stageUndoHandler(); } catch (e) { done = false; }
       if (done) { syncHistoryButtons(); return; }
     }
-    toast('没有可撤销的操作', 1200);
+    toast(t('没有可撤销的操作'), 1200);
     return;
   }
   history.future.push(takeSnapshot());
   restoreSnapshot(history.past.pop());
-  toast('已撤销', 900);
+  toast(t('已撤销'), 900);
 }
 
 export function redoEdit() {
   commitHistory();
-  if (!history.future.length) { toast('没有可重做的操作', 1200); return; }
+  if (!history.future.length) { toast(t('没有可重做的操作'), 1200); return; }
   history.past.push(takeSnapshot());
   restoreSnapshot(history.future.pop());
-  toast('已重做', 900);
+  toast(t('已重做'), 900);
 }
 
 function syncHistoryButtons() {
   if (els.btnEditUndo) els.btnEditUndo.disabled = !history.past.length && !stagePresent;
   if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
+}
+
+
+
+export function snapshotHistory() {
+  return { past: history.past.slice(), future: history.future.slice(), lastSnap };
+}
+
+export function restoreHistory(h) {
+  history.past = h && Array.isArray(h.past) ? h.past.slice() : [];
+  history.future = h && Array.isArray(h.future) ? h.future.slice() : [];
+  lastSnap = h ? h.lastSnap : null;
+  syncHistoryButtons();
+}
+
+
+
+export function syncEditModeUI() {
+  document.body.classList.toggle('edit-mode', editState.on);
+  if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
+  if (els.sidePanel) els.sidePanel.hidden = !editState.on;
+  syncToolButtons();
+  repaintEdits();
+  syncHistoryButtons();
+  if (editState.on) refreshPagePanel();
 }
 
 
@@ -292,19 +320,19 @@ function cloneObj(o) {
 
 export function copySelected() {
   const o = editState.objects.find(x => x.id === editState.selectedId);
-  if (!o) { toast('先选中一个对象再复制', 1500); return; }
+  if (!o) { toast(t('先选中一个对象再复制'), 1500); return; }
   clipboard = cloneObj(o);
-  toast('已复制对象（Ctrl+V 粘贴）', 1400);
+  toast(t('已复制对象（Ctrl+V 粘贴）'), 1400);
 }
 
 export function duplicateSelected() {
   const o = editState.objects.find(x => x.id === editState.selectedId);
-  if (!o) { toast('先选中一个对象', 1500); return; }
+  if (!o) { toast(t('先选中一个对象'), 1500); return; }
   pasteObj(cloneObj(o));
 }
 
 export function pasteObject() {
-  if (!clipboard) { toast('剪贴板为空（先选中对象按 Ctrl+C）', 1800); return; }
+  if (!clipboard) { toast(t('剪贴板为空（先选中对象按 Ctrl+C）'), 1800); return; }
   pasteObj(cloneObj(clipboard));
 }
 
@@ -320,7 +348,7 @@ function pasteObj(base) {
   scheduleHistory();
   scheduleSave();
   repaintEdits();
-  toast('已粘贴对象', 900);
+  toast(t('已粘贴对象'), 900);
 }
 
 
@@ -723,7 +751,7 @@ export function insertBlank(afterIndex) {
   scheduleSave();
   refreshPagePanel();
   notifyPagesChanged();
-  toast('已在末尾插入空白页（滚动到最下方可见）', 2000);
+  toast(t('已在末尾插入空白页（滚动到最下方可见）'), 2000);
 }
 
 
@@ -748,7 +776,7 @@ export function refreshPagePanel() {
   head.className = 'pm-head';
   const liveCount = seq.filter(i => !del.has(i)).length +
     editState.pages.insert.length;
-  head.innerHTML = `<span>共 <b>${total}</b> 页，保留 <b>${liveCount}</b> 页` +
+  head.innerHTML = t('<span>共 <b>{total}</b> 页，保留 <b>{liveCount}</b> 页', { total, liveCount }) +
     `</span>`;
   box.appendChild(head);
 
@@ -759,14 +787,14 @@ export function refreshPagePanel() {
 
     row.innerHTML = `
       <span class="pm-pos">${pos + 1}</span>
-      <span class="pm-name">原第 ${origIdx + 1} 页${
-        rot ? ` <em>旋转 ${rot}°</em>` : ''}</span>
+      <span class="pm-name">${t('原第 {n} 页', { n: origIdx + 1 })}${
+        rot ? ` <em>${t('旋转 {deg}°', { deg: rot })}</em>` : ''}</span>
       <span class="pm-ops">
-        <button class="pm-btn" data-act="up" title="上移">↑</button>
-        <button class="pm-btn" data-act="down" title="下移">↓</button>
-        <button class="pm-btn" data-act="rot" title="旋转 90°">⟳</button>
+        <button class="pm-btn" data-act="up" title="${t('上移')}">↑</button>
+        <button class="pm-btn" data-act="down" title="${t('下移')}">↓</button>
+        <button class="pm-btn" data-act="rot" title="${t('旋转 90°')}">⟳</button>
         <button class="pm-btn danger" data-act="del" title="${
-          del.has(origIdx) ? '恢复' : '删除'}">${
+          del.has(origIdx) ? t('恢复') : t('删除')}">${
           del.has(origIdx) ? '↺' : '×'}</button>
       </span>`;
 
@@ -787,15 +815,13 @@ export function refreshPagePanel() {
   if (editState.pages.insert.length) {
     const ins = document.createElement('div');
     ins.className = 'pm-insert-note';
-    ins.textContent = `另有 ${editState.pages.insert.length} 张空白页待插入`;
+    ins.textContent = t('另有 {length} 张空白页待插入', { length: editState.pages.insert.length });
     box.appendChild(ins);
   }
 
   const actions = document.createElement('div');
   actions.className = 'pm-actions';
-  actions.innerHTML = `
-    <button class="mini-btn" id="pmInsert">末尾插入空白页</button>
-    <button class="mini-btn" id="pmReset">重置页面改动</button>`;
+  actions.innerHTML = t('\n    <button class="mini-btn" id="pmInsert">末尾插入空白页</button>\n    <button class="mini-btn" id="pmReset">重置页面改动</button>');
   box.appendChild(actions);
 
   actions.querySelector('#pmInsert').addEventListener('click', () => {
@@ -806,12 +832,12 @@ export function refreshPagePanel() {
     scheduleSave();
     refreshPagePanel();
     notifyPagesChanged();
-    toast('已重置页面改动', 1400);
+    toast(t('已重置页面改动'), 1400);
   });
 
   const hint = document.createElement('div');
   hint.className = 'pm-tip';
-  hint.textContent = '页面改动会在导出时生效，原文件不受影响。';
+  hint.textContent = t('页面改动会在导出时生效，原文件不受影响。');
   box.appendChild(hint);
 }
 
@@ -869,7 +895,7 @@ export function buildExportPayload() {
 
 export async function exportPdf(opts = {}) {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return;
   }
 
@@ -888,7 +914,7 @@ export async function exportPdf(opts = {}) {
   try {
     annots = await annotationsToPdfItems();
   } catch (e) {
-    console.warn('批注换算失败，导出将不含批注：', e);
+    console.warn(t('批注换算失败，导出将不含批注：'), e);
   }
   if (annots.length) payload.annotations = annots;
 
@@ -897,8 +923,8 @@ export async function exportPdf(opts = {}) {
   
   const noChange = !hasAnyEdit(payload) && !annots.length;
   if (noChange && hasSpecial) {
-    toast('「导出 PDF」不含涂黑 / 替换。要保存它们请点对应的「并另存为…」' +
-      '（会连当前编辑一起带上）', 4200);
+    toast(t('「导出 PDF」不含涂黑 / 替换。要保存它们请点对应的「并另存为…」') +
+      t('（会连当前编辑一起带上）'), 4200);
     return;
   }
 
@@ -908,16 +934,16 @@ export async function exportPdf(opts = {}) {
   
   if (hasSpecial) {
     const parts = [];
-    if (nRedact > 0) parts.push(`涂黑 ${nRedact} 处`);
-    if (nReplace > 0) parts.push(`替换 ${nReplace} 处`);
+    if (nRedact > 0) parts.push(t('涂黑 {nRedact} 处', { nRedact }));
+    if (nReplace > 0) parts.push(t('替换 {nReplace} 处', { nReplace }));
     const ok = confirm(
-      `你画了 ${parts.join('、')}，但「导出 PDF」不包含这些操作。\n\n` +
-      `· 要连它们一起保存：先取消，点对应的「并另存为…」。\n` +
-      `  它作用在**当前版本**上，你刚改的段落会一起带进去。\n` +
-      `· 继续导出：只导出其它编辑，这些区域不会被处理。\n\n确定继续导出吗？`
+      t('你画了 {v}，但「导出 PDF」不包含这些操作。\n\n', { v: parts.join(t('、')) }) +
+      t('· 要连它们一起保存：先取消，点对应的「并另存为…」。\\n') +
+      t('  它作用在**当前版本**上，你刚改的段落会一起带进去。\\n') +
+      t('· 继续导出：只导出其它编辑，这些区域不会被处理。\\n\\n确定继续导出吗？')
     );
     if (!ok) {
-      toast('已取消。要执行请点对应的「并另存为…」', 2800);
+      toast(t('已取消。要执行请点对应的「并另存为…」'), 2800);
       return;
     }
   }
@@ -941,16 +967,16 @@ export async function exportPdf(opts = {}) {
     });
 
     if (!r.ok) {
-      let msg = `导出失败 (${r.status})`;
+      let msg = t('导出失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       throw new Error(msg);
     }
 
     const cd = r.headers.get('Content-Disposition') || '';
-    let name = `${state.fileName}-已编辑.pdf`;
+    let name = t('{fileName}-已编辑.pdf', { fileName: state.fileName });
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
@@ -983,13 +1009,13 @@ export async function exportPdf(opts = {}) {
     }
 
     
-    let msg = (noChange ? `已导出原样副本：${name}` : `已导出：${name}`) +
-              (pages ? `（${pages} 页）` : '');
+    let msg = (noChange ? t('已导出原样副本：{name}', { name }) : t('已导出：{name}', { name })) +
+              (pages ? t('（{pages} 页）', { pages }) : '');
     const nAnn = r.headers.get('X-Export-Annots');
-    if (nAnn && nAnn !== '0') msg += `，含 ${nAnn} 条批注`;
-    if (dropped && dropped !== '0') msg += `，${dropped} 项被忽略`;
+    if (nAnn && nAnn !== '0') msg += t('，含 {nAnn} 条批注', { nAnn });
+    if (dropped && dropped !== '0') msg += t('，{dropped} 项被忽略', { dropped });
     if (miss) {
-      msg += `　⚠ 有 ${[...miss].length} 个字没能写入（字体里没有）：${miss}`;
+      msg += t('　⚠ 有 {v} 个字没能写入（字体里没有）：{miss}', { v: [...miss].length, miss });
       toast(msg, 8000);
     } else {
       toast(msg, 3200);
@@ -1004,7 +1030,7 @@ export async function exportPdf(opts = {}) {
     await discardStage();
     return { ok: true, name, outPath };
   } catch (e) {
-    toast(e.message || '导出失败', 3000);
+    toast(e.message || t('导出失败'), 3000);
     return { ok: false, error: e.message || String(e) };
   } finally {
     setBusy(false);
@@ -1036,13 +1062,13 @@ export function redactCount() {
 
 export async function redactPdf() {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return;
   }
 
   const regions = redactRegions();
   if (!regions.length) {
-    toast('还没有涂黑区域，先用「涂黑」工具框住要销毁的内容', 2600);
+    toast(t('还没有涂黑区域，先用「涂黑」工具框住要销毁的内容'), 2600);
     return;
   }
 
@@ -1068,10 +1094,10 @@ export async function redactPdf() {
     });
 
     if (!r.ok) {
-      let msg = `涂黑失败 (${r.status})`;
+      let msg = t('涂黑失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       throw new Error(msg);
     }
@@ -1084,7 +1110,7 @@ export async function redactPdf() {
     }
     const blob = outPath ? null : await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
-    let name = `${state.fileName}-已涂黑.pdf`;
+    let name = t('{fileName}-已涂黑.pdf', { fileName: state.fileName });
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
@@ -1102,11 +1128,11 @@ export async function redactPdf() {
     
     
     const merged = (state.stage && state.stage.id)
-      ? '（已包含尚未保存的段落编辑）' : '';
-    toast(`涂黑完成${merged}：${pages} 页，移除 ${glyphs} 个字形` +
-      (outline !== '0' ? `，清理 ${outline} 条书签标题` : ''), 4800);
+      ? t('（已包含尚未保存的段落编辑）') : '';
+    toast(t('涂黑完成{merged}：{pages} 页，移除 {glyphs} 个字形', { merged, pages, glyphs }) +
+      (outline !== '0' ? t('，清理 {outline} 条书签标题', { outline }) : ''), 4800);
   } catch (e) {
-    toast(e.message || '涂黑失败', 4000);
+    toast(e.message || t('涂黑失败'), 4000);
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
@@ -1135,13 +1161,13 @@ export function replaceCount() {
 
 export async function replacePdf() {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return;
   }
 
   const regions = replaceRegions();
   if (!regions.length) {
-    toast('还没有替换区域，先用「替换」工具框住要改的文字并输入新文字', 3000);
+    toast(t('还没有替换区域，先用「替换」工具框住要改的文字并输入新文字'), 3000);
     return;
   }
 
@@ -1161,10 +1187,10 @@ export async function replacePdf() {
     });
 
     if (!r.ok) {
-      let msg = `替换失败 (${r.status})`;
+      let msg = t('替换失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       throw new Error(msg);
     }
@@ -1177,7 +1203,7 @@ export async function replacePdf() {
     }
     const blob = outPath ? null : await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
-    let name = `${state.fileName}-已替换.pdf`;
+    let name = t('{fileName}-已替换.pdf', { fileName: state.fileName });
     const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
     if (m) {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
@@ -1191,9 +1217,9 @@ export async function replacePdf() {
 
     const glyphs = r.headers.get('X-Replace-Glyphs') || '0';
     const pages = r.headers.get('X-Replace-Pages') || '0';
-    toast(`替换完成：${pages} 页，改写 ${glyphs} 个字形`, 4200);
+    toast(t('替换完成：{pages} 页，改写 {glyphs} 个字形', { pages, glyphs }), 4200);
   } catch (e) {
-    toast(e.message || '替换失败', 4000);
+    toast(e.message || t('替换失败'), 4000);
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
@@ -1204,7 +1230,7 @@ export function syncReplaceCount() {
   const el = els.replaceCount;
   if (!el) return;
   const n = replaceCount();
-  el.textContent = `${n} 处`;
+  el.textContent = t('{n} 处', { n });
   const btn = els.btnReplacePdf;
   if (btn) btn.disabled = n === 0;
 }
@@ -1245,7 +1271,7 @@ export function setEditMode(on) {
     if (lastSnap === null) lastSnap = takeSnapshot();
     syncHistoryButtons();
     refreshPagePanel();
-    toast('编辑模式：拖拽绘制，点选可删除', 2200);
+    toast(t('编辑模式：拖拽绘制，点选可删除'), 2200);
   }
 }
 
@@ -1303,10 +1329,10 @@ export function bindEditUI() {
   });
 
   els.btnEditClear && els.btnEditClear.addEventListener('click', () => {
-    if (!editState.objects.length) { toast('没有编辑对象', 1400); return; }
-    if (confirm(`确定清空全部 ${editState.objects.length} 个编辑对象？`)) {
+    if (!editState.objects.length) { toast(t('没有编辑对象'), 1400); return; }
+    if (confirm(t('确定清空全部 {length} 个编辑对象？', { length: editState.objects.length }))) {
       clearAllObjects();
-      toast('已清空编辑对象', 1400);
+      toast(t('已清空编辑对象'), 1400);
     }
   });
 
@@ -1341,7 +1367,7 @@ export function syncRedactCount() {
   const el = els.redactCount;
   if (!el) return;
   const n = redactCount();
-  el.textContent = `${n} 处`;
+  el.textContent = t('{n} 处', { n });
   const btn = els.btnRedactPdf;
   if (btn) btn.disabled = n === 0;
 }
@@ -1351,12 +1377,12 @@ export function syncRedactCount() {
 function openRedactConfirm() {
   const regions = redactRegions();
   if (!regions.length) {
-    toast('还没有涂黑区域，先用「涂黑」工具框住要销毁的内容', 2600);
+    toast(t('还没有涂黑区域，先用「涂黑」工具框住要销毁的内容'), 2600);
     return;
   }
   if (!els.redactConfirm) {
     
-    if (confirm(`确定永久删除 ${regions.length} 处涂黑区域内的文字？`)) {
+    if (confirm(t('确定永久删除 {length} 处涂黑区域内的文字？', { length: regions.length }))) {
       redactPdf();
     }
     return;
@@ -1369,11 +1395,11 @@ function openRedactConfirm() {
   });
   const lines = Object.keys(byPage)
     .sort((a, b) => Number(a) - Number(b))
-    .map(p => `<li>第 ${p} 页：<b>${byPage[p]}</b> 处</li>`);
+    .map(p => t('<li>第 {p} 页：<b>{v}</b> 处</li>', { p, v: byPage[p] }));
 
   if (els.redactConfirmStats) {
     els.redactConfirmStats.innerHTML =
-      lines.join('') + `<li>合计：<b>${regions.length}</b> 处区域</li>`;
+      lines.join('') + t('<li>合计：<b>{length}</b> 处区域</li>', { length: regions.length });
   }
   els.redactConfirm.hidden = false;
 }
@@ -1386,11 +1412,11 @@ function closeRedactConfirm() {
 
 export async function reflowParagraph(page, para, text, orig, pageText, cell) {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return null;
   }
   if (!text || !text.trim()) {
-    toast('文字不能为空。要整段删掉，请用涂黑工具', 2600);
+    toast(t('文字不能为空。要整段删掉，请用涂黑工具'), 2600);
     return null;
   }
 
@@ -1417,10 +1443,10 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     });
 
     if (!r.ok) {
-      let msg = `重排失败 (${r.status})`;
+      let msg = t('重排失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       toast(msg, 8000);
       return null;
@@ -1433,7 +1459,7 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
       try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
     }
     if (!sid || !spath) {
-      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      toast(t('服务端没有返回预览位置，无法显示结果'), 6000);
       return null;
     }
     state.stage = { id: sid, path: spath };
@@ -1460,7 +1486,7 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
       fallback: fb,
     };
   } catch (e) {
-    toast(`重排失败：${e.message || e}`, 5000);
+    toast(t('重排失败：{v}', { v: e.message || e }), 5000);
     return null;
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
@@ -1471,7 +1497,7 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
 
 export async function dropTableRow(page, para, gid) {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return null;
   }
   const btn = els.paraDropRow;
@@ -1486,10 +1512,10 @@ export async function dropTableRow(page, para, gid) {
                              stage: state.stage.id || null }),
     });
     if (!r.ok) {
-      let msg = `删行失败 (${r.status})`;
+      let msg = t('删行失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       toast(msg, 8000);
       return null;
@@ -1501,7 +1527,7 @@ export async function dropTableRow(page, para, gid) {
       try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
     }
     if (!sid || !spath) {
-      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      toast(t('服务端没有返回预览位置，无法显示结果'), 6000);
       return null;
     }
     state.stage = { id: sid, path: spath };
@@ -1518,7 +1544,7 @@ export async function dropTableRow(page, para, gid) {
       movedRows: parseInt(r.headers.get('X-Drop-Rows') || '0', 10) || 0,
     };
   } catch (e) {
-    toast(`删行失败：${e.message || e}`, 5000);
+    toast(t('删行失败：{v}', { v: e.message || e }), 5000);
     return null;
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
@@ -1529,7 +1555,7 @@ export async function dropTableRow(page, para, gid) {
 
 export async function insertTableRow(page, para, gid, where = 'below') {
   if (!state.filePath) {
-    toast('请先打开一个文档', 1600);
+    toast(t('请先打开一个文档'), 1600);
     return null;
   }
   const btn = where === 'above' ? els.paraInsertAbove : els.paraInsertBelow;
@@ -1544,10 +1570,10 @@ export async function insertTableRow(page, para, gid, where = 'below') {
                              stage: state.stage.id || null }),
     });
     if (!r.ok) {
-      let msg = `插入行失败 (${r.status})`;
+      let msg = t('插入行失败 ({status})', { status: r.status });
       try {
         const j = await r.json();
-        if (j.error) msg = j.error;
+        const m2 = errText(j); if (m2) msg = m2;
       } catch (e) {  }
       toast(msg, 8000);
       return null;
@@ -1559,7 +1585,7 @@ export async function insertTableRow(page, para, gid, where = 'below') {
       try { spath = decodeURIComponent(rawPath); } catch (e) { spath = rawPath; }
     }
     if (!sid || !spath) {
-      toast('服务端没有返回预览位置，无法显示结果', 6000);
+      toast(t('服务端没有返回预览位置，无法显示结果'), 6000);
       return null;
     }
     state.stage = { id: sid, path: spath };
@@ -1573,7 +1599,7 @@ export async function insertTableRow(page, para, gid, where = 'below') {
       movedRows: parseInt(r.headers.get('X-Insert-Rows') || '0', 10) || 0,
     };
   } catch (e) {
-    toast(`插入行失败：${e.message || e}`, 5000);
+    toast(t('插入行失败：{v}', { v: e.message || e }), 5000);
     return null;
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }

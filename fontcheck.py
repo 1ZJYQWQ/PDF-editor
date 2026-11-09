@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import pdffont                                               
+import pdffont
 
 SAMPLES = "Aaz09中文测试你好世界涂层"
 

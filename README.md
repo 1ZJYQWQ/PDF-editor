@@ -1,5 +1,7 @@
 # PDF 查看器
 
+简体中文 | [English](README.en.md)
+
 纯本地、离线、**零第三方依赖**的 PDF 工具
 
 ---
@@ -18,6 +20,7 @@
 | | |
 |---|---|
 | **阅读** | 缩放、翻页、单页 / 双栏、缩略图、目录、搜索、阅读书签、反色 |
+| **多标签** | 一个窗口开多份文档，各自记住滚动位置、缩放、编辑态与撤销栈（Ctrl+Tab 轮换、Ctrl+W 关闭） |
 | **标注** | 高亮 / 下划线 / 波浪线 / 删除线 / 便签 / 方框 → 写成 PDF 原生注释（或许你需要用鼠标选择文字？） |
 | **编辑** | 图形对象（矩形/椭圆/直线/文字/涂白）、页面管理、原位替换、段落重排、整篇查找替换 |
 | **表格** | 一格一格改字（改长会自动撑高整行，边框跟着走）、按表格线认行、插一行 / 删一行（下面的内容跟着走、边框自动补齐） |
@@ -29,11 +32,10 @@
 
 ## 快速开始
 
-**Windows 安装版**：`PDFViewer-1.0.0-pre-setup.exe`，装完有桌面图标，能从「应用和功能」卸载。
+**Windows 安装版**：`PDFViewer-1.1.0-pre-electron-setup.exe`，自带浏览器内核，独立窗口（不依赖 Edge），装完有桌面图标、能从「应用和功能」卸载，可以设为默认的 PDF 打开方式。
 安装时可以选「仅为我安装」（`%LOCALAPPDATA%\Programs`，不弹 UAC）或「为所有用户安装」。
-启动后是一个**独立窗口**（没有地址栏和标签页），借 Edge 的 `--app` 模式，不需要额外装任何东西。
 
-**Windows 免安装**：`PDFViewer-1.0.0-pre-win64.zip`，解压后双击 `PDFViewer.exe`。别只把 exe 拖出来，旁边的 `_internal` 是运行库。
+**Windows 免安装**：`PDFViewer-1.1.0-pre-win64.zip`，解压后双击 `PDFViewer.exe`。别只把 exe 拖出来，旁边的 `_internal` 是运行库。
 
 编辑数据、导出暂存都在 `%APPDATA%\PDFViewer`，删程序文件夹不影响它们。
 卸载时会问一句要不要一并删掉，不点「是」就留着。
@@ -52,13 +54,14 @@ python server.py --dir "你的 PDF 目录"
 常用命令：
 
 ```bash
-python check.py            # 前端静态自检（需要 node）
+python run_tests.py        # 全部测试（17 个套件）
+python check.py            # 前端静态自检
 python fontcheck.py x.ttf  # 换字体前体检
 pip install pyinstaller && python -m PyInstaller pdfviewer.spec   # 自己打 exe
 ```
 
 打安装包要另外装 Inno Setup（`winget install JRSoftware.InnoSetup`），然后：
-`ISCC.exe pdfviewer.iss` → `dist\PDFViewer-1.0.0-pre-setup.exe`。
+`ISCC.exe pdfviewer.iss` → `dist\PDFViewer-1.1.0-pre-setup.exe`。
 
 ---
 
@@ -81,14 +84,11 @@ launcher.py    exe 入口（起服务 + 开浏览器）
 appenv.py      源码跑 / exe 跑 的路径规则（资源只读、数据进 AppData）
 pdfedit.py     PDF 读写引擎（解析 / 序列化 / 内容流追加）
 pdfredact.py   涂黑引擎（内容流解释器 + 整字删除 + 泄漏面清理）
-pdfreflow.py   段落重排（折行 + 页内下移 + 跨页续排）、表格插行/删行
-pdfpara.py     把字形聚成段落与表格单元格
+pdfreflow.py   段落重排（折行 + 页内下移 + 跨页续排）
 pdfbatch.py    批量：查找替换 / 按词删除或涂黑 / 范围导出 / 拆分 / 合并
-pdfnew.py      从零生成空白 PDF
 pdfannot.py    批注 → PDF 原生注释
 pdffont.py     TrueType 子集化
 static/        前端（原生 ES Module，无框架无构建）
-packaging/     图标生成脚本与 .ico
 ```
 
 架构细节、核心模型与测试理念见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。

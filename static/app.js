@@ -2,9 +2,11 @@
 
 
 
+import { t, initI18n, currentLang, nextLang, setLang, LANG_SHORT } from '/static/i18n.js';
 import {
   pdfjsLib, state, els, cacheEls, $, uid, escapeHtml, debounce,
   toast, showLoading, hideLoading, api,
+  errText,
 } from '/static/core.js';
 
 import {
@@ -31,9 +33,16 @@ import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } fr
 
 import { initBatchUI } from '/static/batch.js';
 
+
+import * as tabs from '/static/tabs.js';
+
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
+
+
+
+let welcomeReady = false;
 
 
 
@@ -115,8 +124,8 @@ function saveBookmarks() {
 function toggleBookmark() {
   if (!state.pdf) return;
   const p = state.currentPage;
-  if (state.bookmarks.has(p)) { state.bookmarks.delete(p); toast('已取消书签'); }
-  else { state.bookmarks.add(p); toast(`第 ${p} 页已加书签`); }
+  if (state.bookmarks.has(p)) { state.bookmarks.delete(p); toast(t('已取消书签')); }
+  else { state.bookmarks.add(p); toast(t('第 {p} 页已加书签', { p })); }
   saveBookmarks();
   updateProgressMarkers();
   updateBookmarkBtn();
@@ -134,7 +143,10 @@ function updateBookmarkBtn() {
 
 
 async function loadPdfFromPath(path, name, docId) {
-  showLoading('正在打开文档…');
+  
+  const dup = tabs.findByPath(path);
+  if (dup) { hideLoading(); tabs.activate(dup.id); return; }
+  showLoading(t('正在打开文档…'));
   try {
     const url = '/api/file?path=' + encodeURIComponent(path);
     const task = pdfjsLib.getDocument({
@@ -150,12 +162,12 @@ async function loadPdfFromPath(path, name, docId) {
     if (String(err).includes('password') || err?.name === 'PasswordException') {
       return handlePassword(path, name, docId);
     }
-    toast('打开失败：' + (err?.message || err));
+    toast(t('打开失败：') + (err?.message || err));
   }
 }
 
 async function handlePassword(path, name, docId) {
-  const pwd = prompt('该 PDF 已加密，请输入密码：');
+  const pwd = prompt(t('该 PDF 已加密，请输入密码：'));
   if (pwd === null) { hideLoading(); return; }
   try {
     const task = pdfjsLib.getDocument({
@@ -165,22 +177,24 @@ async function handlePassword(path, name, docId) {
     await openDocument(task, name, docId || null, path);
   } catch (err) {
     hideLoading();
-    toast('密码错误或文档无法打开');
+    toast(t('密码错误或文档无法打开'));
   }
 }
 
 async function loadPdfFromFile(file) {
-  showLoading('正在读取本地文件…');
+  showLoading(t('正在读取本地文件…'));
   try {
-    const buf = await file.arrayBuffer();
-    const task = pdfjsLib.getDocument({ data: buf });
     
     const id = await localDocId(file);
+    const dup = tabs.findByDoc(id);
+    if (dup) { hideLoading(); tabs.activate(dup.id); return; }
+    const buf = await file.arrayBuffer();
+    const task = pdfjsLib.getDocument({ data: buf });
     await openDocument(task, file.name.replace(/\.pdf$/i, ''), id, null);
   } catch (err) {
     hideLoading();
     console.error(err);
-    toast('打开失败：' + (err?.message || err));
+    toast(t('打开失败：') + (err?.message || err));
   }
 }
 
@@ -231,7 +245,7 @@ async function createNewPdf() {
   const pages = parseInt((els.newPages && els.newPages.value) || '1', 10) || 1;
   const landscape = !!(els.newLandscape && els.newLandscape.checked);
   const btn = els.newOk;
-  if (btn) { btn.disabled = true; btn.textContent = '正在生成…'; }
+  if (btn) { btn.disabled = true; btn.textContent = t('正在生成…'); }
   try {
     const r = await fetch('/api/new', {
       method: 'POST',
@@ -239,8 +253,8 @@ async function createNewPdf() {
       body: JSON.stringify({ size, pages, landscape }),
     });
     if (!r.ok) {
-      let msg = `新建失败 (${r.status})`;
-      try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {}
+      let msg = t('新建失败 ({status})', { status: r.status });
+      try { const j = await r.json(); const m2 = errText(j); if (m2) msg = m2; } catch (e) {}
       throw new Error(msg);
     }
     const sid = r.headers.get('X-Stage-Id') || '';
@@ -248,24 +262,23 @@ async function createNewPdf() {
     let spath = raw;
     if (raw) { try { spath = decodeURIComponent(raw); } catch (e) { spath = raw; } }
     try { await r.arrayBuffer(); } catch (e) {  }
-    if (!sid || !spath) throw new Error('服务端没有返回新文件位置');
+    if (!sid || !spath) throw new Error(t('服务端没有返回新文件位置'));
     closeNewPop();
 
     
-    
-    await loadPdfFromPath(spath, '未命名', null);
+    await loadPdfFromPath(spath, t('未命名'), null);
     
     state.stage = { id: sid, path: spath };
     state.contentPath = spath;
     state.savedPath = spath;
     updateStageBar();
     setEditMode(true);
-    toast('已新建空白文档：用左侧工具加文字 / 图形，最后点「保存为 PDF」',
+    toast(t('已新建空白文档：用左侧工具加文字 / 图形，最后点「保存为 PDF」'),
       6000);
   } catch (e) {
-    toast(e.message || '新建失败', 5000);
+    toast(e.message || t('新建失败'), 5000);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '新建'; }
+    if (btn) { btn.disabled = false; btn.textContent = t('新建'); }
   }
 }
 
@@ -278,13 +291,25 @@ async function localDocId(file) {
     .join('').slice(0, 16);
 }
 
+
+
 async function openDocument(task, name, docId, path) {
-  
-  
-  await discardStage();
   const pdf = await task.promise;
+  
+  
+  const clean = String(name || '').replace(/\.pdf$/i, '') || t('未命名文档');
+  const tab = tabs.begin({ name: clean, path, docId });
+  try {
+    await fillTab(pdf, clean, docId, path);
+  } catch (err) {
+    tabs.close(tab.id);
+    throw err;
+  }
+}
+
+async function fillTab(pdf, name, docId, path) {
   state.pdf = pdf;
-  state.fileName = name || '未命名文档';
+  state.fileName = name || t('未命名文档');
   state.docId = docId;
   state.filePath = path || null;
   
@@ -302,7 +327,7 @@ async function openDocument(task, name, docId, path) {
   state.hitIndex = -1;
   state.currentPage = 1;
 
-  document.title = state.fileName + ' - PDF 查看器';
+  document.title = state.fileName + t(' - PDF 查看器');
 
   els.pageTotal.textContent = '/ ' + pdf.numPages;
   els.pageInput.max = pdf.numPages;
@@ -348,7 +373,7 @@ async function openDocument(task, name, docId, path) {
         encodeURIComponent(state.filePath));
       editState.pageInfo = info.pages || [];
     } catch (e) {
-      console.warn('读取页面尺寸失败：', e.message);
+      console.warn(t('读取页面尺寸失败：'), e.message);
       editState.pageInfo = [];
     }
   } else {
@@ -364,54 +389,138 @@ async function openDocument(task, name, docId, path) {
   
   if (saved && saved.page > 1 && saved.page <= pdf.numPages) {
     goToPage(saved.page);
-    toast(`已回到第 ${saved.page} 页`, 1800);
+    toast(t('已回到第 {page} 页', { page: saved.page }), 1800);
   } else {
     els.viewer.focus();
-    toast(`已打开：${state.fileName}（共 ${pdf.numPages} 页）`, 2200);
+    toast(t('已打开：{fileName}（共 {numPages} 页）', { fileName: state.fileName, numPages: pdf.numPages }), 2200);
   }
   updateBookmarkBtn();
   updateProgress();
 }
 
 
+function goHome() {
+  const hid = tabs.homeId();
+  if (hid) tabs.activate(hid);
+}
+
+
 function closeDocument() {
+  const cur = tabs.active();
+  if (!cur || cur.home) return;
+  tabs.close(cur.id);
+}
+
+
+
+function confirmCloseTab(tab) {
+  const cur = tabs.active();
+  const st = (cur && tab.id === cur.id)
+    ? state
+    : ((tab.snap && tab.snap.state) || {});
+  if (st.stage && st.stage.id) {
+    return confirm(t('这份文档还有未保存的预览，关闭标签页会丢弃它。仍要关闭？'));
+  }
+  return true;
+}
+
+
+function cycleTab(dir) {
+  const list = tabs.list();
+  if (!list.length) return;
+  const cur = tabs.active();
+  const i = cur ? list.findIndex(x => x.id === cur.id) : -1;
+  const n = (i + dir + list.length) % list.length;
+  tabs.activate(list[n].id);
+}
+
+
+
+function beforeCloseTab(tab, wasActive) {
+  if (wasActive) {
+    
+    doSave();
+    saveEdits();
+    stopAutoScroll();
+  }
+  const st = wasActive ? state : ((tab.snap && tab.snap.state) || {});
   
-  
-  setEditMode(false);
-  
-  discardStage();
-  state.contentPath = null;
-  updateStageBar(false);
-  editState.objects = [];
-  editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
-  editState.dirty = false;
-  if (state.observer) { state.observer.disconnect(); state.observer = null; }
-  stopAutoScroll();
-  if (state.pdf) { try { state.pdf.destroy(); } catch (e) {  } }
-  Object.assign(state, {
-    pdf: null, filePath: null, fileName: '', docId: null, pageCount: 0,
-    currentPage: 1, pages: [], searchHits: [], searchHitsByPage: new Map(),
-    hitIndex: -1, outlinMap: new Map(), bookmarks: new Set(), annotMode: false,
-  });
-  annState.items = [];
-  annState.docId = null;
-  annState.activeId = null;
-  document.title = 'PDF 查看器';
-  els.pages.innerHTML = '';
-  els.pages.classList.remove('empty');
-  els.pages.classList.add('empty');
-  els.thumbList.innerHTML = '';
-  els.outlineList.innerHTML = '';
-  if (els.annotList) els.annotList.innerHTML = '';
-  els.searchInput.value = '';
-  els.searchCount.textContent = '';
-  if (els.progressBar) els.progressBar.hidden = true;
+  const sid = st.stage && st.stage.id;
+  if (sid) {
+    fetch('/api/stage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: sid }),
+    }).catch(() => {});
+  }
+  if (st.observer) { try { st.observer.disconnect(); } catch (e) {  } }
+  if (st.pdf) { try { st.pdf.destroy(); } catch (e) {  } }
+}
+
+
+
+function refreshChrome() {
+  const has = !!state.pdf;
+  const total = state.pageCount + ((editState.pages && editState.pages.insert) || []).length;
+
   ['navGroup', 'navSep', 'zoomGroup', 'zoomSep', 'toolGroup', 'toolGroupSep',
-   'annotGroup', 'annotSep', 'viewGroup', 'searchSep', 'fileGroup', 'searchNav']
-    .forEach(id => { els[id] && (els[id].hidden = true); });
-  els.viewer.classList.remove('annot-mode');
-  hideLoading();
-  renderWelcome();
+   'annotGroup', 'annotSep', 'editGroup', 'editSep',
+   'viewGroup', 'searchSep', 'fileGroup']
+    .forEach(id => { if (els[id]) els[id].hidden = !has; });
+  if (els.progressBar) els.progressBar.hidden = !has;
+
+  if (els.pageInput) {
+    els.pageInput.max = total || state.pageCount;
+    els.pageInput.value = state.currentPage;
+  }
+  if (els.pageTotal) els.pageTotal.textContent = has ? '/ ' + total : '';
+  if (els.zoomSelect) els.zoomSelect.value = state.scaleMode;
+  if (els.searchNav) els.searchNav.hidden = !state.searchHits.length;
+  if (els.searchCount) {
+    els.searchCount.textContent = state.searchHits.length
+      ? (state.hitIndex >= 0 ? (state.hitIndex + 1) + '/' + state.searchHits.length
+                             : String(state.searchHits.length))
+      : '';
+  }
+
+  els.viewer.classList.toggle('annot-mode', state.annotMode);
+  if (els.btnAnnotMode) els.btnAnnotMode.classList.toggle('on', state.annotMode);
+
+  
+  
+  document.body.classList.toggle('dark', state.invert);
+  if (els.btnDark) els.btnDark.classList.toggle('on', state.invert);
+  document.body.classList.toggle('view-double', state.viewMode === 'double');
+  els.pages.classList.toggle('double', state.viewMode === 'double');
+  if (els.btnViewSingle) els.btnViewSingle.classList.toggle('on', state.viewMode !== 'double');
+  if (els.btnViewDouble) els.btnViewDouble.classList.toggle('on', state.viewMode === 'double');
+
+  updateBookmarkBtn();
+  updateStageBar(false);
+  updateProgress();
+  updateProgressMarkers();
+
+  if (has) {
+    buildThumbs();
+    buildOutline();
+    renderAnnotList();
+  } else {
+    
+    
+    
+    if (els.stageBar) els.stageBar.hidden = true;
+    els.thumbList.innerHTML = '';
+    els.outlineList.innerHTML = '';
+    if (els.annotList) els.annotList.innerHTML = '';
+    if (els.annotCount) els.annotCount.textContent = '';
+    if (els.annotActions) els.annotActions.hidden = true;
+    if (els.pageTotal) els.pageTotal.textContent = '';
+    if (els.pageInput) els.pageInput.value = '1';
+    
+    if (!welcomeReady) renderWelcome();
+  }
+
+  document.title = has ? state.fileName + t(' - PDF 查看器') : t('PDF 查看器');
 }
 
 
@@ -435,7 +544,7 @@ async function buildPages() {
     const wrap = document.createElement('div');
     wrap.className = 'page pending';
     wrap.dataset.page = i;
-    wrap.dataset.ph = `第 ${i} 页`;
+    wrap.dataset.ph = t('第 {i} 页', { i });
     wrap.style.width = w + 'px';
     wrap.style.height = h + 'px';
 
@@ -487,7 +596,7 @@ function syncBlankPages() {
     wrap.className = 'page blank';
     wrap.dataset.page = num;
     wrap.dataset.blank = '1';
-    wrap.dataset.ph = '空白页（导出时写入）';
+    wrap.dataset.ph = t('空白页（导出时写入）');
     wrap.style.width = w + 'px';
     wrap.style.height = h + 'px';
     const canvas = document.createElement('canvas');
@@ -519,7 +628,13 @@ function setupObserver() {
   if (state.observer) state.observer.disconnect();
 
   state.observer = new IntersectionObserver((entries) => {
+    
+    
+    
+    let mine = false;
     for (const entry of entries) {
+      if (!els.pages || !els.pages.contains(entry.target)) continue;
+      mine = true;
       const num = parseInt(entry.target.dataset.page, 10);
       const rec = state.pages[num - 1];
       if (!rec) continue;
@@ -527,7 +642,7 @@ function setupObserver() {
         renderPage(rec);
       }
     }
-    updateCurrentPage();
+    if (mine) updateCurrentPage();
   }, {
     root: els.viewer,
     rootMargin: `${BUFFER_PAGES * 100}% 0px ${BUFFER_PAGES * 100}% 0px`,
@@ -546,9 +661,21 @@ async function renderPage(rec) {
   state.renderQueue.add(rec.num);
   rec.rendering = true;
 
+  
+  
+  
+  
+  const pdf = state.pdf;
+  const scale = state.scale;
+  const rotation = state.rotation;
+  const queue = state.renderQueue;
+  const stale = () => state.pdf !== pdf;
+  const abort = () => { rec.rendering = false; queue.delete(rec.num); };
+
   try {
-    const page = await state.pdf.getPage(rec.num);
-    const viewport = page.getViewport({ scale: state.scale, rotation: state.rotation });
+    const page = await pdf.getPage(rec.num);
+    if (stale()) { abort(); return; }
+    const viewport = page.getViewport({ scale, rotation });
 
     
     const outputScale = window.devicePixelRatio || 1;
@@ -585,9 +712,11 @@ async function renderPage(rec) {
     rec.task = task;
     await task.promise;
     rec.task = null;
+    if (stale()) { abort(); return; }
 
     
     const textContent = await page.getTextContent();
+    if (stale()) { abort(); return; }
     rec.textContent = textContent;
     buildTextLayer(rec, textContent, viewport);
 
@@ -598,7 +727,7 @@ async function renderPage(rec) {
     rec.wrap.removeAttribute('data-ph');
     rec.rendered = true;
     rec.rendering = false;
-    state.renderQueue.delete(rec.num);
+    queue.delete(rec.num);
 
     
     const hitOnPage = state.searchHitsByPage.get(rec.num - 1);
@@ -619,12 +748,12 @@ async function renderPage(rec) {
     }
   } catch (err) {
     rec.rendering = false;
-    state.renderQueue.delete(rec.num);
+    queue.delete(rec.num);
     
     if (err?.name !== 'RenderingCancelledException' && !String(err).includes('cancel')) {
-      console.warn(`第 ${rec.num} 页渲染失败：`, err);
+      console.warn(t('第 {num} 页渲染失败：', { num: rec.num }), err);
       rec.wrap.classList.remove('pending');
-      rec.wrap.setAttribute('data-ph', `第 ${rec.num} 页渲染失败`);
+      rec.wrap.setAttribute('data-ph', t('第 {num} 页渲染失败', { num: rec.num }));
     }
   }
 }
@@ -766,7 +895,7 @@ async function rebuildAtNewScale(anchor) {
     rec.textLayer.innerHTML = '';
     if (!rec.wrap.classList.contains('pending')) {
       rec.wrap.classList.add('pending');
-      rec.wrap.dataset.ph = `第 ${rec.num} 页`;
+      rec.wrap.dataset.ph = t('第 {num} 页', { num: rec.num });
     }
   }
 
@@ -795,7 +924,7 @@ function rotate() {
   applyScale(state.scaleMode === 'auto' ? 'auto' : state.scaleMode);
   
   buildThumbs();
-  toast(`旋转 ${state.rotation}°`, 1200);
+  toast(t('旋转 {rotation}°', { rotation: state.rotation }), 1200);
 }
 
 function toggleInvert() {
@@ -835,14 +964,14 @@ function startAutoScroll() {
   if (autoScrollRAF) { stopAutoScroll(); return; }
   if (!state.pdf) return;
   els.btnScrollPlay.classList.add('scrolling');
-  toast('自动滚动已开启，按空格暂停', 1600);
+  toast(t('自动滚动已开启，按空格暂停'), 1600);
 
   const step = () => {
     if (!autoScrollRAF) return;
     const v = els.viewer;
     if (v.scrollTop + v.clientHeight >= v.scrollHeight - 2) {
       stopAutoScroll();
-      toast('已滚动到文档末尾');
+      toast(t('已滚动到文档末尾'));
       return;
     }
     v.scrollTop += autoScrollSpeed;
@@ -962,7 +1091,7 @@ async function renderThumb(num) {
   } catch (err) {
     
     if (err && err.name !== 'RenderingCancelledException') {
-      console.warn('缩略图渲染失败（下次可见时重试）', num, err);
+      console.warn(t('缩略图渲染失败（下次可见时重试）'), num, err);
     }
     return false;
   }
@@ -1005,8 +1134,8 @@ async function buildOutline() {
     if (!state.bookmarks.size) {
       const div = document.createElement('div');
       div.className = 'outline-empty';
-      div.innerHTML = '此文档没有目录<br>' +
-        '<span style="font-size:12px">有些 PDF 未嵌入书签结构</span>';
+      div.innerHTML = t('此文档没有目录<br>') +
+        t('<span style="font-size:12px">有些 PDF 未嵌入书签结构</span>');
       box.appendChild(div);
     }
     return;
@@ -1024,12 +1153,12 @@ function renderMyBookmarks(box) {
   if (!pages.length) return;
   const head = document.createElement('div');
   head.className = 'outline-heading';
-  head.textContent = '我的书签';
+  head.textContent = t('我的书签');
   box.appendChild(head);
   for (const p of pages) {
     const btn = document.createElement('button');
     btn.className = 'outline-item';
-    btn.innerHTML = `<span>第 ${p} 页</span>` +
+    btn.innerHTML = t('<span>第 {p} 页</span>', { p }) +
       `<span class="outline-page">${p}</span>`;
     btn.style.paddingLeft = '8px';
     btn.addEventListener('click', () => {
@@ -1114,7 +1243,7 @@ async function runSearch(keyword) {
   }
 
   const q = keyword.trim().toLowerCase();
-  els.searchCount.textContent = '搜索中…';
+  els.searchCount.textContent = t('搜索中…');
   els.searchNav.hidden = true;
 
   let seq = 0;
@@ -1183,7 +1312,7 @@ async function runSearch(keyword) {
     state.searchHitsByPage.get(hit.pageIndex).push(hit);
   }
 
-  els.searchCount.textContent = total ? `${total} 处` : '无结果';
+  els.searchCount.textContent = total ? t('{total} 处', { total }) : t('无结果');
   els.searchInput.classList.toggle('no-result', total === 0);
   els.searchNav.hidden = total === 0;
 
@@ -1483,9 +1612,9 @@ function showObjBar(rec, obj) {
 
   if (!obj) { hideObjBar(); return; }
 
-  const names = { whiteout: '涂白块', text: '文字', rect: '矩形',
-                  ellipse: '椭圆', line: '直线', replace: '替换文字' };
-  if (els.objBarName) els.objBarName.textContent = names[obj.kind] || '对象';
+  const names = { whiteout: t('涂白块'), text: t('文字'), rect: t('矩形'),
+                  ellipse: t('椭圆'), line: t('直线'), replace: t('替换文字') };
+  if (els.objBarName) els.objBarName.textContent = names[obj.kind] || t('对象');
   objBarId = obj.id;
 
   
@@ -1559,7 +1688,7 @@ function setAnnotMode(on, silent = false) {
   if (next && editState.on) setEditMode(false);   
 
   if (!silent) {
-    toast(next ? '标注模式：拖拽可框选区域（已退出编辑）' : '已退出标注模式', 1600);
+    toast(next ? t('标注模式：拖拽可框选区域（已退出编辑）') : t('已退出标注模式'), 1600);
   }
 }
 
@@ -1742,7 +1871,7 @@ function onEditMouseUp(e) {
     resizeState = null;
     const obj = editState.objects.find(o => o.id === st.id);
     if (obj) showObjBar(st.rec, obj);   
-    toast('已缩放', 900);
+    toast(t('已缩放'), 900);
     return;
   }
   
@@ -1752,7 +1881,7 @@ function onEditMouseUp(e) {
     if (st.moved) {
       const obj = editState.objects.find(o => o.id === st.id);
       if (obj) showObjBar(st.rec, obj);   
-      toast('已移动', 900);
+      toast(t('已移动'), 900);
     }
     return;
   }
@@ -1795,18 +1924,18 @@ function onEditMouseUp(e) {
   repaintEdits();
   
   if (tool === 'replace') {
-    toast('已框选替换区域，请输入要替换成的新文字', 2600);
+    toast(t('已框选替换区域，请输入要替换成的新文字'), 2600);
     openReplacePop(created, e.clientX, e.clientY);
     return;
   }
-  const label = { whiteout: '涂白', rect: '矩形', ellipse: '椭圆',
-                  line: '直线', redact: '涂黑区域' }[tool] || '对象';
+  const label = { whiteout: t('涂白'), rect: t('矩形'), ellipse: t('椭圆'),
+                  line: t('直线'), redact: t('涂黑区域') }[tool] || t('对象');
   
   
   if (tool === 'redact') {
-    toast('已标记涂黑区域，点「涂黑并另存为…」才会真正删除文字', 3200);
+    toast(t('已标记涂黑区域，点「涂黑并另存为…」才会真正删除文字'), 3200);
   } else {
-    toast(`已添加${label}`, 1000);
+    toast(t('已添加{label}', { label }), 1000);
   }
 }
 
@@ -1829,8 +1958,8 @@ async function fetchParagraphs(page) {
   const q = new URLSearchParams({ path: src, page: String(page) });
   const r = await fetch('/api/paragraphs?' + q.toString());
   if (!r.ok) {
-    let msg = `取段落失败 (${r.status})`;
-    try { const j = await r.json(); if (j.error) msg = j.error; } catch (e) {  }
+    let msg = t('取段落失败 ({status})', { status: r.status });
+    try { const j = await r.json(); const m2 = errText(j); if (m2) msg = m2; } catch (e) {  }
     throw new Error(msg);
   }
   const data = await r.json();
@@ -1929,7 +2058,7 @@ function flashBoxes(pageNum, boxes) {
 }
 
 async function openParaPop(rec, clientX, clientY) {
-  if (!state.filePath) { toast('请先打开一个文档', 1600); return; }
+  if (!state.filePath) { toast(t('请先打开一个文档'), 1600); return; }
 
   const r = rec.wrap.getBoundingClientRect();
   if (!r.width || !r.height) return;
@@ -1943,7 +2072,7 @@ async function openParaPop(rec, clientX, clientY) {
   try {
     list = await fetchParagraphs(rec.num);
   } catch (e) {
-    toast(e.message || '取段落失败', 3200);
+    toast(e.message || t('取段落失败'), 3200);
     return;
   }
 
@@ -1951,7 +2080,7 @@ async function openParaPop(rec, clientX, clientY) {
   const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
                              py >= p.y0 - 2 && py <= p.y1 + 2);
   if (!hit) {
-    toast('这里没有可编辑的段落（点正文里的任意一行试试）', 2800);
+    toast(t('这里没有可编辑的段落（点正文里的任意一行试试）'), 2800);
     return;
   }
 
@@ -1965,11 +2094,11 @@ async function openParaPop(rec, clientX, clientY) {
     const cell = (hit.cells || []).find(c =>
       px >= c.x0 - 2 && px <= c.x1 + 2 && py >= c.y0 - 2 && py <= c.y1 + 2);
     if (!cell) {
-      flashParaRange(rec, hit, `表格区域（${hit.cols} 列）· 请点具体的格子`);
+      flashParaRange(rec, hit, t('表格区域（{cols} 列）· 请点具体的格子', { cols: hit.cols }));
       return;
     }
     flashParaRange(rec, cell,
-                   `第 ${cell.row + 1} 行 第 ${cell.col + 1} 列`);
+                   t('第 {v} 行 第 {v2} 列', { v: cell.row + 1, v2: cell.col + 1 }));
     paraPopInfo = {
       page: rec.num,
       para: hit.index,
@@ -1982,18 +2111,18 @@ async function openParaPop(rec, clientX, clientY) {
     };
     if (els.paraDropRow) {
       els.paraDropRow.hidden = false;
-      els.paraDropRow.textContent = `删掉第 ${cell.row + 1} 行`;
+      els.paraDropRow.textContent = t('删掉第 {v} 行', { v: cell.row + 1 });
     }
     if (els.paraInsertBelow) els.paraInsertBelow.hidden = false;
     if (els.paraInsertAbove) {
       els.paraInsertAbove.hidden = false;
       
-      els.paraInsertAbove.textContent = cell.row === 0 ? '加表头' : '上插一行';
+      els.paraInsertAbove.textContent = cell.row === 0 ? t('加表头') : t('上插一行');
     }
-    if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
+    if (els.paraPage) els.paraPage.textContent = t('第 {num} 页', { num: rec.num });
     if (els.paraTip) {
       els.paraTip.textContent =
-        `表格 第 ${cell.row + 1} 行 · 第 ${cell.col + 1} 列 · 字号 ${hit.size}`;
+        t('表格 第 {v} 行 · 第 {v2} 列 · 字号 {size}', { v: cell.row + 1, v2: cell.col + 1, size: hit.size });
     }
     if (els.paraText) els.paraText.value = cell.text || '';
     updateParaCount();
@@ -2014,7 +2143,7 @@ async function openParaPop(rec, clientX, clientY) {
     usedDom = !!paraText;
   }
   if (!paraText) {
-    toast('这篇文档的字体没有 ToUnicode，且没能解出这一段文字，暂时无法编辑', 4200);
+    toast(t('这篇文档的字体没有 ToUnicode，且没能解出这一段文字，暂时无法编辑'), 4200);
     return;
   }
 
@@ -2032,11 +2161,11 @@ async function openParaPop(rec, clientX, clientY) {
   if (els.paraDropRow) els.paraDropRow.hidden = true;
   if (els.paraInsertBelow) els.paraInsertBelow.hidden = true;
   if (els.paraInsertAbove) els.paraInsertAbove.hidden = true;
-  if (els.paraPage) els.paraPage.textContent = `第 ${rec.num} 页`;
+  if (els.paraPage) els.paraPage.textContent = t('第 {num} 页', { num: rec.num });
   if (els.paraTip) {
     els.paraTip.textContent =
-      `第 ${hit.index + 1} 段 · ${hit.lines} 行 · 字号 ${hit.size}` +
-      (usedDom ? '　原文由页面文字补全' : '');
+      t('第 {v} 段 · {lines} 行 · 字号 {size}', { v: hit.index + 1, lines: hit.lines, size: hit.size }) +
+      (usedDom ? t('　原文由页面文字补全') : '');
   }
   if (els.paraText) els.paraText.value = paraText;
   updateParaCount();
@@ -2057,7 +2186,7 @@ function updateParaCount() {
   const t = (els.paraText && els.paraText.value) || '';
   
   const n = [...t.replace(/\s/g, '')].length;
-  els.paraCount.textContent = `${n} 字`;
+  els.paraCount.textContent = t('{n} 字', { n });
 }
 
 
@@ -2106,7 +2235,7 @@ async function reloadContentFrom(path) {
         encodeURIComponent(state.contentPath));
       editState.pageInfo = info.pages || [];
     } catch (e) {
-      console.warn('刷新页面尺寸失败：', e.message);
+      console.warn(t('刷新页面尺寸失败：'), e.message);
     }
   }
   updateProgressMarkers();
@@ -2115,38 +2244,38 @@ async function reloadContentFrom(path) {
 
 
 async function applyStagePreview(res) {
-  showLoading('正在刷新预览…');
+  showLoading(t('正在刷新预览…'));
   try {
     await reloadContentFrom(res.stagePath);
     updateStageBar();
   } catch (e) {
-    toast('刷新预览失败：' + ((e && e.message) || e), 6000);
+    toast(t('刷新预览失败：') + ((e && e.message) || e), 6000);
     hideLoading();
     return;
   }
   hideLoading();
 
-  let msg = '已更新预览';
+  let msg = t('已更新预览');
   if (res.linesBefore != null && res.linesAfter != null &&
       res.linesBefore !== res.linesAfter) {
-    msg += `（${res.linesBefore} 行 → ${res.linesAfter} 行）`;
+    msg += t('（{linesBefore} 行 → {linesAfter} 行）', { linesBefore: res.linesBefore, linesAfter: res.linesAfter });
   }
-  if (res.pages > 1) msg += `，跨 ${res.pages} 页续排`;
-  if (res.newPages > 0) msg += `，新增 ${res.newPages} 页`;
+  if (res.pages > 1) msg += t('，跨 {pages} 页续排', { pages: res.pages });
+  if (res.newPages > 0) msg += t('，新增 {newPages} 页', { newPages: res.newPages });
 
   
   
   const staleRedact = redactCount();
   if (staleRedact > 0) {
-    msg += `　⚠ 版面已变，之前画的 ${staleRedact} 处涂黑框请重画`;
+    msg += t('　⚠ 版面已变，之前画的 {staleRedact} 处涂黑框请重画', { staleRedact });
   }
 
   if (res.fallback) {
     
-    msg += `　⚠ 这些字用了替代字体，字形会与原文不同：${res.fallback}`;
+    msg += t('　⚠ 这些字用了替代字体，字形会与原文不同：{fallback}', { fallback: res.fallback });
     toast(msg, 9000);
   } else {
-    toast(msg + '。满意就点顶部「保存为 PDF」', 3600);
+    toast(msg + t('。满意就点顶部「保存为 PDF」'), 3600);
   }
 }
 
@@ -2164,24 +2293,24 @@ async function undoStagePreview() {
     });
     j = await r.json().catch(() => ({}));
   } catch (e) {
-    toast('撤销失败：' + ((e && e.message) || e), 4000);
+    toast(t('撤销失败：') + ((e && e.message) || e), 4000);
     return false;
   }
   if (!r.ok) {
     
-    if (r.status === 400 && !j.error) return false;
-    if (r.status === 400) { toast(j.error, 2200); return true; }
-    toast(j.error || '撤销失败', 4000);
+    if (r.status === 400 && !errText(j)) return false;
+    if (r.status === 400) { toast(errText(j), 2200); return true; }
+    toast(errText(j) || t('撤销失败'), 4000);
     return false;
   }
-  showLoading('正在退回上一版…');
+  showLoading(t('正在退回上一版…'));
   try {
     state.stage.path = j.stagePath;
     await reloadContentFrom(j.stagePath);
     updateStageBar();
-    toast('已退回上一版预览' + (j.remaining > 0 ? `（还能退 ${j.remaining} 步）` : ''), 2200);
+    toast(t('已退回上一版预览') + (j.remaining > 0 ? t('（还能退 {remaining} 步）', { remaining: j.remaining }) : ''), 2200);
   } catch (e) {
-    toast('刷新预览失败：' + ((e && e.message) || e), 5000);
+    toast(t('刷新预览失败：') + ((e && e.message) || e), 5000);
   } finally {
     hideLoading();
   }
@@ -2201,7 +2330,7 @@ function updateStageBar(saved = false) {
   bar.hidden = !has && !saved;
   bar.classList.toggle('is-saved', !!saved);
   if (els.stageText) {
-    els.stageText.textContent = saved ? '已保存' : '预览中 · 改动尚未保存';
+    els.stageText.textContent = saved ? t('已保存') : t('预览中 · 改动尚未保存');
   }
   if (els.stageSave) els.stageSave.hidden = !!saved;
   if (els.stageDrop) els.stageDrop.hidden = !!saved;
@@ -2224,12 +2353,12 @@ async function exitStagePreview() {
   const back = state.savedPath || state.filePath;
   state.contentPath = back;
   updateStageBar(false);
-  showLoading('正在回到上次保存的版本…');
+  showLoading(t('正在回到上次保存的版本…'));
   try {
     await reloadContentFrom(back);
-    toast('已退出预览，画面回到上次保存的版本', 2800);
+    toast(t('已退出预览，画面回到上次保存的版本'), 2800);
   } catch (e) {
-    toast('回到原文件失败：' + ((e && e.message) || e), 6000);
+    toast(t('回到原文件失败：') + ((e && e.message) || e), 6000);
   } finally {
     hideLoading();
   }
@@ -2248,7 +2377,7 @@ async function confirmParaPop() {
   if (!paraPopInfo) return;
   const txt = (els.paraText && els.paraText.value) || '';
   if (!txt.trim()) {
-    toast('文字不能为空。要整段删掉，请用涂黑工具', 2600);
+    toast(t('文字不能为空。要整段删掉，请用涂黑工具'), 2600);
     return;
   }
   const info = paraPopInfo;
@@ -2268,11 +2397,11 @@ async function confirmInsertRow(where) {
   const info = paraPopInfo;
   const above = where === 'above';
   const ok = confirm(
-    (above ? `在上面插入一行？\n\n` : `在下面插入一行？\n\n`) +
-    `· 新行是**这一行的副本**，插完直接点它、改掉里面的文字即可；\n` +
-    `· ${above ? '这一行' : '下面的内容'}整体下移一行，表格补上边框；\n` +
-    (above ? `· 在第一行上用它，就等于给表格加了一行表头；\n` : '') +
-    `· 页底空间不够时会拒绝，不会把内容挤出页面。`);
+    (above ? t('在上面插入一行？\\n\\n') : t('在下面插入一行？\\n\\n')) +
+    t('· 新行是**这一行的副本**，插完直接点它、改掉里面的文字即可；\\n') +
+    t('· {v}整体下移一行，表格补上边框；\n', { v: above ? t('这一行') : t('下面的内容') }) +
+    (above ? t('· 在第一行上用它，就等于给表格加了一行表头；\\n') : '') +
+    t('· 页底空间不够时会拒绝，不会把内容挤出页面。'));
   if (!ok) return;
 
   const res = await insertTableRow(info.page, info.para, info.gid, where);
@@ -2287,11 +2416,11 @@ async function confirmDropRow() {
   const preview = (els.paraText && els.paraText.value || '').trim();
   const shown = preview.length > 40 ? preview.slice(0, 40) + '…' : preview;
   const ok = confirm(
-    `删掉表格里的这一整行？\n\n` +
-    `这一行现在有：${shown ? '「' + shown + '」' : '（空行）'}\n` +
-    `· 整行的文字和它的下边框线一起消失（不只是这一格）；\n` +
-    `· 下面的内容整体往上走，表格不留空洞；\n` +
-    `· 想反悔请点预览条上的「撤销」。\n\n继续吗？`);
+    t('删掉表格里的这一整行？\\n\\n') +
+    t('这一行现在有：{v}\n', { v: shown ? t('「{text}」', { text: shown }) : t('（空行）') }) +
+    t('· 整行的文字和它的下边框线一起消失（不只是这一格）；\\n') +
+    t('· 下面的内容整体往上走，表格不留空洞；\\n') +
+    t('· 想反悔请点预览条上的「撤销」。\\n\\n继续吗？'));
   if (!ok) return;
 
   const res = await dropTableRow(info.page, info.para, info.gid);
@@ -2425,7 +2554,7 @@ function confirmTextPop() {
   
   if (editingId) {
     if (!txt) {
-      toast('文字不能为空。要删掉这段文字，请用选择工具删掉对象', 2600);
+      toast(t('文字不能为空。要删掉这段文字，请用选择工具删掉对象'), 2600);
       return;
     }
     const cur = (editState.objects || []).find(o => o.id === editingId);
@@ -2448,7 +2577,7 @@ function confirmTextPop() {
       });
     }
     closeTextPop();
-    toast('已更新文字', 1100);
+    toast(t('已更新文字'), 1100);
     return;
   }
 
@@ -2471,7 +2600,7 @@ function confirmTextPop() {
 
   closeTextPop();
   const pages = placements.length ? placements[placements.length - 1].page - page + 1 : 1;
-  toast(pages > 1 ? `已添加文字（跨 ${pages} 页）` : '已添加文字', 1100);
+  toast(pages > 1 ? t('已添加文字（跨 {pages} 页）', { pages }) : t('已添加文字'), 1100);
 }
 
 
@@ -2512,18 +2641,18 @@ function confirmReplacePop() {
   const txt = (els.replaceText && els.replaceText.value || '').trim();
   const { id } = replacePopInfo;
   if (!txt) {
-    toast('替换文字不能为空', 1800);
+    toast(t('替换文字不能为空'), 1800);
     return;
   }
   updateObject(id, { text: txt });
   closeReplacePop();
-  toast('已设置替换文字', 1100);
+  toast(t('已设置替换文字'), 1100);
 }
 
 
 function applyAnnotation(sel, type, color) {
   if (!sel || !sel.parts || !sel.parts.length) {
-    toast('选区已失效，请重新选择文字', 1800);
+    toast(t('选区已失效，请重新选择文字'), 1800);
     return;
   }
 
@@ -2535,9 +2664,9 @@ function applyAnnotation(sel, type, color) {
   }
 
   addAnnotation(sel, type, color, '');
-  const label = { highlight: '高亮', underline: '下划线', wavy: '波浪线',
-                  strike: '删除线' }[type] || '标注';
-  toast(`已添加${label}`, 1100);
+  const label = { highlight: t('高亮'), underline: t('下划线'), wavy: t('波浪线'),
+                  strike: t('删除线') }[type] || t('标注');
+  toast(t('已添加{label}', { label }), 1100);
 }
 
 
@@ -2546,9 +2675,9 @@ function openAnnotPop(id) {
   if (!an) return;
   popAnnotId = id;
 
-  els.apTag.textContent = { highlight: '高亮', underline: '下划线', wavy: '波浪线',
-                            strike: '删除线', note: '笔记', box: '区域' }[an.type] || an.type;
-  els.apText.textContent = an.text || '（区域标注）';
+  els.apTag.textContent = { highlight: t('高亮'), underline: t('下划线'), wavy: t('波浪线'),
+                            strike: t('删除线'), note: t('笔记'), box: t('区域') }[an.type] || an.type;
+  els.apText.textContent = an.text || t('（区域标注）');
   els.apNote.value = an.note || '';
 
   
@@ -2696,7 +2825,7 @@ function paintMergeBar() {
 }
 
 async function mergeSelected() {
-  if (mergeSel.length < 2) { toast('至少勾两份文档', 1600); return; }
+  if (mergeSel.length < 2) { toast(t('至少勾两份文档'), 1600); return; }
   const go = $('mergeGo');
   if (go) { go.disabled = true; go.classList.add('busy'); }
   try {
@@ -2706,14 +2835,14 @@ async function mergeSelected() {
       body: JSON.stringify({ paths: mergeSel }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || `合并失败 (${r.status})`);
-    toast(`已合并 ${d.pages} 页：${d.name}`, 5000);
+    if (!r.ok || !d.ok) throw new Error(errText(d) || t('合并失败 ({status})', { status: r.status }));
+    toast(t('已合并 {pages} 页：{name}', { pages: d.pages, name: d.name }), 5000);
     
     window.location.href = '/api/file?download=1&path=' +
       encodeURIComponent(d.path);
     setMergeMode(false);
   } catch (e) {
-    toast(e.message || '合并失败', 4000);
+    toast(e.message || t('合并失败'), 4000);
   } finally {
     if (go) { go.disabled = mergeSel.length < 2; go.classList.remove('busy'); }
   }
@@ -2721,48 +2850,49 @@ async function mergeSelected() {
 
 async function renderWelcome() {
   const container = els.pages;
+  welcomeReady = true;
   container.classList.add('empty');
   container.innerHTML = `
   <div class="welcome">
-    <h1>PDF 查看器</h1>
-    <p class="sub">选择服务端目录中的 PDF，或直接把文件拖进来。所有解析都在本机完成，文件不会上传到任何地方。</p>
+    <h1>${t('PDF 查看器')}</h1>
+    <p class="sub">${t('选择服务端目录中的 PDF，或直接把文件拖进来。所有解析都在本机完成，文件不会上传到任何地方。')}</p>
 
     <div class="drop-zone" id="dropZone">
-      <div class="big">拖拽 PDF 文件到这里</div>
-      <div>或点击选择本地文件</div>
+      <div class="big">${t('拖拽 PDF 文件到这里')}</div>
+      <div>${t('或点击选择本地文件')}</div>
     </div>
 
     <div class="welcome-head">
-      <h2>服务端文档</h2>
-      <input class="file-search" id="fileSearch" placeholder="按名称筛选…">
-      <button class="btn primary" id="btnNewHere" title="从零新建一个空白 PDF">
+      <h2>${t('服务端文档')}</h2>
+      <input class="file-search" id="fileSearch" placeholder="${t('按名称筛选…')}">
+      <button class="btn primary" id="btnNewHere" title="${t('从零新建一个空白 PDF')}">
         <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9.5" y1="14.5" x2="14.5" y2="14.5"/></svg>
-        <span class="lbl">新建 PDF</span>
+        <span class="lbl">${t('新建 PDF')}</span>
       </button>
-      <button class="btn" id="btnPickDir" title="添加其他目录">
+      <button class="btn" id="btnPickDir" title="${t('添加其他目录')}">
         <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="9.5" y1="13.5" x2="14.5" y2="13.5"/></svg>
-        <span class="lbl">添加目录</span>
+        <span class="lbl">${t('添加目录')}</span>
       </button>
-      <button class="btn" id="btnMerge" title="勾选多份文档，按顺序合并成一份">
+      <button class="btn" id="btnMerge" title="${t('勾选多份文档，按顺序合并成一份')}">
         <svg viewBox="0 0 24 24"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/><path d="M4 8v12h9"/></svg>
-        <span class="lbl">合并…</span>
+        <span class="lbl">${t('合并…')}</span>
       </button>
     </div>
 
     <div class="merge-bar" id="mergeBar" hidden>
-      <span>已选 <b id="mergeN">0</b> 份（按点击顺序合并）</span>
+      <span>${t('已选 {n} 份（按点击顺序合并）', { n: '<b id="mergeN">0</b>' })}</span>
       <span class="ep-gap"></span>
-      <button class="mini-btn" id="mergeCancel">取消</button>
-      <button class="mini-btn primary" id="mergeGo" disabled>合并成一份</button>
+      <button class="mini-btn" id="mergeCancel">${t('取消')}</button>
+      <button class="mini-btn primary" id="mergeGo" disabled>${t('合并成一份')}</button>
     </div>
 
     <div class="file-list" id="fileList">
-      <div class="empty-tip"><div class="spinner" style="margin:0 auto 10px"></div>正在扫描文档…</div>
+      <div class="empty-tip"><div class="spinner" style="margin:0 auto 10px"></div>${t('正在扫描文档…')}</div>
     </div>
 
     <div class="welcome-foot">
       <span id="scanInfo"></span>
-      <button class="link-btn" id="btnRescan">重新扫描</button>
+      <button class="link-btn" id="btnRescan">${t('重新扫描')}</button>
     </div>
   </div>`;
 
@@ -2803,17 +2933,16 @@ async function loadServerFiles() {
   try {
     const r = await fetch('/api/files');
     const data = await r.json();
-    if (!data.ok) throw new Error(data.error || '扫描失败');
+    if (!data.ok) throw new Error(errText(data) || t('扫描失败'));
     serverFiles = data.files || [];
     paintFileList();
     const info = $('scanInfo');
     if (info) {
-      info.textContent = `共 ${data.count} 个文档 · ${(data.dirs || []).length} 个扫描目录`;
+      info.textContent = t('共 {count} 个文档 · {v} 个扫描目录', { count: data.count, v: (data.dirs || []).length });
       info.title = (data.dirs || []).join('\n');
     }
   } catch (err) {
-    list.innerHTML = `<div class="empty-tip">扫描失败：${escapeHtml(err.message)}<br>
-      请确认服务已启动，或点击「重新扫描」</div>`;
+    list.innerHTML = t('<div class="empty-tip">扫描失败：{v}<br>\n      请确认服务已启动，或点击「重新扫描」</div>', { v: escapeHtml(err.message) });
   }
 }
 
@@ -2828,16 +2957,14 @@ function paintFileList() {
 
   if (!items.length) {
     list.innerHTML = serverFiles.length
-      ? `<div class="empty-tip">没有匹配「${escapeHtml(kw)}」的文档</div>`
-      : `<div class="empty-tip">未找到 PDF 文件<br><br>
-         把 PDF 放进扫描目录，或启动时指定：<br>
-         <code>python server.py --dir D:\\你的PDF目录</code></div>`;
+      ? t('<div class="empty-tip">没有匹配「{v}」的文档</div>', { v: escapeHtml(kw) })
+      : t('<div class="empty-tip">未找到 PDF 文件<br><br>\n         把 PDF 放进扫描目录，或启动时指定：<br>\n         <code>python server.py --dir D:\\\\你的PDF目录</code></div>');
     return;
   }
 
   list.innerHTML = items.slice(0, 300).map((f, i) => `
     <div class="file-item" data-i="${serverFiles.indexOf(f)}">
-      <label class="fi-check" title="选中参与合并">
+      <label class="fi-check" title="${t('选中参与合并')}">
         <input type="checkbox" data-path="${escapeHtml(f.path)}"
           ${mergeSel.includes(f.path) ? 'checked' : ''}>
       </label>
@@ -2846,7 +2973,7 @@ function paintFileList() {
         <div class="fi-name" title="${escapeHtml(f.path)}">${escapeHtml(f.name)}</div>
         <div class="fi-meta">${escapeHtml(f.folder)} · ${f.sizeText}</div>
       </div>
-      <div class="fi-open" title="用系统默认程序打开">
+      <div class="fi-open" title="${t('用系统默认程序打开')}">
         <svg viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>
       </div>
     </div>`).join('');
@@ -2867,8 +2994,8 @@ function paintFileList() {
       if (e.target.closest('.fi-open')) {
         fetch('/api/open?path=' + encodeURIComponent(f.path))
           .then(r => r.json())
-          .then(d => toast(d.ok ? '已用系统默认程序打开' : ('打开失败：' + d.error)))
-          .catch(() => toast('打开失败'));
+          .then(d => toast(d.ok ? t('已用系统默认程序打开') : (t('打开失败：') + errText(d))))
+          .catch(() => toast(t('打开失败')));
         return;
       }
       loadPdfFromPath(f.path, f.name);
@@ -2878,30 +3005,30 @@ function paintFileList() {
 
 async function pickServerDir() {
   
-  const dir = prompt('请输入要扫描的文件夹完整路径：\n例如 D:\\我的PDF', '');
+  const dir = prompt(t('请输入要扫描的文件夹完整路径：\\n例如 D:\\\\我的PDF'), '');
   if (!dir) return;
-  showLoading('正在扫描目录…');
+  showLoading(t('正在扫描目录…'));
   try {
     const r = await fetch('/api/files?dir=' + encodeURIComponent(dir));
     const data = await r.json();
     hideLoading();
-    if (!data.ok) { toast('扫描失败：' + data.error); return; }
-    if (!data.files.length) { toast('该目录下没有找到 PDF 文件'); return; }
+    if (!data.ok) { toast(t('扫描失败：') + errText(data)); return; }
+    if (!data.files.length) { toast(t('该目录下没有找到 PDF 文件')); return; }
     serverFiles = data.files;
     paintFileList();
     const info = $('scanInfo');
-    if (info) info.textContent = `共 ${data.count} 个文档（含临时目录 ${dir}）`;
-    toast(`找到 ${data.count} 个文档`, 1600);
+    if (info) info.textContent = t('共 {count} 个文档（含临时目录 {dir}）', { count: data.count, dir });
+    toast(t('找到 {count} 个文档', { count: data.count }), 1600);
   } catch (err) {
     hideLoading();
-    toast('扫描失败：' + err.message);
+    toast(t('扫描失败：') + err.message);
   }
 }
 
 async function handleLocalFile(file) {
   if (!file) return;
   if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
-    toast('请选择 PDF 文件');
+    toast(t('请选择 PDF 文件'));
     return;
   }
   await loadPdfFromFile(file);
@@ -2962,8 +3089,8 @@ function bindToolbar() {
         const t = pendingSel ? pendingSel.text : window.getSelection()?.toString();
         if (t) {
           navigator.clipboard.writeText(t).then(
-            () => toast('已复制到剪贴板', 1200),
-            () => toast('复制失败')
+            () => toast(t('已复制到剪贴板'), 1200),
+            () => toast(t('复制失败'))
           );
         }
         finishMenuAction();
@@ -2971,7 +3098,7 @@ function bindToolbar() {
       }
 
       if (!pendingSel) {
-        toast('选区已失效，请重新选择文字', 1600);
+        toast(t('选区已失效，请重新选择文字'), 1600);
         finishMenuAction();
         return;
       }
@@ -2999,12 +3126,12 @@ function bindToolbar() {
   els.apSave.addEventListener('click', () => {
     if (popAnnotId) {
       updateAnnotation(popAnnotId, { note: els.apNote.value.trim() });
-      toast('笔记已保存', 1200);
+      toast(t('笔记已保存'), 1200);
     }
     closeAnnotPop();
   });
   els.apDelete.addEventListener('click', () => {
-    if (popAnnotId) { removeAnnotation(popAnnotId); toast('已删除标注', 1200); }
+    if (popAnnotId) { removeAnnotation(popAnnotId); toast(t('已删除标注'), 1200); }
     closeAnnotPop();
   });
   els.apCancel.addEventListener('click', () => {
@@ -3044,13 +3171,13 @@ function bindToolbar() {
   
   els.annotActions.hidden = false;
   els.btnExportMd.addEventListener('click', () => {
-    if (!state.docId) { toast('请先打开文档'); return; }
-    if (!annState.items.length) { toast('还没有标注可导出'); return; }
+    if (!state.docId) { toast(t('请先打开文档')); return; }
+    if (!annState.items.length) { toast(t('还没有标注可导出')); return; }
     window.open('/api/notes?doc=' + encodeURIComponent(state.docId) +
                 '&name=' + encodeURIComponent(state.fileName), '_blank');
   });
   els.btnExportJson.addEventListener('click', () => {
-    if (!annState.items.length) { toast('还没有标注可导出'); return; }
+    if (!annState.items.length) { toast(t('还没有标注可导出')); return; }
     const blob = new Blob(
       [JSON.stringify({ docId: state.docId, doc: state.fileName, items: annState.items }, null, 2)],
       { type: 'application/json' }
@@ -3289,7 +3416,7 @@ function bindToolbar() {
       if (objBarId == null) return;
       removeObject(objBarId);
       hideObjBar();
-      toast('已删除对象', 1100);
+      toast(t('已删除对象'), 1100);
     });
   }
   if (els.objBarFront) {
@@ -3301,7 +3428,7 @@ function bindToolbar() {
         const [o] = editState.objects.splice(i, 1);
         editState.objects.push(o);
         repaintEdits();
-        toast('已置顶', 900);
+        toast(t('已置顶'), 900);
       }
     });
   }
@@ -3313,7 +3440,7 @@ function bindToolbar() {
         const [o] = editState.objects.splice(i, 1);
         editState.objects.unshift(o);
         repaintEdits();
-        toast('已置底', 900);
+        toast(t('已置底'), 900);
       }
     });
   }
@@ -3329,7 +3456,7 @@ function bindToolbar() {
 
   els.btnHome.addEventListener('click', () => {
     if (!state.pdf) return;
-    if (confirm('关闭当前文档并返回列表？')) closeDocument();
+    goHome();
   });
 
   els.btnFirst.addEventListener('click', () => goToPage(1));
@@ -3359,7 +3486,7 @@ function bindToolbar() {
   
   if (els.btnExportTop) {
     els.btnExportTop.addEventListener('click', () => {
-      if (!state.pdf) { toast('请先打开一个文档', 1600); return; }
+      if (!state.pdf) { toast(t('请先打开一个文档'), 1600); return; }
       exportPdf();
     });
   }
@@ -3371,9 +3498,24 @@ function bindToolbar() {
       const url = URL.createObjectURL(blob);
       const w = window.open(url);
       if (w) setTimeout(() => { try { w.print(); } catch (e) {} }, 800);
-      else toast('打印窗口被浏览器拦截，请允许弹出窗口');
+      else toast(t('打印窗口被浏览器拦截，请允许弹出窗口'));
     });
   });
+
+  
+
+
+  if (els.langLabel) {
+    els.langLabel.textContent = LANG_SHORT[currentLang()] || currentLang().toUpperCase();
+  }
+  if (els.btnLang) {
+    els.btnLang.addEventListener('click', () => {
+      const busy = document.body.classList.contains('edit-mode')
+        || !!(state.stage && state.stage.id);
+      if (busy && !confirm(t('切换语言会重新载入页面，未保存的改动会丢失。继续吗？'))) return;
+      setLang(nextLang());
+    });
+  }
 
   
   const si = els.searchInput;
@@ -3470,7 +3612,7 @@ function bindToolbar() {
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
     if (typing) {
       
-      toast('请先完成当前输入（确定 / 取消）再导出', 2600);
+      toast(t('请先完成当前输入（确定 / 取消）再导出'), 2600);
       return;
     }
     if (!state.pdf) return;
@@ -3528,7 +3670,7 @@ function bindToolbar() {
       case '2': applyViewMode(state.viewMode === 'double' ? 'single' : 'double'); break;
       case 's': case 'S': els.btnSidebar.click(); break;
       case 'h': case 'H':
-        if (confirm('关闭当前文档并返回列表？')) closeDocument();
+        goHome();
         break;
     }
   });
@@ -3576,6 +3718,7 @@ function cacheAllEls() {
     'toolGroup', 'toolGroupSep', 'btnRotate', 'btnDark', 'btnFitWidth',
     'searchWrap', 'searchInput', 'searchClear', 'searchCount', 'searchNav',
     'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnExportTop',
+    'btnLang', 'langLabel',
     'btnPrint', 'filePicker',
     
     'annotGroup', 'annotSep', 'btnAnnotMode', 'colorPicker',
@@ -3610,7 +3753,21 @@ function cacheAllEls() {
 }
 
 async function init() {
+  
+  
+  await initI18n();
   cacheAllEls();
+
+  
+  tabs.initTabs();
+  tabs.bindTabHost({
+    refreshChrome,
+    beforeClose: beforeCloseTab,
+    confirmClose: confirmCloseTab,
+    pickFile: () => els.filePicker.click(),
+  });
+  tabs.bindStrip();
+
   bindNavHelpers(goToPage, renderPage);
   bindEditHelpers({ goToPage, renderPage });
   
@@ -3624,6 +3781,30 @@ async function init() {
   window.addEventListener('resize', onResize);
 
   
+
+
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = String(e.key).toLowerCase();
+    if (k === 'w') {
+      
+      const cur = tabs.active();
+      if (cur && !cur.home) { e.preventDefault(); closeDocument(); }
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      cycleTab(e.shiftKey ? -1 : 1);
+      return;
+    }
+    
+    if (/^[1-9]$/.test(e.key)) {
+      const target = tabs.list()[Number(e.key) - 1];
+      if (target) { e.preventDefault(); tabs.activate(target.id); }
+    }
+  });
+
+  
   window.addEventListener('beforeunload', savePosition);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { savePosition(); doSave(); saveEdits(); }
@@ -3632,11 +3813,24 @@ async function init() {
   const params = new URLSearchParams(location.search);
   const direct = params.get('path');
   if (direct) {
-    await loadPdfFromPath(direct, params.get('name') || '文档',
+    
+
+
+    try {
+      await api('/api/allow', { method: 'POST', body: { path: direct } });
+    } catch (e) {  }
+    await loadPdfFromPath(direct, params.get('name') || t('文档'),
                           params.get('doc') || null);
   } else {
     renderWelcome();
   }
 }
+
+
+
+window.__openPdfTab = (path, name) => {
+  if (!path) return;
+  loadPdfFromPath(path, name || t('文档'), null);
+};
 
 init();

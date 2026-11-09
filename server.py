@@ -33,6 +33,8 @@ STAGE_KEEP_SEC = 6 * 3600
 
 SCAN_DIRS = []
 
+OPEN_FILES = set()
+
 def stage_file(stage_id):
     return os.path.join(STAGE_DIR, stage_id + ".pdf")
 
@@ -111,6 +113,11 @@ def is_within(path, roots):
         except ValueError:
             continue
     return False
+
+def is_allowed(real, query=None, handler=None):
+    if is_within(real, allowed_roots(query, handler)):
+        return True
+    return any(_clean_path(real) == _clean_path(f) for f in OPEN_FILES)
 
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB"):
@@ -580,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def send_error_json(self, status, message):
-        self.send_json({"ok": False, "error": message}, status=status)
+        self.send_json({"ok": False, "error": message, "code": message}, status=status)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -638,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/stage", "/api/stage/undo",
                          "/api/find", "/api/replace_all", "/api/redact_terms",
                          "/api/table/drop_row", "/api/table/insert_row",
-                         "/api/new",
+                         "/api/new", "/api/allow",
                          "/api/split", "/api/merge"):
             return self.send_error_json(404, "未找到该路径")
         try:
@@ -674,6 +681,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_insert_row(payload)
         if route == "/api/new":
             return self._post_new(payload)
+        if route == "/api/allow":
+            return self._post_allow(payload)
         if route == "/api/find":
             return self._post_find(payload)
         if route == "/api/replace_all":
@@ -754,7 +763,7 @@ class Handler(BaseHTTPRequestHandler):
                 real = os.path.realpath(src)
                 if not os.path.isfile(real):
                     return self.send_error_json(404, "源文件不存在")
-                if not is_within(real, allowed_roots()):
+                if not is_allowed(real):
                     return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -828,6 +837,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _post_allow(self, payload):
+        target = str(payload.get("path") or "").strip()
+        if not target:
+            return self.send_error_json(400, "缺少 path 参数")
+        real = os.path.realpath(target)
+        if not os.path.isfile(real):
+            return self.send_error_json(404, "文件不存在")
+        if not real.lower().endswith(".pdf"):
+            return self.send_error_json(400, "只允许放行 PDF 文件")
+        OPEN_FILES.add(real)
+        self.send_json({"ok": True, "path": real})
 
     def _post_new(self, payload):
         size = payload.get("size") or "a4"
@@ -907,7 +928,7 @@ class Handler(BaseHTTPRequestHandler):
                 real = os.path.realpath(src)
                 if not os.path.isfile(real):
                     return self.send_error_json(404, "源文件不存在")
-                if not is_within(real, allowed_roots()):
+                if not is_allowed(real):
                     return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -996,7 +1017,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "文件不存在")
@@ -1050,7 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
                 real = os.path.realpath(src)
                 if not os.path.isfile(real):
                     return self.send_error_json(404, "源文件不存在")
-                if not is_within(real, allowed_roots()):
+                if not is_allowed(real):
                     return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1194,7 +1215,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1289,7 +1310,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return None, self.send_error_json(404, "文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return None, self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return None, self.send_error_json(404, "文件不存在")
@@ -1362,7 +1383,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1467,7 +1488,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, allowed_roots(query, self)):
+            if not is_allowed(real, query, self):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             import pdfreflow
             info = pdfreflow.list_paragraphs(real, page)
@@ -1534,7 +1555,7 @@ class Handler(BaseHTTPRequestHandler):
                 real = os.path.realpath(src)
                 if not os.path.isfile(real):
                     return self.send_error_json(404, "源文件不存在")
-                if not is_within(real, allowed_roots()):
+                if not is_allowed(real):
                     return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1700,7 +1721,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1777,7 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(src)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "源文件不存在")
-            if not is_within(real, allowed_roots()):
+            if not is_allowed(real):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
         except OSError:
             return self.send_error_json(404, "源文件不存在")
@@ -1891,7 +1912,7 @@ class Handler(BaseHTTPRequestHandler):
             size = os.path.getsize(real)
         except OSError:
             return self.send_error_json(404, "文件不存在")
-        if not is_within(real, allowed_roots(query, self)):
+        if not is_allowed(real, query, self):
             return self.send_error_json(403, "该文件不在允许的扫描目录内")
 
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
@@ -1996,7 +2017,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, allowed_roots(query, self)):
+            if not is_allowed(real, query, self):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             info = pdf_page_info(real)
         except Exception as exc:
@@ -2012,7 +2033,7 @@ class Handler(BaseHTTPRequestHandler):
             real = os.path.realpath(target)
             if not os.path.isfile(real):
                 return self.send_error_json(404, "文件不存在")
-            if not is_within(real, self._resolve_dirs(query)):
+            if not is_allowed(real, query, self):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
             if sys.platform == "win32":
                 os.startfile(real)
@@ -2162,6 +2183,8 @@ def main():
     ap = argparse.ArgumentParser(description="本地 PDF 查看器服务")
     ap.add_argument("--dir", action="append", default=[],
                     help="要扫描的 PDF 目录，可重复指定")
+    ap.add_argument("--allow", action="append", default=[], metavar="FILE",
+                    help="额外允许读取的文件（可多次）；只放行这一份，不放开所在目录")
     ap.add_argument("--port", type=int, default=8000, help="监听端口，默认 8000")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机")
     ap.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
@@ -2178,6 +2201,11 @@ def main():
     ap.add_argument("--stage-dir", default=None,
                     help="预览暂存目录，默认 <项目>/_stage（测试必须重定向）")
     args = ap.parse_args()
+
+    for _f in getattr(args, "allow", []) or []:
+        _r = os.path.realpath(_f)
+        if os.path.isfile(_r):
+            OPEN_FILES.add(_r)
 
     if args.export_dir:
         EXPORT_DIR = os.path.realpath(args.export_dir)

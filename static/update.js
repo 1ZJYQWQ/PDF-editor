@@ -61,7 +61,9 @@ function render(data) {
     showMsg(t('有新版本 {v}', { v: data.latest }), 'new');
     if (link) {
       link.dataset.url = data.url || REPO_URL;
-      link.title = t('去下载');
+      
+      
+      link.title = t('去下载') + (data.tag ? ' · ' + data.tag : '');
     }
     return;
   }

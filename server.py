@@ -1944,7 +1944,8 @@ class Handler(BaseHTTPRequestHandler):
             "current": appversion.VERSION,
             "repo": UPDATE_REPO,
             "hasUpdate": bool(hit),
-            "latest": hit.get("tag_name") or "",
+            "latest": appversion.version_of(hit) or hit.get("tag_name") or "",
+            "tag": hit.get("tag_name") or "",
             "name": hit.get("name") or "",
             "url": hit.get("html_url")
                    or ("https://github.com/%s/releases" % UPDATE_REPO),

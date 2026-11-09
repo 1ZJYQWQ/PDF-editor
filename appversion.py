@@ -5,6 +5,26 @@ VERSION = "1.1.0-pre"
 
 _NUM = re.compile(r"^\d+")
 
+_TAIL = r"(?:[-_ ]?(pre|rc|beta|alpha)[-_ ]?\d*)?"
+_VER_V = re.compile(r"[vV](\d+(?:\.\d+){0,2})" + _TAIL)
+_VER_D = re.compile(r"(?<![0-9.])(\d+\.\d+(?:\.\d+)?)" + _TAIL)
+
+def find_version(text):
+    s = str(text or "")
+    m = _VER_V.search(s) or _VER_D.search(s)
+    if not m:
+        return ""
+    return m.group(1) + (("-" + m.group(2).lower()) if m.group(2) else "")
+
+def version_of(rel):
+    if not isinstance(rel, dict):
+        return ""
+    for key in ("tag_name", "name", "body"):
+        v = find_version(rel.get(key) or "")
+        if v:
+            return v
+    return ""
+
 def parse_version(text):
     s = str(text or "").strip()
     if s[:1] in ("v", "V"):
@@ -32,8 +52,12 @@ def pick_latest(releases, current):
             continue
         if rel.get("draft"):
             continue
-        if rel.get("prerelease") and not cur_pre:
+        ver = version_of(rel)
+        if not ver:
             continue
-        if is_newer(rel.get("tag_name") or "", current):
+        _, ver_pre = parse_version(ver)
+        if (ver_pre or rel.get("prerelease")) and not cur_pre:
+            continue
+        if is_newer(ver, current):
             return rel
     return None

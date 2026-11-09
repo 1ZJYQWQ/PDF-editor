@@ -1,6 +1,6 @@
 # PDF 查看器
 
-简体中文 | [English](README.en.md)
+##简体中文 | [English](README.en.md)
 
 纯本地、离线、**零第三方依赖**的 PDF 工具
 

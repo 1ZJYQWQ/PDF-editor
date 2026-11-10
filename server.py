@@ -232,6 +232,8 @@ TAG_LABEL = {
 
 EDITABLE_KINDS = {"whiteout", "text", "rect", "ellipse", "line", "image"}
 
+_OBJ_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
 ANNOT_KINDS = {"highlight", "underline", "wavy", "strike", "box", "note"}
 
 REDACT_KIND = "redact"
@@ -367,6 +369,10 @@ def sanitize_edits(pages, objects):
             "w": _safe_float(obj.get("w"), 0.0),
             "h": _safe_float(obj.get("h"), 0.0),
         }
+
+        oid = str(obj.get("id") or "")
+        if _OBJ_ID.match(oid):
+            out["id"] = oid
 
         if kind == "line":
             out["x2"] = _safe_float(obj.get("x2"), 0.0)

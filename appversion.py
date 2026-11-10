@@ -47,6 +47,7 @@ def is_newer(candidate, current):
 
 def pick_latest(releases, current):
     _, cur_pre = parse_version(current)
+    best, best_ver = None, None
     for rel in releases or []:
         if not isinstance(rel, dict):
             continue
@@ -58,6 +59,8 @@ def pick_latest(releases, current):
         _, ver_pre = parse_version(ver)
         if (ver_pre or rel.get("prerelease")) and not cur_pre:
             continue
-        if is_newer(ver, current):
-            return rel
-    return None
+        if not is_newer(ver, current):
+            continue
+        if best_ver is None or is_newer(ver, best_ver):
+            best, best_ver = rel, ver
+    return best

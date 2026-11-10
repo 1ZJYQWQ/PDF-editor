@@ -1530,7 +1530,8 @@ function showObjBar(rec, obj) {
   if (!obj) { hideObjBar(); return; }
 
   const names = { whiteout: t('涂白块'), text: t('文字'), rect: t('矩形'),
-                  ellipse: t('椭圆'), line: t('直线'), replace: t('替换文字') };
+                  ellipse: t('椭圆'), line: t('直线'), replace: t('替换文字'),
+                  image: t('图片') };
   if (els.objBarName) els.objBarName.textContent = names[obj.kind] || t('对象');
   objBarId = obj.id;
 
@@ -3389,6 +3390,8 @@ function bindToolbar() {
       const busy = document.body.classList.contains('edit-mode')
         || !!(state.stage && state.stage.id);
       if (busy && !confirm(t('切换语言会重新载入页面，未保存的改动会丢失。继续吗？'))) return;
+      
+      snapshotOpenTabs();
       setLang(nextLang());
     });
   }
@@ -3642,6 +3645,54 @@ function cacheAllEls() {
     'btnInsertImage', 'imagePicker',
   ]);
   els.sideBody = document.querySelector('.side-body');
+}
+
+const LANG_REOPEN_KEY = 'pdfviewer:reopen';
+
+function snapshotOpenTabs() {
+  const cur = tabs.active();
+  const open = [];
+  for (const tab of tabs.list()) {
+    if (tab.home || !tab.path) continue;   
+    const page = (cur && tab.id === cur.id)
+      ? state.currentPage
+      : (tab.snap && tab.snap.state ? tab.snap.state.currentPage : 1);
+    open.push({
+      path: tab.path,
+      name: tab.name,
+      docId: tab.docId || null,
+      page: page || 1,
+    });
+  }
+  try {
+    sessionStorage.setItem(LANG_REOPEN_KEY, JSON.stringify({
+      open,
+      activePath: cur && !cur.home ? cur.path : null,
+    }));
+  } catch (e) {  }
+}
+
+async function restoreOpenTabs() {
+  let data = null;
+  try {
+    const raw = sessionStorage.getItem(LANG_REOPEN_KEY);
+    sessionStorage.removeItem(LANG_REOPEN_KEY);
+    data = raw ? JSON.parse(raw) : null;
+  } catch (e) { return; }
+  if (!data || !Array.isArray(data.open) || !data.open.length) return;
+
+  for (const item of data.open) {
+    if (!item || !item.path) continue;
+    try {
+      await loadPdfFromPath(item.path, item.name, item.docId);
+      const page = Math.max(1, Number(item.page) || 1);
+      if (page > 1) goToPage(page);
+    } catch (e) {
+      
+    }
+  }
+  const back = data.activePath && tabs.findByPath(data.activePath);
+  if (back) tabs.activate(back.id);
 }
 
 async function init() {

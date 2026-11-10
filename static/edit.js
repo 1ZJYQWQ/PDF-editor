@@ -106,6 +106,19 @@ export function pdfToNorm(pageNum, x, y, w, h) {
 
 
 
+
+
+function ensureObjectIds() {
+  let fixed = false;
+  const seen = new Set();
+  for (const o of editState.objects) {
+    if (!o || typeof o !== 'object') continue;
+    if (!o.id || seen.has(o.id)) { o.id = uid(); fixed = true; }
+    seen.add(o.id);
+  }
+  if (fixed) scheduleSave();
+}
+
 export async function loadEdits(docId) {
   
   
@@ -118,6 +131,7 @@ export async function loadEdits(docId) {
     const data = await api(`/api/edits?doc=${encodeURIComponent(docId)}`);
     const p = data.pages || {};
     editState.objects = Array.isArray(data.objects) ? data.objects : [];
+    ensureObjectIds();
     editState.pages = {
       order: p.order || null,
       delete: Array.isArray(p.delete) ? p.delete : [],
@@ -1342,6 +1356,10 @@ export function setEditMode(on) {
     editState.selectedId = null;
     editState.tempShape = null;
   }
+  
+  
+  
+  if (editState.on && !editState.tool) editState.tool = 'select';
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
   

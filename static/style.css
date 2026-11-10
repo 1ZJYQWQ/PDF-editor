@@ -1078,9 +1078,15 @@ body.dark .obj-bar { background: #3f3f47; }
 
 .ob-btn:hover { background: rgba(255, 255, 255, 0.12); }
 
-.ob-btn.danger { color: #fca5a5; }
+.ob-btn.danger {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.16);
+}
 
-.ob-btn.danger:hover { background: rgba(239, 68, 68, 0.22); }
+.ob-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.32);
+  color: #fff;
+}
 
 @keyframes popIn {
   from { opacity: 0; transform: translateY(4px) scale(0.97); }
@@ -2470,6 +2476,9 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
   .search-input { width: 132px; }
   .search-input:focus { width: 168px; }
 }
+
+.lang-btn { min-width: 34px; justify-content: center; }
+.lang-btn .lbl { display: inline; }
 
 .ac-src {
   font-size: 10px;

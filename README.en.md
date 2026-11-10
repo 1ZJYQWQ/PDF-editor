@@ -42,7 +42,7 @@ difference is the shell around it:
 | Package | Size | What it is |
 |---|---|---|
 | `PDFViewer-1.1.5-pre-electron-setup.exe` | 96 MB | **Standalone window · installer.** Bundles Chromium, so it doesn't matter whether Edge is installed. Installs to `%LOCALAPPDATA%\Programs\PDFViewer`, no UAC prompt. Desktop shortcut, removable from Apps & Features, can be set as the default PDF handler. |
-| `PDFViewer-1.1.5-pre-electron-portable.zip` | 125 MB | **Standalone window · portable.** Unzip and run. Writes nothing to the registry. |
+| `PDFViewer-1.1.5-pre-electron.zip` | 125 MB | **Standalone window · portable.** Unzip and run. Writes nothing to the registry. |
 | `PDFViewer-1.1.5-pre-setup.exe` | 12 MB | **Browser tab · installer.** Small; opens in your default browser. Installs to `%LOCALAPPDATA%\Programs\PDFViewer-Browser`, so it coexists with the standalone build. |
 | `PDFViewer-1.1.5-pre-win64.zip` | 16 MB | **Browser tab · portable.** Unzip and run `PDFViewer.exe`. Don't drag out just the exe; the `_internal` folder next to it is the runtime. |
 
@@ -89,7 +89,7 @@ Compress-Archive dist\PDFViewer\* dist\PDFViewer-1.1.5-pre-win64.zip
 
 # 3) Both Electron packages
 npx electron-builder --win
-Compress-Archive release\win-unpacked\* release\PDFViewer-1.1.5-pre-electron-portable.zip
+Compress-Archive release\win-unpacked\* release\PDFViewer-1.1.5-pre-electron.zip
 ```
 
 `pdfviewer.iss` (Inno Setup) is kept as an equivalent alternative if you have ISCC.

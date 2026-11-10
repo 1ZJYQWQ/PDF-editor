@@ -37,7 +37,7 @@
 | 包 | 大小 | 说明 |
 |---|---|---|
 | `PDFViewer-1.1.5-pre-electron-setup.exe` | 96 MB | **独立窗口版 · 安装**。自带 Chromium 内核，系统里装没装 Edge 都无所谓；装到 `%LOCALAPPDATA%\Programs\PDFViewer`，不弹 UAC |
-| `PDFViewer-1.1.5-pre-electron-portable.zip` | 125 MB | **独立窗口版 · 免安装**。解压即用，不写注册表 |
+| `PDFViewer-1.1.5-pre-electron.zip` | 125 MB | **独立窗口版 · 免安装**。解压即用，不写注册表 |
 | `PDFViewer-1.1.5-pre-setup.exe` | 12 MB | **浏览器版 · 安装**。体积小，用你默认的浏览器打开；装到 `%LOCALAPPDATA%\Programs\PDFViewer-Browser`，与上面互不干扰 |
 | `PDFViewer-1.1.5-pre-win64.zip` | 16 MB | **浏览器版 · 免安装**。解压后双击 `PDFViewer.exe`，别只把 exe 拖出来，旁边的 `_internal` 是运行库 |
 
@@ -80,7 +80,7 @@ Compress-Archive dist\PDFViewer\* dist\PDFViewer-1.1.5-pre-win64.zip
 
 # 3) Electron 两种包
 npx electron-builder --win
-Compress-Archive release\win-unpacked\* release\PDFViewer-1.1.5-pre-electron-portable.zip
+Compress-Archive release\win-unpacked\* release\PDFViewer-1.1.5-pre-electron.zip
 ```
 
 `pdfviewer.iss`（Inno Setup）也留着，装了 ISCC 的话编出来等价。

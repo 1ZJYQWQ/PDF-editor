@@ -142,7 +142,7 @@ export function movedPosition(orig, d) {
 
 
 
-export function resizedRect(orig, corner, d) {
+export function resizedRect(orig, corner, d, keepRatio = false) {
   const MIN = 6;
   const east = corner.indexOf('e') >= 0;    
   const north = corner.indexOf('n') >= 0;   
@@ -160,6 +160,30 @@ export function resizedRect(orig, corner, d) {
   } else {
     y = y + d.dy;                 
     h = h - d.dy;
+  }
+
+  
+
+
+  if (keepRatio && orig.w > 0 && orig.h > 0) {
+    const ratio = orig.w / orig.h;
+    let nw, nh;
+    if (Math.abs(w / orig.w - 1) >= Math.abs(h / orig.h - 1)) {
+      nw = w;
+      nh = w / ratio;
+    } else {
+      nh = h;
+      nw = h * ratio;
+    }
+    
+    if (nw < MIN) { nw = MIN; nh = MIN / ratio; }
+    if (nh < MIN) { nh = MIN; nw = MIN * ratio; }
+    
+    if (!east) x = orig.x + orig.w - nw;
+    else x = orig.x;
+    if (!north) y = orig.y + orig.h - nh;
+    else y = orig.y;
+    return { x, y, w: nw, h: nh };
   }
 
   

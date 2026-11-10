@@ -32,8 +32,8 @@ function setAuto(on) {
   try { localStorage.setItem(AUTO_KEY, on ? '1' : '0'); } catch (e) {  }
 }
 
-async function fetchUpdate() {
-  const r = await fetch('/api/update');
+async function fetchUpdate(force) {
+  const r = await fetch('/api/update' + (force ? '?force=1' : ''));
   const d = await r.json();
   if (d && d.current) current = d.current;
   return d;
@@ -81,7 +81,7 @@ async function doCheck(force) {
     if (!force && cached && Date.now() - cached.at < CACHE_MS) {
       data = cached.data;
     } else {
-      data = await fetchUpdate();
+      data = await fetchUpdate(!!force);
       if (data && data.ok) writeCache(data);
     }
     paintVer();

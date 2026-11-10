@@ -35,6 +35,9 @@ export const editState = {
   selectedId: null,          
   dirty: false,              
   tempShape: null,           
+  
+  
+  keepRatio: true,
 };
 
 let bound = false;
@@ -1433,6 +1436,13 @@ export function bindEditUI() {
     const cv = els.editColorValue;
     if (cv) cv.textContent = currentColor();
   });
+
+  if (els.chkKeepRatio) {
+    els.chkKeepRatio.checked = editState.keepRatio !== false;
+    els.chkKeepRatio.addEventListener('change', () => {
+      editState.keepRatio = els.chkKeepRatio.checked;
+    });
+  }
 
   els.btnEditClear && els.btnEditClear.addEventListener('click', () => {
     if (!editState.objects.length) { toast(t('没有编辑对象'), 1400); return; }

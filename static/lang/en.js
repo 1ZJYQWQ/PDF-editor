@@ -1,6 +1,5 @@
 
 
-
 export default {
 
   
@@ -302,7 +301,6 @@ export default {
   '打印窗口被浏览器拦截，请允许弹出窗口': 'The print window was blocked — please allow pop-ups',
   '请先完成当前输入（确定 / 取消）再导出': 'Finish the current input (OK / Cancel) before exporting',
 
-
   
 
   '新建失败 ({status})': 'Could not create ({status})',
@@ -512,4 +510,7 @@ export default {
   '上传失败': 'Upload failed',
   '已插入图片：拖动移动，拖四角缩放':
     'Image inserted — drag to move, drag the corners to resize',
+  '锁比例': 'Lock ratio',
+  '拖四角缩放时保持原比例（按住 Shift 可临时锁住）':
+    'Keep the original proportions when resizing (hold Shift to lock temporarily)',
 };

@@ -32,10 +32,17 @@
 
 ## 快速开始
 
-**Windows 安装版**：`PDFViewer-1.1.0-pre-electron-setup.exe`，自带浏览器内核，独立窗口（不依赖 Edge），装完有桌面图标、能从「应用和功能」卸载，可以设为默认的 PDF 打开方式。
-安装时可以选「仅为我安装」（`%LOCALAPPDATA%\Programs`，不弹 UAC）或「为所有用户安装」。
+每次发布给四个 Windows 包，功能完全一样（同一份后端），区别只在「外壳」：
 
-**Windows 免安装**：`PDFViewer-1.1.0-pre-win64.zip`，解压后双击 `PDFViewer.exe`。别只把 exe 拖出来，旁边的 `_internal` 是运行库。
+| 包 | 大小 | 说明 |
+|---|---|---|
+| `PDFViewer-1.1.5-pre-electron-setup.exe` | 96 MB | **独立窗口版 · 安装**。自带 Chromium 内核，系统里装没装 Edge 都无所谓；装到 `%LOCALAPPDATA%\Programs\PDFViewer`，不弹 UAC |
+| `PDFViewer-1.1.5-pre-electron-portable.zip` | 125 MB | **独立窗口版 · 免安装**。解压即用，不写注册表 |
+| `PDFViewer-1.1.5-pre-setup.exe` | 12 MB | **浏览器版 · 安装**。体积小，用你默认的浏览器打开；装到 `%LOCALAPPDATA%\Programs\PDFViewer-Browser`，与上面互不干扰 |
+| `PDFViewer-1.1.5-pre-win64.zip` | 16 MB | **浏览器版 · 免安装**。解压后双击 `PDFViewer.exe`，别只把 exe 拖出来，旁边的 `_internal` 是运行库 |
+
+两个版本共用同一份数据（`%APPDATA%\PDFViewer`），可以同时装、换着用，
+标注和编辑记录都在。
 
 编辑数据、导出暂存都在 `%APPDATA%\PDFViewer`，删程序文件夹不影响它们。
 卸载时会问一句要不要一并删掉，不点「是」就留着。
@@ -54,14 +61,29 @@ python server.py --dir "你的 PDF 目录"
 常用命令：
 
 ```bash
-python run_tests.py        # 全部测试（17 个套件）
+python run_tests.py        # 全部测试（20 个套件）
 python check.py            # 前端静态自检
 python fontcheck.py x.ttf  # 换字体前体检
 pip install pyinstaller && python -m PyInstaller pdfviewer.spec   # 自己打 exe
 ```
 
-打安装包要另外装 Inno Setup（`winget install JRSoftware.InnoSetup`），然后：
-`ISCC.exe pdfviewer.iss` → `dist\PDFViewer-1.1.0-pre-setup.exe`。
+四个包怎么打（在项目根目录）：
+
+```powershell
+# 1) 后端目录版 + 浏览器免安装
+python -m PyInstaller pdfviewer.spec --noconfirm
+Compress-Archive dist\PDFViewer\* dist\PDFViewer-1.1.5-pre-win64.zip
+
+# 2) 浏览器版安装包（用 electron-builder 缓存里的 makensis，不必另装 NSIS）
+& "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe" `
+  -DVERSION=1.1.5-pre -DVERNUM=1.1.5.0 packaging\installer.nsi
+
+# 3) Electron 两种包
+npx electron-builder --win
+Compress-Archive release\win-unpacked\* release\PDFViewer-1.1.5-pre-electron-portable.zip
+```
+
+`pdfviewer.iss`（Inno Setup）也留着，装了 ISCC 的话编出来等价。
 
 ---
 

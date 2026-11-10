@@ -1733,7 +1733,9 @@ function dragResizeObject(e) {
   const dxs = e.clientX - st.startX;
   const dys = e.clientY - st.startY;
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
-  updateObject(st.id, resizedRect(st.orig, st.corner, d));
+  
+  const lock = editState.keepRatio || e.shiftKey;
+  updateObject(st.id, resizedRect(st.orig, st.corner, d, lock));
 }
 
 function onEditMouseMove(e) {
@@ -3620,6 +3622,7 @@ function cacheAllEls() {
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
     'sidePanel', 'sideClose', 'sideTitle',
     'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
+    'chkKeepRatio',
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
     'objBar', 'objBarName', 'objBarFront', 'objBarBack', 'objBarDel',

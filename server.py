@@ -1980,7 +1980,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_update(self, query):
         now = time.time()
-        if _update_cache["data"] and now - _update_cache["at"] < UPDATE_TTL:
+        force = bool(query.get("force"))
+        if (not force and _update_cache["data"]
+                and now - _update_cache["at"] < UPDATE_TTL):
             return self.send_json(_update_cache["data"])
 
         url = ("https://api.github.com/repos/%s/releases?per_page=20"

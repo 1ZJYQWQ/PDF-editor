@@ -1,7 +1,7 @@
 
 import re
 
-VERSION = "1.1.0-pre"
+VERSION = "1.1.5-pre"
 
 _NUM = re.compile(r"^\d+")
 

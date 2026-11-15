@@ -2125,10 +2125,10 @@ async function fetchParagraphs(page) {
 }
 
 function itemRectPdf(item) {
-  const t = item.transform || [1, 0, 0, 1, 0, 0];
-  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
+  const tfm = item.transform || [1, 0, 0, 1, 0, 0];
+  const h = Math.abs(Math.hypot(tfm[2], tfm[3])) || 10;
   const w = Math.abs(item.width || 0);
-  return [t[4], t[5], t[4] + w, t[5] + h];
+  return [tfm[4], tfm[5], tfm[4] + w, tfm[5] + h];
 }
 
 function joinItemsByLines(picked) {
@@ -2366,9 +2366,10 @@ async function openParaPop(rec, clientX, clientY) {
 
 function updateParaCount() {
   if (!els.paraCount) return;
-  const t = (els.paraText && els.paraText.value) || '';
 
-  const n = [...t.replace(/\s/g, '')].length;
+  const text = (els.paraText && els.paraText.value) || '';
+
+  const n = [...text.replace(/\s/g, '')].length;
   els.paraCount.textContent = t('{n} 字', { n });
 }
 
@@ -3221,9 +3222,11 @@ function bindToolbar() {
       const act = btn.dataset.act;
 
       if (act === 'copy') {
-        const t = pendingSel ? pendingSel.text : window.getSelection()?.toString();
-        if (t) {
-          navigator.clipboard.writeText(t).then(
+
+        const selText = pendingSel ? pendingSel.text
+                                   : window.getSelection()?.toString();
+        if (selText) {
+          navigator.clipboard.writeText(selText).then(
             () => toast(t('已复制到剪贴板'), 1200),
             () => toast(t('复制失败'))
           );

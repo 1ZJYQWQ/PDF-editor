@@ -406,8 +406,8 @@ export function paintPageEdits(rec) {
   }
 
   if (editState.tempShape && editState.tempShape.page === rec.num) {
-    const t = renderObjectEl(editState.tempShape, rec, true);
-    if (t) layer.appendChild(t);
+    const node = renderObjectEl(editState.tempShape, rec, true);
+    if (node) layer.appendChild(node);
   }
 }
 
@@ -498,10 +498,10 @@ function renderObjectEl(obj, rec, isTemp = false) {
     el.style.border = '1.5px dashed #d97706';
     el.style.background = 'rgba(217, 119, 6, 0.12)';
     el.classList.add('ed-replace');
-    const t = document.createElement('span');
-    t.className = 'ed-replace-text';
-    t.textContent = obj.text || '';
-    el.appendChild(t);
+    const label = document.createElement('span');
+    label.className = 'ed-replace-text';
+    label.textContent = obj.text || '';
+    el.appendChild(label);
   } else if (obj.kind === 'image') {
 
     el.classList.add('ed-image');
@@ -1376,8 +1376,8 @@ export function bindEditUI() {
   if (els.editPalette) {
     els.editPalette.querySelectorAll('[data-tool]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const t = btn.dataset.tool;
-        setTool(editState.tool === t ? null : t);
+        const picked = btn.dataset.tool;
+        setTool(editState.tool === picked ? null : picked);
       });
     });
   }

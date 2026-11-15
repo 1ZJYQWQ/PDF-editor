@@ -207,6 +207,21 @@ def main():
         else:
             results.append(f"OK   {f} 标识符检查通过")
 
+    t_shadow = []
+    for f in FILES:
+        if "/static/i18n.js" not in srcs[f]:
+            continue
+        for i, line in enumerate(srcs[f].splitlines(), 1):
+            if re.search(r"\b(?:const|let|var)\s+t\s*=", line):
+                t_shadow.append("%s:%d  %s" % (f, i, line.strip()[:60]))
+    if t_shadow:
+        problems += len(t_shadow)
+        results.append("FAIL 有变量名叫 t，遮蔽了翻译函数（改名即可）:")
+        for s in t_shadow:
+            results.append("       " + s)
+    else:
+        results.append("OK   没有变量遮蔽翻译函数 t")
+
     exports_map = {f"/static/{f}": find_exports(srcs[f]) for f in FILES}
     for f in FILES:
         for names, mod in find_imports(srcs[f]):

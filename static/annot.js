@@ -568,14 +568,14 @@ async function pageTextItems(pageNum) {
 }
 
 function itemRectPdf(item, start, end) {
-  const t = item.transform || [1, 0, 0, 1, 0, 0];
-  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
+  const tfm = item.transform || [1, 0, 0, 1, 0, 0];
+  const h = Math.abs(Math.hypot(tfm[2], tfm[3])) || 10;
   const len = (item.str || '').length || 1;
   const w = Math.abs(item.width || 0);
   const s = Math.max(0, Math.min(start, len));
   const e = Math.max(s, Math.min(end, len));
-  const x = t[4];
-  const y = t[5];
+  const x = tfm[4];
+  const y = tfm[5];
 
   return [x + (s / len) * w, y, x + (e / len) * w, y + h];
 }

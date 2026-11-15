@@ -1,15 +1,8 @@
-
-
-
-
 export const SUPPORTED = ['zh', 'en'];
-
 
 export const LANG_LABEL = { zh: '简体中文', en: 'English' };
 
-
 export const LANG_SHORT = { zh: '中', en: 'EN' };
-
 
 const LANG_TAG = { zh: 'zh-CN', en: 'en' };
 
@@ -22,8 +15,6 @@ export function currentLang() {
   return lang;
 }
 
-
-
 export function t(msgid, vars) {
   if (msgid === undefined || msgid === null) return '';
   const s = Object.prototype.hasOwnProperty.call(dict, msgid) ? dict[msgid] : msgid;
@@ -32,7 +23,6 @@ export function t(msgid, vars) {
     Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m
   ));
 }
-
 
 export function has(msgid) {
   return Object.prototype.hasOwnProperty.call(dict, msgid);
@@ -49,8 +39,6 @@ function detectLang() {
   try { saved = localStorage.getItem(STORE_KEY); } catch (e) {  }
   if (saved && SUPPORTED.includes(saved)) return saved;
 
-  
-
   const nav = String(navigator.language || 'zh').toLowerCase();
   return nav.startsWith('zh') ? 'zh' : 'en';
 }
@@ -61,15 +49,13 @@ async function loadDict(code) {
   return mod.default || Object.create(null);
 }
 
-
-
 export async function initI18n() {
   lang = detectLang();
   if (lang !== 'zh') {
     try {
       dict = await loadDict(lang);
     } catch (e) {
-      
+
       console.warn('[i18n] 语言包加载失败，回退中文：', lang, e);
       lang = 'zh';
       dict = Object.create(null);
@@ -80,13 +66,8 @@ export async function initI18n() {
   return lang;
 }
 
-
-
 export function applyDom(root) {
   const scope = root || document;
-
-  
-
 
   scope.querySelectorAll('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n');
@@ -105,23 +86,17 @@ export function applyDom(root) {
     if (key) el.setAttribute('aria-label', t(key));
   });
 
-  
-
-
   scope.querySelectorAll('[data-i18n-html]').forEach((el) => {
     const key = el.getAttribute('data-i18n-html');
     if (key) el.innerHTML = t(key);
   });
 }
 
-
-
 export function setLang(next) {
   if (!SUPPORTED.includes(next) || next === lang) return;
   try { localStorage.setItem(STORE_KEY, next); } catch (e) {  }
   location.reload();
 }
-
 
 export function nextLang() {
   const i = SUPPORTED.indexOf(lang);

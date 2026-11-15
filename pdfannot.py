@@ -1,4 +1,3 @@
-
 import time
 
 from pdfedit import Name, Ref

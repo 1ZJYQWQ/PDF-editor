@@ -1,5 +1,3 @@
-
-
 import { state, els, blankState } from '/static/core.js';
 import { t } from '/static/i18n.js';
 import { annState } from '/static/annot.js';
@@ -7,12 +5,12 @@ import {
   editState, snapshotHistory, restoreHistory, syncEditModeUI,
 } from '/static/edit.js';
 
-let host = null;                 
-const tabs = [];                 
+let host = null;
+const tabs = [];
 let activeId = null;
 let seq = 0;
 let homeTab = null;
-let welcomePane = null;          
+let welcomePane = null;
 let panesEl = null;
 let stripEl = null;
 
@@ -89,7 +87,7 @@ function takeSnap() {
 }
 
 function applySnap(snap) {
-  
+
   Object.assign(state, blankState(), snap.state);
   Object.assign(annState, snap.ann);
   Object.assign(editState, snap.edit);
@@ -99,8 +97,7 @@ function applySnap(snap) {
 function showPane(tab, restoreScroll = true) {
   activeId = tab.id;
   for (const x of tabs) x.pane.hidden = x.id !== tab.id;
-  
-  
+
   els.pages = tab.pane;
   document.body.classList.toggle('on-home', !!tab.home);
   if (els.searchInput) els.searchInput.value = (restoreScroll && tab.snap && tab.snap.query) || '';
@@ -157,7 +154,7 @@ export function close(id) {
   const idx = tabs.findIndex(x => x.id === id);
   if (idx < 0) return false;
   const tab = tabs[idx];
-  if (tab.home) return false;                       
+  if (tab.home) return false;
   if (host && host.confirmClose && host.confirmClose(tab) === false) return false;
 
   const wasActive = tab.id === activeId;
@@ -168,7 +165,7 @@ export function close(id) {
   tabs.splice(idx, 1);
 
   if (wasActive) {
-    
+
     const next = tabs[Math.min(idx, tabs.length - 1)];
     if (next.home) {
       resetAll();
@@ -206,7 +203,7 @@ function isDirty(tab) {
 
 export function refreshBar() {
   if (!stripEl) return;
-  stripEl.hidden = false;      
+  stripEl.hidden = false;
   const frag = document.createDocumentFragment();
 
   for (const tab of tabs) {
@@ -233,7 +230,6 @@ export function refreshBar() {
       item.appendChild(dot);
     }
 
-    
     if (!tab.home) {
       const x = document.createElement('button');
       x.className = 'tab-close';
@@ -257,7 +253,6 @@ export function refreshBar() {
   stripEl.innerHTML = '';
   stripEl.appendChild(frag);
 
-  
   const on = stripEl.querySelector('.tab-item.on');
   if (on && on.scrollIntoView) {
     try { on.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {  }
@@ -277,7 +272,7 @@ export function bindStrip() {
     if (e.target.closest('.tab-close')) { close(item.dataset.id); return; }
     activate(item.dataset.id);
   });
-  
+
   stripEl.addEventListener('auxclick', (e) => {
     if (e.button !== 1) return;
     const item = e.target.closest('.tab-item');
@@ -286,7 +281,7 @@ export function bindStrip() {
       close(item.dataset.id);
     }
   });
-  
+
   stripEl.addEventListener('wheel', (e) => {
     if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
     if (stripEl.scrollWidth <= stripEl.clientWidth) return;

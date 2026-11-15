@@ -1,7 +1,3 @@
-
-
-
-
 import { t } from '/static/i18n.js';
 import * as pdfjsLib from '/static/vendor/pdf.min.mjs';
 
@@ -9,12 +5,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdf.worker.min.mjs';
 
 export { pdfjsLib };
 
-
 if (typeof window !== 'undefined' && window.__PDFVIEW_DEBUG__ === undefined) {
   window.__PDFVIEW_DEBUG__ = false;
 }
-
-
 
 export function blankState() {
   return {
@@ -37,13 +30,12 @@ export function blankState() {
     outlinMap: new Map(),
     viewMode: 'single',
     annotMode: false,
-    bookmarks: new Set(),
+    bookmarks: new Map(),
     contentPath: null,
     savedPath: null,
     stage: { id: null, path: null },
   };
 }
-
 
 export const state = {
   pdf: null,
@@ -63,21 +55,19 @@ export const state = {
   searchHitsByPage: new Map(),
   hitIndex: -1,
   outlinMap: new Map(),
-  viewMode: 'single',   
+  viewMode: 'single',
   annotMode: false,
-  bookmarks: new Set(), 
 
-  
-  
-  
-  
-  
+  bookmarks: new Map(),
+  bmSort: 'page',
+
   contentPath: null,
-  
-  
+
   savedPath: null,
-  
+
   stage: { id: null, path: null },
+
+  exportPassword: null,
 };
 
 export const els = {};
@@ -125,13 +115,10 @@ export function hideLoading() {
   if (els.loading) els.loading.classList.add('hide');
 }
 
-
-
 export function errText(d) {
   const raw = d && (d.code || d.error);
   return raw ? t(raw) : '';
 }
-
 
 export async function api(url, opts = {}) {
   const init = { method: opts.method || 'GET' };

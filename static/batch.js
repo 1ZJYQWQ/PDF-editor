@@ -1,7 +1,3 @@
-
-
-
-
 import { t } from '/static/i18n.js';
 import { state, $, escapeHtml, toast , errText} from '/static/core.js';
 import { exportPdf, downloadServerFile } from '/static/edit.js';
@@ -19,9 +15,6 @@ export function initBatchUI(h) {
   bindRangeExport();
 }
 
-
-
-
 const keyOf = (h) =>
   `${h.page}:${h.para}:${h.cell ? h.cell[0] + '.' + h.cell[1] : ''}`;
 
@@ -31,8 +24,6 @@ const labelOf = (h) =>
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-
 
 function markPreview(text, term, ignoreCase) {
   if (!term) return escapeHtml(text);
@@ -51,7 +42,6 @@ function markPreview(text, term, ignoreCase) {
   return out;
 }
 
-
 function placePop(pop, anchor) {
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
@@ -64,9 +54,6 @@ function placePop(pop, anchor) {
   pop.style.left = Math.max(12, left) + 'px';
   pop.style.top = top + 'px';
 }
-
-
-
 
 let hits = [];
 let picked = new Set();
@@ -101,7 +88,7 @@ function bindFindReplace() {
       syncPickButtons();
       return;
     }
-    
+
     hooks.goToPage(h.page);
     hooks.flashBoxes(h.page, h.boxes);
   });
@@ -203,7 +190,7 @@ async function doReplace(onlyPicked) {
       name: state.fileName,
     };
     if (targets) body.targets = targets;
-    
+
     if (state.stage && state.stage.id) body.stage = state.stage.id;
 
     const r = await fetch('/api/replace_all', {
@@ -241,7 +228,6 @@ async function doReplace(onlyPicked) {
       (skipped ? t('；跳过：{v}', { v: decodeURIComponent(skipped) }) : ''),
       skipped ? 6000 : 3800);
 
-    
     await doFind();
   } catch (e) {
     $('bpCount').textContent = before;
@@ -252,9 +238,6 @@ async function doReplace(onlyPicked) {
     syncPickButtons();
   }
 }
-
-
-
 
 function bindTermRedact() {
   const btn = $('btnTermRedact');
@@ -269,8 +252,6 @@ function bindTermRedact() {
   $('termCancel').addEventListener('click', () => { pop.hidden = true; });
   $('termOk').addEventListener('click', runTermRedact);
 
-  
-  
   const sel = $('termMode');
   if (sel) {
     const paint = () => {
@@ -296,8 +277,6 @@ async function runTermRedact() {
   const src = state.contentPath || state.filePath;
   if (!src) { toast(t('请先打开一个文档'), 1600); return; }
 
-  
-  
   const sel = ($('termMode') && $('termMode').value) || 'delete';
   const style = sel.startsWith('redact') ? 'redact' : 'delete';
   const mode = style === 'redact' ? sel.slice(7) : null;
@@ -354,7 +333,6 @@ async function runTermRedact() {
 
     $('termPop').hidden = true;
 
-    
     let msg;
     let bad;
     if (style === 'delete') {
@@ -366,8 +344,7 @@ async function runTermRedact() {
       const skipped = r.headers.get('X-Delete-Skipped') || '';
       const check = residue == null ? '' :
         (residue === '0' ? t('，复查残留 0 处') : t('，⚠ 复查仍有 {residue} 处残留', { residue }));
-      
-      
+
       const more = remaining > 0 ? t('；还有 {remaining} 段没处理，请再点一次', { remaining }) : '';
       msg = t('已删掉 {removed} 处（{edits} 段）{check}', { removed, edits, check }) +
         (missing ? t('；没找到：{v}', { v: decodeURIComponent(missing) }) : '') +
@@ -392,9 +369,6 @@ async function runTermRedact() {
     btn.textContent = t('删除并另存为…');
   }
 }
-
-
-
 
 function bindRangeExport() {
   const btn = $('btnRange');
@@ -440,7 +414,6 @@ async function runSplit() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(errText(d) || t('拆分失败 ({status})', { status: r.status }));
 
-    
     const pop = $('rangePop');
     let box = pop.querySelector('.split-list');
     if (!box) {

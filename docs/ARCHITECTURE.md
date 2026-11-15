@@ -35,7 +35,9 @@ edits/<hash>.json          编辑对象与页面操作
   pdfannot.py         批注 → PDF 原生注释（/Annots、/QuadPoints、UTF-16BE 备注）
   pdfpara.py          段落模型（按行距与首行缩进聚行、聚段）
   pdfreflow.py        ★ 段落重排（重新折行 + 页内下移 + 跨页续排）
+                       / 表格横线 table_rules（唯一入口）/ 删整行 / 插一行
   pdfbatch.py         批量：查找替换 / 按词删除并重排 / 按词涂黑 / 范围导出 / 拆分 / 合并
+  pdfnew.py           新建空白 PDF（纸张 / 页数 / 横向）
   pdffont.py          ★ TrueType 子集化（glyf 重排 + 复合字形重映射）
   check.py            前端静态自检
   fontcheck.py        字体骨架 + 字重体检
@@ -59,6 +61,9 @@ edits/<hash>.json          编辑对象与页面操作
   editapi_test.py     编辑 API（25 项）
   redactapi_test.py   涂黑 API（28 项）
   pdfbatch_test.py    批量操作（52 项，样本自造）
+  newpdf_test.py      新建空白 PDF（24 项）
+  rules_test.py       表格横线的坐标口径（14 项）
+  droprow_test.py     删表格行（21 项，样本自造）
   cascade_test.py     连锁跨页（7 项）
   ctm_test.py         图形平移的 CTM 处理（14 项）
   objstm_test.py      对象流 / 交叉引用流解析（9 项）

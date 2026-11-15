@@ -1,10 +1,8 @@
-
-
 import { t } from '/static/i18n.js';
 
-const CACHE_KEY = 'pdfviewer:update-cache';   
-const AUTO_KEY = 'pdfviewer:update-auto';     
-const CACHE_MS = 6 * 3600 * 1000;             
+const CACHE_KEY = 'pdfviewer:update-cache';
+const AUTO_KEY = 'pdfviewer:update-auto';
+const CACHE_MS = 6 * 3600 * 1000;
 const REPO_URL = 'https://github.com/1ZJYQWQ/PDF-editor/releases';
 
 let current = '';
@@ -61,8 +59,7 @@ function render(data) {
     showMsg(t('有新版本 {v}', { v: data.latest }), 'new');
     if (link) {
       link.dataset.url = data.url || REPO_URL;
-      
-      
+
       link.title = t('去下载') + (data.tag ? ' · ' + data.tag : '');
     }
     return;
@@ -99,7 +96,7 @@ export function bindWelcomeUpdate() {
   if (!box) return;
 
   if (!current) {
-    
+
     fetch('/api/ping').then(r => r.json()).then(d => {
       if (d && d.version) { current = d.version; paintVer(); }
     }).catch(() => {});
@@ -131,7 +128,6 @@ export function bindWelcomeUpdate() {
     });
   }
 
-  
   if (autoEnabled()) {
     const cached = readCache();
     if (cached && Date.now() - cached.at < CACHE_MS) {

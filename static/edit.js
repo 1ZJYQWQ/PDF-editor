@@ -1,7 +1,3 @@
-
-
-
-
 import { t } from '/static/i18n.js';
 import { state, els, api, toast, uid , errText} from '/static/core.js';
 
@@ -18,53 +14,43 @@ import {
 
 import { annotationsToPdfItems } from '/static/annot.js';
 
-
-
-
 export const editState = {
-  on: false,                 
-  tool: null,                
-  objects: [],               
-  pages: {                   
-    order: null,             
-    delete: [],              
-    rotate: {},              
-    insert: [],              
+  on: false,
+  tool: null,
+  objects: [],
+  pages: {
+    order: null,
+    delete: [],
+    rotate: {},
+    insert: [],
   },
-  pageInfo: [],              
-  selectedId: null,          
-  dirty: false,              
-  tempShape: null,           
-  
-  
+  pageInfo: [],
+  selectedId: null,
+  dirty: false,
+  tempShape: null,
+
   keepRatio: true,
 };
 
 let bound = false;
 let saveTimer = null;
 
-
 let deps = {
   goToPage: () => {},
   renderPage: () => {},
-  refreshPages: null,        
+  refreshPages: null,
 };
 
 export function bindEditHelpers(inject) {
   deps = { ...deps, ...inject };
 }
 
-
-
-
-
 export function pageSize(pageNum) {
   const info = editState.pageInfo[pageNum - 1];
   if (info && info.width > 0 && info.height > 0) {
     return { width: info.width, height: info.height };
   }
-  
-  
+
   const base = Array.isArray(editState.pageInfo) ? editState.pageInfo.length : 0;
   const ins = editState.pages && editState.pages.insert;
   if (ins && pageNum > base) {
@@ -73,40 +59,29 @@ export function pageSize(pageNum) {
       return { width: spec.width, height: spec.height };
     }
   }
-  
+
   return { width: 595, height: 842 };
 }
-
-
 
 export function screenToNorm(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   return gScreenToNorm(clientX, clientY, r.left, r.top, r.width, r.height);
 }
 
-
 export function normToScreen(rec, nx, ny, nw, nh) {
   const r = rec.wrap.getBoundingClientRect();
   return gNormToScreen(nx, ny, nw, nh, r.width, r.height);
 }
-
-
 
 export function normToPdf(pageNum, nx, ny, nw, nh) {
   const { width, height } = pageSize(pageNum);
   return gNormToPdf(nx, ny, nw, nh, width, height);
 }
 
-
 export function pdfToNorm(pageNum, x, y, w, h) {
   const { width, height } = pageSize(pageNum);
   return gPdfToNorm(x, y, w, h, width, height);
 }
-
-
-
-
-
 
 function ensureObjectIds() {
   let fixed = false;
@@ -120,12 +95,11 @@ function ensureObjectIds() {
 }
 
 export async function loadEdits(docId) {
-  
-  
+
   editState.objects = [];
   editState.pages = { order: null, delete: [], rotate: {}, insert: [] };
   editState.selectedId = null;
-  resetHistory();                       
+  resetHistory();
   if (!docId) { editState.dirty = false; return; }
   try {
     const data = await api(`/api/edits?doc=${encodeURIComponent(docId)}`);
@@ -174,7 +148,7 @@ export async function doSave() {
 
 function updateSaveHint() {
   const el = els.editSaveHint;
-  
+
   document.dispatchEvent(new CustomEvent('pdf:edit-dirty'));
   if (!el) return;
   if (editState.dirty) {
@@ -186,15 +160,10 @@ function updateSaveHint() {
   }
 }
 
-
-
-
 const MAX_HISTORY = 60;
 const history = { past: [], future: [] };
 let lastSnap = null;
 let histTimer = null;
-
-
 
 function takeSnapshot() {
   const objects = editState.objects.map(o => {
@@ -206,13 +175,9 @@ function takeSnapshot() {
   return JSON.stringify({ objects, pages: editState.pages });
 }
 
-
-
 function ensureHistoryBaseline() {
   if (lastSnap === null) lastSnap = takeSnapshot();
 }
-
-
 
 function resetHistory() {
   history.past = [];
@@ -233,8 +198,6 @@ function commitHistory() {
   syncHistoryButtons();
 }
 
-
-
 export function scheduleHistory() {
   if (histTimer) clearTimeout(histTimer);
   histTimer = setTimeout(commitHistory, 350);
@@ -252,10 +215,7 @@ function restoreSnapshot(json) {
   syncHistoryButtons();
 }
 
-
-
 let stageUndoHandler = null;
-
 
 let stagePresent = false;
 
@@ -269,9 +229,9 @@ export function setStagePresent(v) {
 }
 
 export async function undoEdit() {
-  commitHistory();                                   
+  commitHistory();
   if (!history.past.length) {
-    
+
     if (stageUndoHandler) {
       let done = false;
       try { done = await stageUndoHandler(); } catch (e) { done = false; }
@@ -298,8 +258,6 @@ function syncHistoryButtons() {
   if (els.btnEditRedo) els.btnEditRedo.disabled = !history.future.length;
 }
 
-
-
 export function snapshotHistory() {
   return { past: history.past.slice(), future: history.future.slice(), lastSnap };
 }
@@ -311,8 +269,6 @@ export function restoreHistory(h) {
   syncHistoryButtons();
 }
 
-
-
 export function syncEditModeUI() {
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
@@ -322,9 +278,6 @@ export function syncEditModeUI() {
   syncHistoryButtons();
   if (editState.on) refreshPagePanel();
 }
-
-
-
 
 let clipboard = null;
 
@@ -353,12 +306,11 @@ export function pasteObject() {
   pasteObj(cloneObj(clipboard));
 }
 
-
 function pasteObj(base) {
   const D = 14;
   const o = { ...base, id: uid(), page: state.currentPage };
   o.x += D;
-  o.y -= D;                                        
+  o.y -= D;
   if (o.x2 !== undefined && o.x2 !== null) { o.x2 += D; o.y2 -= D; }
   editState.objects.push(o);
   editState.selectedId = o.id;
@@ -367,9 +319,6 @@ function pasteObj(base) {
   repaintEdits();
   toast(t('已粘贴对象'), 900);
 }
-
-
-
 
 export function addObject(obj) {
   ensureHistoryBaseline();
@@ -398,9 +347,7 @@ export function updateObject(id, patch) {
   if (!obj) return false;
   ensureHistoryBaseline();
   Object.assign(obj, patch);
-  
-  
-  
+
   if (!('_norm' in patch)) obj._norm = null;
   scheduleHistory();
   scheduleSave();
@@ -416,9 +363,6 @@ export function clearAllObjects() {
   repaintEdits();
 }
 
-
-
-
 const EDIT_LAYER_CLASS = 'edit-layer';
 
 function ensureLayer(rec) {
@@ -431,14 +375,12 @@ function ensureLayer(rec) {
   return layer;
 }
 
-
 export function repaintEdits() {
   for (const rec of state.pages) {
     if (!rec.rendered) continue;
     paintPageEdits(rec);
   }
-  
-  
+
   syncRedactCount();
   syncReplaceCount();
 }
@@ -447,7 +389,6 @@ export function paintPageEdits(rec) {
   if (!rec) return;
   const layer = ensureLayer(rec);
 
-  
   layer.innerHTML = '';
 
   const mine = editState.objects.filter(o => o.page === rec.num);
@@ -455,26 +396,20 @@ export function paintPageEdits(rec) {
     const el = renderObjectEl(obj, rec);
     if (!el) continue;
     layer.appendChild(el);
-    
-    
-    
+
     measureTextBox(obj, el, rec);
   }
 
-  
   const sel = mine.find(o => o.id === editState.selectedId);
   if (sel && editState.tool === 'select' && RESIZABLE_KINDS.has(sel.kind)) {
     renderResizeHandles(layer, sel, rec);
   }
 
-  
   if (editState.tempShape && editState.tempShape.page === rec.num) {
     const t = renderObjectEl(editState.tempShape, rec, true);
     if (t) layer.appendChild(t);
   }
 }
-
-
 
 function measureTextBox(obj, el, rec) {
   if (obj.kind !== 'text') return;
@@ -492,8 +427,6 @@ function measureTextBox(obj, el, rec) {
   };
 }
 
-
-
 function textBaselineOffset(fontSize, lineHeight) {
   try {
     const ctx = document.createElement('canvas').getContext('2d');
@@ -504,7 +437,7 @@ function textBaselineOffset(fontSize, lineHeight) {
     const content = asc + desc;
     return (fontSize * lineHeight - content) / 2 + asc;
   } catch (e) {
-    
+
     return fontSize * 0.925;
   }
 }
@@ -519,7 +452,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
   const s = normToScreen(rec, p.x, p.y, p.w, p.h);
 
   if (obj.kind === 'line') {
-    
+
     return renderLineEl(obj, rec, isTemp);
   }
 
@@ -532,11 +465,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
   if (obj.kind === 'whiteout') {
     el.style.background = '#ffffff';
   } else if (obj.kind === 'redact') {
-    
-    
-    
-    
-    
+
     el.style.border = '1.5px dashed #dc2626';
     el.style.background = 'rgba(220, 38, 38, 0.14)';
     el.classList.add('ed-redact');
@@ -552,7 +481,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
       el.style.background = hexWithAlpha(obj.color || '#000000', 0.18);
     }
   } else if (obj.kind === 'text') {
-    
+
     const size = (obj.size || 12) * (rec.wrap.getBoundingClientRect().width /
       (pageSize(obj.page).width || 595));
     const fs = Math.max(6, size);
@@ -560,19 +489,12 @@ function renderObjectEl(obj, rec, isTemp = false) {
     el.style.color = obj.color || '#000000';
     el.style.lineHeight = '1.25';
     el.textContent = obj.text || '';
-    
-    
-    
-    
-    
+
     el.style.top = (s.top - textBaselineOffset(fs, 1.25)) + 'px';
-    
-    
+
     makeTextBoxAuto(el);
   } else if (obj.kind === 'replace') {
-    
-    
-    
+
     el.style.border = '1.5px dashed #d97706';
     el.style.background = 'rgba(217, 119, 6, 0.12)';
     el.classList.add('ed-replace');
@@ -581,9 +503,7 @@ function renderObjectEl(obj, rec, isTemp = false) {
     t.textContent = obj.text || '';
     el.appendChild(t);
   } else if (obj.kind === 'image') {
-    
-    
-    
+
     el.classList.add('ed-image');
     const im = document.createElement('img');
     im.alt = '';
@@ -598,12 +518,8 @@ function renderObjectEl(obj, rec, isTemp = false) {
   return el;
 }
 
-
-
 const RESIZABLE_KINDS = new Set(['rect', 'ellipse', 'whiteout', 'redact',
                                  'replace', 'image']);
-
-
 
 function renderResizeHandles(layer, obj, rec) {
   const p = obj._norm || pdfToNorm(obj.page, obj.x, obj.y, obj.w, obj.h);
@@ -635,7 +551,6 @@ function renderLineEl(obj, rec, isTemp) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
 
-  
   const n1 = obj._norm ? { x: obj._norm.x, y: obj._norm.y }
     : pdfToNorm(obj.page, obj.x, obj.y, 0, 0);
   const n2 = obj._norm
@@ -662,10 +577,6 @@ function hexWithAlpha(hex, alpha) {
   const b = parseInt(full.slice(4, 6), 16) || 0;
   return `rgba(${r},${g},${b},${alpha})`;
 }
-
-
-
-
 
 export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
   const r = rec.wrap.getBoundingClientRect();
@@ -696,7 +607,6 @@ export function makeRectObject(rec, pageNum, start, end, kind, opts = {}) {
   };
 }
 
-
 export function makeLineObject(rec, pageNum, start, end, opts = {}) {
   const r = rec.wrap.getBoundingClientRect();
   const w = r.width || 1, h = r.height || 1;
@@ -717,8 +627,6 @@ export function makeLineObject(rec, pageNum, start, end, opts = {}) {
     lineWidth: opts.lineWidth || 1.5,
   };
 }
-
-
 
 export function makeImageObject(pageNum, info) {
   const { width: pw, height: ph } = pageSize(pageNum);
@@ -741,8 +649,6 @@ export function makeImageObject(pageNum, info) {
     w, h,
   };
 }
-
-
 
 export async function insertImageFile(file, at) {
   if (!file) return;
@@ -784,8 +690,7 @@ export async function insertImageFile(file, at) {
                Math.max(1, editState.pageInfo.length || 1));
   const fresh = makeImageObject(page, info);
   if (at && Number.isFinite(at.pdfX) && Number.isFinite(at.pdfY)) {
-    
-    
+
     const ps = pageSize(page);
     fresh.x = Math.min(Math.max(at.pdfX - fresh.w / 2, 0),
                        Math.max(0, ps.width - fresh.w));
@@ -793,7 +698,7 @@ export async function insertImageFile(file, at) {
                        Math.max(0, ps.height - fresh.h));
   }
   const obj = addObject(fresh);
-  
+
   editState.selectedId = obj.id;
   editState.tool = 'select';
   syncToolButtons();
@@ -801,18 +706,12 @@ export async function insertImageFile(file, at) {
   toast(t('已插入图片：拖动移动，拖四角缩放'), 2600);
 }
 
-
-
 export function hitTest(rec, clientX, clientY) {
   const r = rec.wrap.getBoundingClientRect();
   const nx = (clientX - r.left) / (r.width || 1);
   const ny = (clientY - r.top) / (r.height || 1);
   return hitTestNorm(editState.objects, rec.num, nx, ny, pageSize);
 }
-
-
-
-
 
 export function effectiveOrder() {
   const total = state.pageCount;
@@ -865,11 +764,9 @@ export function insertBlank(afterIndex) {
   toast(t('已在末尾插入空白页（滚动到最下方可见）'), 2000);
 }
 
-
 function notifyPagesChanged() {
   document.dispatchEvent(new CustomEvent('pdf:pages-changed'));
 }
-
 
 export function refreshPagePanel() {
   const box = els.pageListBody;
@@ -880,7 +777,6 @@ export function refreshPagePanel() {
   const del = new Set(editState.pages.delete);
   const order = editState.pages.order;
 
-  
   const seq = order ? [...order] : Array.from({ length: total }, (_, i) => i);
 
   const head = document.createElement('div');
@@ -922,7 +818,6 @@ export function refreshPagePanel() {
     box.appendChild(row);
   });
 
-  
   if (editState.pages.insert.length) {
     const ins = document.createElement('div');
     ins.className = 'pm-insert-note';
@@ -952,14 +847,6 @@ export function refreshPagePanel() {
   box.appendChild(hint);
 }
 
-
-
-
-
-
-
-
-
 export function downloadServerFile(path, name) {
   const q = new URLSearchParams({ path, download: '1' });
   if (name) q.set('name', name);
@@ -968,12 +855,11 @@ export function downloadServerFile(path, name) {
   a.download = name || '';
   a.rel = 'noopener';
   a.style.display = 'none';
-  
+
   document.body.appendChild(a);
   a.click();
   setTimeout(() => a.remove(), 0);
 }
-
 
 function downloadBlob(blob, name) {
   const url = URL.createObjectURL(blob);
@@ -983,25 +869,52 @@ function downloadBlob(blob, name) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  
+
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export function buildExportPayload() {
-  
-  
-  
-  
+
   return {
-    
-    
-    
+
     path: state.contentPath || state.filePath,
-    
+
     name: state.fileName,
     pages: editState.pages,
     objects: payloadObjects(editState.objects),
   };
+}
+
+export async function currentPdfBytes() {
+  const payload = buildExportPayload();
+
+  let annots = [];
+  try {
+    annots = await annotationsToPdfItems();
+  } catch (e) {
+    console.warn(t('批注换算失败，打印的副本将不含批注：'), e);
+  }
+  if (annots.length) payload.annotations = annots;
+
+  if (!hasAnyEdit(payload) && !annots.length) {
+    return new Uint8Array(await state.pdf.getData());
+  }
+
+  const r = await fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    let msg = t('生成打印副本失败 ({status})', { status: r.status });
+    try {
+      const j = await r.json();
+      const m = errText(j);
+      if (m) msg = m;
+    } catch (e) {  }
+    throw new Error(msg);
+  }
+  return new Uint8Array(await r.arrayBuffer());
 }
 
 export async function exportPdf(opts = {}) {
@@ -1011,16 +924,14 @@ export async function exportPdf(opts = {}) {
   }
 
   const payload = buildExportPayload();
-  
-  
+
   if (opts.range) payload.range = String(opts.range);
+
+  if (opts.encrypt) payload.encrypt = opts.encrypt;
   const nRedact = redactCount();
   const nReplace = replaceCount();
   const hasSpecial = nRedact > 0 || nReplace > 0;
 
-  
-  
-  
   let annots = [];
   try {
     annots = await annotationsToPdfItems();
@@ -1029,9 +940,6 @@ export async function exportPdf(opts = {}) {
   }
   if (annots.length) payload.annotations = annots;
 
-  
-  
-  
   const noChange = !hasAnyEdit(payload) && !annots.length;
   if (noChange && hasSpecial) {
     toast(t('「导出 PDF」不含涂黑 / 替换。要保存它们请点对应的「并另存为…」') +
@@ -1039,10 +947,6 @@ export async function exportPdf(opts = {}) {
     return;
   }
 
-  
-  
-  
-  
   if (hasSpecial) {
     const parts = [];
     if (nRedact > 0) parts.push(t('涂黑 {nRedact} 处', { nRedact }));
@@ -1059,9 +963,6 @@ export async function exportPdf(opts = {}) {
     }
   }
 
-  
-  
-  
   const btns = [els.btnExportTop, els.btnExportPdf].filter(Boolean);
   if (btns.some(b => b.disabled)) return;
   const setBusy = (on) => btns.forEach(b => {
@@ -1093,7 +994,6 @@ export async function exportPdf(opts = {}) {
       try { name = decodeURIComponent(m[1]); } catch (e) {  }
     }
 
-    
     const rawOut = r.headers.get('X-Export-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -1101,8 +1001,7 @@ export async function exportPdf(opts = {}) {
     }
 
     if (outPath) {
-      
-      
+
       downloadServerFile(outPath, name);
     } else {
       downloadBlob(await r.blob(), name);
@@ -1111,20 +1010,20 @@ export async function exportPdf(opts = {}) {
     const pages = r.headers.get('X-Export-Pages');
     const dropped = r.headers.get('X-Export-Dropped');
 
-    
-    
     const missRaw = r.headers.get('X-Export-CJK-Missing') || '';
     let miss = '';
     if (missRaw) {
       try { miss = decodeURIComponent(missRaw); } catch (e) { miss = missRaw; }
     }
 
-    
     let msg = (noChange ? t('已导出原样副本：{name}', { name }) : t('已导出：{name}', { name })) +
               (pages ? t('（{pages} 页）', { pages }) : '');
     const nAnn = r.headers.get('X-Export-Annots');
     if (nAnn && nAnn !== '0') msg += t('，含 {nAnn} 条批注', { nAnn });
     if (dropped && dropped !== '0') msg += t('，{dropped} 项被忽略', { dropped });
+
+    const encKind = r.headers.get('X-Export-Encrypted') || '';
+    if (encKind) msg += t('，已加密（{v}）', { v: encKind });
     if (miss) {
       msg += t('　⚠ 有 {v} 个字没能写入（字体里没有）：{miss}', { v: [...miss].length, miss });
       toast(msg, 8000);
@@ -1132,11 +1031,11 @@ export async function exportPdf(opts = {}) {
       toast(msg, 3200);
     }
 
-    
-    
     if (outPath) {
       state.contentPath = outPath;
       state.savedPath = outPath;
+
+      state.exportPassword = opts.encrypt ? String(opts.encrypt.user || '') : null;
     }
     await discardStage();
     return { ok: true, name, outPath };
@@ -1148,9 +1047,88 @@ export async function exportPdf(opts = {}) {
   }
 }
 
+const MAX_PW_BYTES = 127;
 
+function encErr(msg) {
+  const el = els.encErr;
+  if (!el) { toast(msg, 3200); return; }
+  el.textContent = msg;
+  el.hidden = false;
+}
 
+function clearEncErr() {
+  if (els.encErr) { els.encErr.hidden = true; els.encErr.textContent = ''; }
+}
 
+function setEncBusy(on) {
+  if (els.encOk) { els.encOk.disabled = on; els.encOk.classList.toggle('busy', on); }
+  if (els.encCancel) els.encCancel.disabled = on;
+}
+
+export function openEncDialog() {
+  if (!state.pdf || !state.filePath) {
+    toast(t('请先打开一个文档'), 1600);
+    return;
+  }
+  if (!els.encMask) return;
+
+  if (els.encUser) els.encUser.value = '';
+  if (els.encOwner) els.encOwner.value = '';
+  if (els.encAlgo) els.encAlgo.value = 'aes256';
+
+  if (els.encPrint) els.encPrint.checked = false;
+  if (els.encCopy) els.encCopy.checked = true;
+  if (els.encModify) els.encModify.checked = false;
+  clearEncErr();
+  els.encMask.hidden = false;
+  if (els.encUser) els.encUser.focus();
+}
+
+export function closeEncDialog() {
+  if (els.encMask) els.encMask.hidden = true;
+  clearEncErr();
+}
+
+async function submitEncDialog() {
+  if (!els.encMask || els.encMask.hidden) return;
+  const user = els.encUser ? els.encUser.value : '';
+
+  if (!user) {
+    encErr(t('打开口令不能为空 —— 空口令等于没有加密'));
+    if (els.encUser) els.encUser.focus();
+    return;
+  }
+
+  const ubytes = new TextEncoder().encode(user).length;
+  if (ubytes > MAX_PW_BYTES) {
+    encErr(t('打开口令太长：{v} 字节，最多 {max} 字节（1 个汉字算 3 字节）',
+      { v: ubytes, max: MAX_PW_BYTES }));
+    return;
+  }
+  const owner = els.encOwner ? els.encOwner.value : '';
+  if (new TextEncoder().encode(owner).length > MAX_PW_BYTES) {
+    encErr(t('权限口令太长：最多 {max} 字节', { max: MAX_PW_BYTES }));
+    return;
+  }
+
+  const spec = {
+    user,
+    owner,
+    algorithm: els.encAlgo ? els.encAlgo.value : 'aes256',
+    allowPrint: !!(els.encPrint && els.encPrint.checked),
+    allowCopy: !!(els.encCopy && els.encCopy.checked),
+    allowModify: !!(els.encModify && els.encModify.checked),
+  };
+
+  clearEncErr();
+  setEncBusy(true);
+  try {
+    const r = await exportPdf({ encrypt: spec });
+    if (r && r.ok) closeEncDialog();
+  } finally {
+    setEncBusy(false);
+  }
+}
 
 export function redactRegions() {
   return editState.objects
@@ -1168,8 +1146,6 @@ export function redactRegions() {
 export function redactCount() {
   return redactRegions().length;
 }
-
-
 
 export async function redactPdf() {
   if (!state.filePath) {
@@ -1191,15 +1167,12 @@ export async function redactPdf() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        
-        
-        
-        
+
         path: state.contentPath || state.filePath,
-        
+
         name: state.fileName,
         regions,
-        
+
         overwrite: false,
       }),
     });
@@ -1213,7 +1186,6 @@ export async function redactPdf() {
       throw new Error(msg);
     }
 
-    
     const rawOut = r.headers.get('X-Out-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -1236,8 +1208,7 @@ export async function redactPdf() {
     const glyphs = r.headers.get('X-Redact-Glyphs') || '0';
     const pages = r.headers.get('X-Redact-Pages') || '0';
     const outline = r.headers.get('X-Redact-Outline') || '0';
-    
-    
+
     const merged = (state.stage && state.stage.id)
       ? t('（已包含尚未保存的段落编辑）') : '';
     toast(t('涂黑完成{merged}：{pages} 页，移除 {glyphs} 个字形', { merged, pages, glyphs }) +
@@ -1248,10 +1219,6 @@ export async function redactPdf() {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
 }
-
-
-
-
 
 export function replaceRegions() {
   return editState.objects
@@ -1292,7 +1259,7 @@ export async function replacePdf() {
       body: JSON.stringify({
         path: state.filePath,
         replacements: regions,
-        
+
         overwrite: false,
       }),
     });
@@ -1306,7 +1273,6 @@ export async function replacePdf() {
       throw new Error(msg);
     }
 
-    
     const rawOut = r.headers.get('X-Out-Path') || '';
     let outPath = rawOut;
     if (rawOut) {
@@ -1336,7 +1302,6 @@ export async function replacePdf() {
   }
 }
 
-
 export function syncReplaceCount() {
   const el = els.replaceCount;
   if (!el) return;
@@ -1346,9 +1311,6 @@ export function syncReplaceCount() {
   if (btn) btn.disabled = n === 0;
 }
 
-
-
-
 export function setEditMode(on) {
   editState.on = !!on;
   if (!editState.on) {
@@ -1356,18 +1318,13 @@ export function setEditMode(on) {
     editState.selectedId = null;
     editState.tempShape = null;
   }
-  
-  
-  
+
   if (editState.on && !editState.tool) editState.tool = 'select';
   document.body.classList.toggle('edit-mode', editState.on);
   if (els.btnEditMode) els.btnEditMode.classList.toggle('on', editState.on);
-  
+
   if (els.sidePanel) els.sidePanel.hidden = !editState.on;
 
-  
-  
-  
   if (editState.on) {
     document.dispatchEvent(new CustomEvent('pdf:edit-on'));
   }
@@ -1375,14 +1332,7 @@ export function setEditMode(on) {
   syncToolButtons();
   repaintEdits();
   if (editState.on) {
-    
-    
-    
-    
-    
-    
-    
-    
+
     if (lastSnap === null) lastSnap = takeSnapshot();
     syncHistoryButtons();
     refreshPagePanel();
@@ -1411,16 +1361,10 @@ export function currentColor() {
   return el && el.value ? el.value : '#111111';
 }
 
-
-
-
 export function bindEditUI() {
   if (bound) return;
   bound = true;
 
-  
-  
-  
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => { if (editState.on) repaintEdits(); });
   }
@@ -1438,14 +1382,12 @@ export function bindEditUI() {
     });
   }
 
-  
   els.btnInsertImage && els.btnInsertImage.addEventListener('click', () => {
     if (els.imagePicker) els.imagePicker.click();
   });
   els.imagePicker && els.imagePicker.addEventListener('change', () => {
     const f = els.imagePicker.files && els.imagePicker.files[0];
-    
-    
+
     els.imagePicker.value = '';
     if (f) insertImageFile(f);
   });
@@ -1475,7 +1417,25 @@ export function bindEditUI() {
 
   els.btnExportPdf && els.btnExportPdf.addEventListener('click', exportPdf);
 
-  
+  els.btnEncExportPdf && els.btnEncExportPdf.addEventListener('click',
+    openEncDialog);
+  els.btnEncExportTop && els.btnEncExportTop.addEventListener('click',
+    openEncDialog);
+  els.encOk && els.encOk.addEventListener('click', submitEncDialog);
+  els.encCancel && els.encCancel.addEventListener('click', closeEncDialog);
+
+  els.encMask && els.encMask.addEventListener('click', (e) => {
+    if (e.target === els.encMask) closeEncDialog();
+  });
+
+  [els.encUser, els.encOwner].forEach(inp => inp && inp.addEventListener(
+    'keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submitEncDialog(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeEncDialog(); }
+
+      e.stopPropagation();
+    }));
+
   els.btnRedactPdf && els.btnRedactPdf.addEventListener('click',
     openRedactConfirm);
   els.redactCancel && els.redactCancel.addEventListener('click',
@@ -1484,18 +1444,16 @@ export function bindEditUI() {
     closeRedactConfirm();
     redactPdf();
   });
-  
+
   els.redactConfirm && els.redactConfirm.addEventListener('click', (e) => {
     if (e.target === els.redactConfirm) closeRedactConfirm();
   });
 
-  
   els.btnReplacePdf && els.btnReplacePdf.addEventListener('click', replacePdf);
 
   syncRedactCount();
   syncReplaceCount();
 }
-
 
 export function syncRedactCount() {
   const el = els.redactCount;
@@ -1506,8 +1464,6 @@ export function syncRedactCount() {
   if (btn) btn.disabled = n === 0;
 }
 
-
-
 function openRedactConfirm() {
   const regions = redactRegions();
   if (!regions.length) {
@@ -1515,14 +1471,13 @@ function openRedactConfirm() {
     return;
   }
   if (!els.redactConfirm) {
-    
+
     if (confirm(t('确定永久删除 {length} 处涂黑区域内的文字？', { length: regions.length }))) {
       redactPdf();
     }
     return;
   }
 
-  
   const byPage = {};
   regions.forEach(r => {
     byPage[r.page] = (byPage[r.page] || 0) + 1;
@@ -1542,8 +1497,6 @@ function closeRedactConfirm() {
   if (els.redactConfirm) els.redactConfirm.hidden = true;
 }
 
-
-
 export async function reflowParagraph(page, para, text, orig, pageText, cell) {
   if (!state.filePath) {
     toast(t('请先打开一个文档'), 1600);
@@ -1560,18 +1513,13 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     const r = await fetch('/api/reflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      
-      
-      
-      
-      
-      
+
       body: JSON.stringify({ path: state.contentPath || state.filePath,
                              name: state.fileName,
                              page, para, text,
                              orig: orig || null,
                              page_text: pageText || null,
-                             
+
                              cell: cell || null,
                              stage: state.stage.id || null }),
     });
@@ -1599,8 +1547,6 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     state.stage = { id: sid, path: spath };
     state.contentPath = spath;
 
-    
-    
     try { await r.arrayBuffer(); } catch (e) {  }
 
     const lb = r.headers.get('X-Reflow-Lines-Before');
@@ -1626,8 +1572,6 @@ export async function reflowParagraph(page, para, text, orig, pageText, cell) {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
 }
-
-
 
 export async function dropTableRow(page, para, gid) {
   if (!state.filePath) {
@@ -1685,8 +1629,6 @@ export async function dropTableRow(page, para, gid) {
   }
 }
 
-
-
 export async function insertTableRow(page, para, gid, where = 'below') {
   if (!state.filePath) {
     toast(t('请先打开一个文档'), 1600);
@@ -1739,8 +1681,6 @@ export async function insertTableRow(page, para, gid, where = 'below') {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
   }
 }
-
-
 
 export async function discardStage() {
   const sid = state.stage.id;

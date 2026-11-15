@@ -1,4 +1,3 @@
-
 import re
 
 from pdfedit import (
@@ -629,16 +628,21 @@ def read_page_content(doc, page_ref):
     parts = []
 
     def collect(node):
-        node = doc.resolve(node)
         if isinstance(node, list):
             for x in node:
                 collect(x)
-        elif doc.is_stream(node):
+            return
+        if isinstance(node, Ref):
+            val = doc.resolve(node)
+            if doc.is_stream(val):
+                data = doc.stream_data(node)
+                if data:
+                    parts.append(data)
+            elif isinstance(val, list):
+                collect(val)
+            return
+        if doc.is_stream(node):
             parts.append(node[1])
-        elif isinstance(node, Ref):
-            data = doc.stream_data(node)
-            if data:
-                parts.append(data)
 
     collect(contents)
     return b"\n".join(parts)

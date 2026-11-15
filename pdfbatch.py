@@ -1,4 +1,3 @@
-
 import os
 
 from pdfedit import (PDFDocument, Ref, build_pdf, reorder_pages)

@@ -1,4 +1,3 @@
-
 import re
 import statistics
 import struct
@@ -149,6 +148,34 @@ def char_runs(text, fi, alias, size, subset, extra=None, fonts=None,
             out.append((ch, None, None, size * 0.5, 0, True))
     return out
 
+NO_LINE_START = frozenset(
+    "，。、；：？！…—～·．"
+    ",.;:?!"
+    "）】》」』〉”’)]}"
+    "％‰℃°"
+)
+NO_LINE_END = frozenset(
+    "（【《「『〈“‘([{"
+    "￥$£#@"
+)
+
+def _kinsoku_split(head, tail):
+    guard = 0
+    while tail and head and head[-1][0] != " " and guard < 6:
+        if tail[0][0] not in NO_LINE_START:
+            break
+        head.append(tail.pop(0))
+        guard += 1
+
+    guard = 0
+    while head and len(head) > 1 and guard < 6:
+        if head[-1][0] not in NO_LINE_END:
+            break
+        tail.insert(0, head.pop())
+        guard += 1
+
+    return head, tail
+
 def wrap_runs(runs, first_x, cont_x, right, tol=0.5):
     hard = [[]]
     for r in runs:
@@ -173,31 +200,41 @@ def wrap_runs(runs, first_x, cont_x, right, tol=0.5):
         cur_x = start_x
         last_space = -1
 
-        for run in hr:
-            w = run[3]
-            if cur and x + w > right + tol:
-                head = cur[:last_space + 1] if last_space > 0 else cur
-                head_w = sum(r[3] for r in head)
-                use_space = (last_space > 0 and
-                             head_w >= (right - cur_x) * 0.5)
-                if use_space:
-                    push(head, cur_x, cut=True)
-                    rest = cur[last_space + 1:]
-                    cur = rest
-                    cur_x = cont_x
-                    x = cont_x + sum(r[3] for r in rest)
-                else:
-                    push(cur, cur_x, cut=True)
-                    cur = []
-                    cur_x = cont_x
-                    x = cont_x
-                last_space = -1
-            if run[0] == " ":
-                last_space = len(cur)
-            cur.append(run)
-            x += w
+        i = 0
+        while i < len(hr):
+            run = hr[i]
+            step = 1
+            if cur and x + run[3] > right + tol:
+                head, tail = cur, [run]
+                if last_space > 0:
+                    cand = cur[:last_space + 1]
+                    if sum(r[3] for r in cand) >= (right - cur_x) * 0.5:
+                        head = cand
+                        tail = cur[last_space + 1:] + [run]
 
-        push(cur, cur_x)
+                head, tail = _kinsoku_split(head, tail)
+
+                eaten = 0
+                while (not tail and i + 1 + eaten < len(hr) and eaten < 2
+                       and hr[i + 1 + eaten][0] in NO_LINE_START):
+                    eaten += 1
+                    head.append(hr[i + eaten])
+                step += eaten
+
+                push(head, cur_x, cut=True)
+                cur = tail
+                cur_x = cont_x
+                x = cont_x + sum(r[3] for r in tail)
+                last_space = -1
+            else:
+                if run[0] == " ":
+                    last_space = len(cur)
+                cur.append(run)
+                x += run[3]
+            i += step
+
+        if cur:
+            push(cur, cur_x)
 
     return lines
 
@@ -1327,6 +1364,14 @@ def list_paragraphs(src_path, page_no=1):
                 "x1": round(cl["right"], 2), "y1": round(cl["y1"], 2),
                 "text": "".join(ch(g) for g in cl["glyphs"]),
             } for cl in cs]
+        item["rows"] = [{
+            "x": round(r["x0"], 2),
+            "y": round(r["y"], 2),
+            "x1": round(r["x1"], 2),
+            "size": round(r["size"] or 0, 2),
+            "font": (r["fonts"][0] if r.get("fonts") else ""),
+            "text": "".join(ch(g) for g in r["g"]),
+        } for r in p["rows"]]
         out.append(item)
     return {"ok": True, "page": page_no, "count": len(out), "paragraphs": out}
 

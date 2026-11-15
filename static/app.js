@@ -1,5 +1,3 @@
-
-
 import { t, initI18n, currentLang, nextLang, setLang, LANG_SHORT } from '/static/i18n.js';
 import {
   pdfjsLib, state, els, cacheEls, $, uid, escapeHtml, debounce,
@@ -22,8 +20,10 @@ import {
   exportPdf, buildExportPayload, pdfToNorm, reflowParagraph, discardStage,
   undoEdit, redoEdit, copySelected, pasteObject, duplicateSelected,
   setStageUndoHandler, setStagePresent, redactCount, dropTableRow,
-  insertTableRow, insertImageFile,
+  insertTableRow, insertImageFile, currentPdfBytes, replaceCount,
 } from '/static/edit.js';
+import { beginInlineEdit, closeInlineEdit, isInlineEditing }
+  from '/static/textedit.js';
 
 import { dragDeltaToPdf, movedPosition, resizedRect, wrapText, paginateText } from '/static/geom.js';
 
@@ -96,29 +96,87 @@ function bookmarkKey() {
   return LS_PREFIX + 'bm:' + (state.docId || state.fileName);
 }
 
+const BM_SORT_KEY = LS_PREFIX + 'bmSort';
+
 function loadBookmarks() {
+  state.bookmarks = new Map();
   try {
     const raw = localStorage.getItem(bookmarkKey());
-    state.bookmarks = new Set(raw ? JSON.parse(raw) : []);
-  } catch (e) { state.bookmarks = new Set(); }
+    const data = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(data)) {
+      for (const p of data) {
+        const n = Number(p);
+        if (n > 0) state.bookmarks.set(n, '');
+      }
+    } else if (data && Array.isArray(data.items)) {
+      for (const it of data.items) {
+        if (!Array.isArray(it)) continue;
+        const n = Number(it[0]);
+        if (n > 0) state.bookmarks.set(n, String(it[1] == null ? '' : it[1]));
+      }
+    }
+  } catch (e) { state.bookmarks = new Map(); }
+  try {
+    const s = localStorage.getItem(BM_SORT_KEY);
+    if (s === 'page' || s === 'added') state.bmSort = s;
+  } catch (e) {  }
 }
 
 function saveBookmarks() {
   try {
-    localStorage.setItem(bookmarkKey(), JSON.stringify([...state.bookmarks]));
+    localStorage.setItem(bookmarkKey(), JSON.stringify({
+      v: 2,
+      items: [...state.bookmarks].map(([p, name]) => [p, name]),
+    }));
   } catch (e) {  }
+}
+
+function saveBmSort() {
+  try { localStorage.setItem(BM_SORT_KEY, state.bmSort); } catch (e) {  }
+}
+
+function bookmarkLabel(p) {
+  return state.bookmarks.get(p) || t('第 {p} 页', { p });
 }
 
 function toggleBookmark() {
   if (!state.pdf) return;
   const p = state.currentPage;
   if (state.bookmarks.has(p)) { state.bookmarks.delete(p); toast(t('已取消书签')); }
-  else { state.bookmarks.add(p); toast(t('第 {p} 页已加书签', { p })); }
+  else { state.bookmarks.set(p, ''); toast(t('第 {p} 页已加书签', { p })); }
   saveBookmarks();
   updateProgressMarkers();
   updateBookmarkBtn();
-  
+
   buildOutline();
+}
+
+function renameBookmark(p, name) {
+  if (!state.bookmarks.has(p)) return;
+  state.bookmarks.set(p, String(name || '').trim());
+  saveBookmarks();
+  buildOutline();
+}
+
+function removeBookmark(p) {
+  if (!state.bookmarks.delete(p)) return;
+  saveBookmarks();
+  updateProgressMarkers();
+  updateBookmarkBtn();
+  buildOutline();
+  toast(t('已取消书签'));
+}
+
+function clearBookmarks() {
+  const n = state.bookmarks.size;
+  if (!n) return;
+  if (!confirm(t('删除全部 {n} 个书签？', { n }))) return;
+  state.bookmarks.clear();
+  saveBookmarks();
+  updateProgressMarkers();
+  updateBookmarkBtn();
+  buildOutline();
+  toast(t('已清空 {n} 个书签', { n }));
 }
 
 function updateBookmarkBtn() {
@@ -127,14 +185,131 @@ function updateBookmarkBtn() {
   }
 }
 
+const SHORTCUT_GROUPS = [
+  {
+    title: '文件',
+    items: [
+      ['Ctrl + O', '打开文件'],
+      ['Ctrl + S', '导出 PDF'],
+      ['Ctrl + P', '打印'],
+    ],
+  },
+  {
+    title: '翻页与搜索',
+    items: [
+      ['J / Page Down', '下一页'],
+      ['K / Page Up', '上一页'],
+      ['Home / End', '第一页 / 最后一页'],
+      ['空格', '自动滚动'],
+      ['Ctrl + F', '搜索'],
+    ],
+  },
+  {
+    title: '缩放与视图',
+    items: [
+      ['Ctrl + = / Ctrl + -', '放大 / 缩小'],
+      ['Ctrl + 0', '自适应窗口'],
+      ['W', '适合宽度'],
+      ['2', '单页 / 双页'],
+      ['R', '旋转页面'],
+      ['D', '反色'],
+      ['S', '侧栏'],
+      ['H', '回到主页'],
+    ],
+  },
+  {
+    title: '标注与编辑',
+    items: [
+      ['A', '标注模式'],
+      ['E', '编辑模式'],
+      ['B', '本页加书签'],
+      ['Esc', '关闭浮层 / 退出模式'],
+      ['Ctrl + Z / Ctrl + Shift + Z', '撤销 / 重做'],
+      ['Ctrl + C / V / D', '复制 / 粘贴 / 原地复制'],
+      ['?', '打开这个面板'],
+    ],
+  },
+];
+
+let scLastFocus = null;
+
+function buildShortcuts() {
+  const box = els.scBody;
+  if (!box) return;
+  box.innerHTML = '';
+  for (const g of SHORTCUT_GROUPS) {
+    const sec = document.createElement('section');
+    sec.className = 'sc-group';
+
+    const h = document.createElement('div');
+    h.className = 'sc-group-title';
+    h.textContent = t(g.title);
+    sec.appendChild(h);
+
+    const table = document.createElement('div');
+    table.className = 'sc-table';
+    for (const [keys, desc] of g.items) {
+      const row = document.createElement('div');
+      row.className = 'sc-row';
+
+      const k = document.createElement('span');
+      k.className = 'sc-keys';
+      const parts = keys.split(' / ');
+      parts.forEach((part, i) => {
+        if (i > 0) k.append('/');
+        const kbd = document.createElement('kbd');
+        kbd.textContent = part;
+        k.append(kbd);
+      });
+
+      const d = document.createElement('span');
+      d.className = 'sc-desc';
+      d.textContent = t(desc);
+
+      row.append(k, d);
+      table.appendChild(row);
+    }
+    sec.appendChild(table);
+    box.appendChild(sec);
+  }
+}
+
+function openShortcuts() {
+  if (!els.scModal) return;
+  buildShortcuts();
+  scLastFocus = document.activeElement;
+  els.scModal.hidden = false;
+  document.body.classList.add('sc-open');
+  if (els.scClose) els.scClose.focus();
+}
+
+function closeShortcuts() {
+  if (!els.scModal || els.scModal.hidden) return;
+  els.scModal.hidden = true;
+  document.body.classList.remove('sc-open');
+
+  if (scLastFocus && typeof scLastFocus.focus === 'function') scLastFocus.focus();
+  scLastFocus = null;
+}
+
+function bindShortcutsUI() {
+  if (els.btnHelp) els.btnHelp.addEventListener('click', openShortcuts);
+  if (els.scClose) els.scClose.addEventListener('click', closeShortcuts);
+  if (els.scModal) {
+
+    els.scModal.addEventListener('click', (e) => {
+      if (e.target === els.scModal) closeShortcuts();
+    });
+  }
+}
+
 async function loadPdfFromPath(path, name, docId) {
-  
+
   const dup = tabs.findByPath(path);
   if (dup) { hideLoading(); tabs.activate(dup.id); return; }
   showLoading(t('正在打开文档…'));
   try {
-    
-    
+
     if (!docId) {
       try {
         const info = await api('/api/pdfinfo?path=' + encodeURIComponent(path));
@@ -159,31 +334,135 @@ async function loadPdfFromPath(path, name, docId) {
   }
 }
 
+function askPassword(errMsg) {
+  return new Promise((resolve) => {
+    if (!els.pwMask) {
+      resolve(prompt(t('该 PDF 已加密，请输入密码：')));
+      return;
+    }
+    const inp = els.pwInput;
+    const err = els.pwErr;
+    inp.value = '';
+    err.hidden = !errMsg;
+    err.textContent = errMsg || '';
+    els.pwMask.hidden = false;
+    setTimeout(() => inp.focus(), 30);
+
+    const done = (val) => {
+      els.pwMask.hidden = true;
+      inp.onkeydown = null;
+      inp.oninput = null;
+      els.pwOk.onclick = null;
+      els.pwCancel.onclick = null;
+      els.pwMask.onclick = null;
+      resolve(val);
+    };
+    inp.oninput = () => { if (!err.hidden) err.hidden = true; };
+    els.pwOk.onclick = () => done(inp.value);
+    els.pwCancel.onclick = () => done(null);
+    els.pwMask.onclick = (e) => { if (e.target === els.pwMask) done(null); };
+    inp.onkeydown = (e) => {
+
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); done(inp.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+    };
+  });
+}
+
 async function handlePassword(path, name, docId) {
-  const pwd = prompt(t('该 PDF 已加密，请输入密码：'));
-  if (pwd === null) { hideLoading(); return; }
-  try {
-    const task = pdfjsLib.getDocument({
-      url: '/api/file?path=' + encodeURIComponent(path),
-      password: pwd,
-    });
-    await openDocument(task, name, docId || null, path);
-  } catch (err) {
-    hideLoading();
-    toast(t('密码错误或文档无法打开'));
+  let msg = '';
+  for (let i = 0; i < 5; i++) {
+    const pwd = await askPassword(msg);
+    if (pwd === null) { hideLoading(); return; }
+    if (!pwd) { msg = t('口令不能为空'); continue; }
+
+    try {
+      await api('/api/unlock', { method: 'POST', body: { path, password: pwd } });
+    } catch (e) {
+      msg = t('口令不正确，请重试');
+      continue;
+    }
+
+    try {
+      const task = pdfjsLib.getDocument({
+        url: '/api/file?path=' + encodeURIComponent(path),
+        password: pwd,
+      });
+      await openDocument(task, name, docId || null, path);
+      return;
+    } catch (err) {
+      console.error(err);
+      hideLoading();
+      msg = t('口令不正确，请重试');
+    }
   }
+  hideLoading();
+  toast(t('多次口令错误，已放弃打开'));
+}
+
+async function stageLocalPdf(buf) {
+  try {
+    const r = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: new Blob([buf], { type: 'application/pdf' }),
+    });
+    let j = null;
+    try { j = await r.json(); } catch (e) {  }
+    if (r.ok && j && j.path) return j.path;
+    console.warn('落盘失败：', (j && (j.error || j.msg)) || r.status);
+  } catch (e) {
+    console.warn('落盘失败：', e);
+  }
+  return null;
 }
 
 async function loadPdfFromFile(file) {
   showLoading(t('正在读取本地文件…'));
   try {
-    
+
     const id = await localDocId(file);
     const dup = tabs.findByDoc(id);
     if (dup) { hideLoading(); tabs.activate(dup.id); return; }
     const buf = await file.arrayBuffer();
-    const task = pdfjsLib.getDocument({ data: buf });
-    await openDocument(task, file.name.replace(/\.pdf$/i, ''), id, null);
+    const path = await stageLocalPdf(buf);
+    const title = file.name.replace(/\.pdf$/i, '');
+
+    const backup = path ? null : buf.slice(0);
+
+    let pwd;
+    for (let i = 0; i < 5; i++) {
+      try {
+
+        const task = path
+          ? pdfjsLib.getDocument({
+              url: '/api/file?path=' + encodeURIComponent(path),
+              password: pwd,
+            })
+          : pdfjsLib.getDocument({
+              data: i === 0 ? buf : backup.slice(0),
+              password: pwd,
+            });
+        await openDocument(task, title, id, path);
+        return;
+      } catch (err) {
+        const needPw = String(err).includes('password')
+          || err?.name === 'PasswordException';
+        if (!needPw) throw err;
+        const p = await askPassword(i ? t('口令不正确，请重试') : '');
+        if (p === null) { hideLoading(); return; }
+
+        if (path && p) {
+          try {
+            await api('/api/unlock', { method: 'POST', body: { path, password: p } });
+          } catch (e) {  }
+        }
+        pwd = p;
+      }
+    }
+    hideLoading();
+    toast(t('多次口令错误，已放弃打开'));
   } catch (err) {
     hideLoading();
     console.error(err);
@@ -198,7 +477,6 @@ function openNewPop(anchor) {
   if (els.newLandscape) els.newLandscape.checked = false;
   if (els.newSize) els.newSize.value = 'a4';
 
-  
   pop.hidden = false;
   placeNewPop(pop, anchor);
 }
@@ -251,9 +529,8 @@ async function createNewPdf() {
     if (!sid || !spath) throw new Error(t('服务端没有返回新文件位置'));
     closeNewPop();
 
-    
     await loadPdfFromPath(spath, t('未命名'), null);
-    
+
     state.stage = { id: sid, path: spath };
     state.contentPath = spath;
     state.savedPath = spath;
@@ -278,8 +555,7 @@ async function localDocId(file) {
 
 async function openDocument(task, name, docId, path) {
   const pdf = await task.promise;
-  
-  
+
   const clean = String(name || '').replace(/\.pdf$/i, '') || t('未命名文档');
   const tab = tabs.begin({ name: clean, path, docId });
   try {
@@ -295,12 +571,13 @@ async function fillTab(pdf, name, docId, path) {
   state.fileName = name || t('未命名文档');
   state.docId = docId;
   state.filePath = path || null;
-  
+
   state.contentPath = path || null;
   state.savedPath = path || null;
+
+  state.exportPassword = null;
   updateStageBar(false);
-  
-  
+
   paraCache.clear();
   closeParaPop();
   state.pageCount = pdf.numPages;
@@ -316,7 +593,6 @@ async function fillTab(pdf, name, docId, path) {
   els.pageInput.max = pdf.numPages;
   els.pageInput.value = 1;
 
-  
   const saved = readPosition();
   state.rotation = (saved && saved.rotation) || 0;
   state.viewMode = (saved && saved.viewMode) || 'single';
@@ -325,30 +601,23 @@ async function fillTab(pdf, name, docId, path) {
   state.scale = await computeScale(state.scaleMode);
   els.zoomSelect.value = state.scaleMode;
 
-  
   ['navGroup', 'navSep', 'zoomGroup', 'zoomSep', 'toolGroup', 'toolGroupSep',
    'annotGroup', 'annotSep', 'editGroup', 'editSep',
    'viewGroup', 'searchSep', 'fileGroup']
     .forEach(id => { els[id] && (els[id].hidden = false); });
   if (els.progressBar) els.progressBar.hidden = false;
 
-  
   if (editState.on) setEditMode(false);
   loadBookmarks();
   await buildPages();
-  syncBlankPages();     
+  syncBlankPages();
   setupObserver();
 
-  
-  
-  
   buildThumbs();
   buildOutline();
 
-  
   await loadAnnotations(state.docId);
 
-  
   await loadEdits(state.docId);
   if (state.filePath) {
     try {
@@ -360,7 +629,7 @@ async function fillTab(pdf, name, docId, path) {
       editState.pageInfo = [];
     }
   } else {
-    
+
     editState.pageInfo = [];
   }
   repaintEdits();
@@ -369,7 +638,6 @@ async function fillTab(pdf, name, docId, path) {
   updateProgressMarkers();
   hideLoading();
 
-  
   if (saved && saved.page > 1 && saved.page <= pdf.numPages) {
     goToPage(saved.page);
     toast(t('已回到第 {page} 页', { page: saved.page }), 1800);
@@ -414,13 +682,13 @@ function cycleTab(dir) {
 
 function beforeCloseTab(tab, wasActive) {
   if (wasActive) {
-    
+
     doSave();
     saveEdits();
     stopAutoScroll();
   }
   const st = wasActive ? state : ((tab.snap && tab.snap.state) || {});
-  
+
   const sid = st.stage && st.stage.id;
   if (sid) {
     fetch('/api/stage', {
@@ -460,8 +728,6 @@ function refreshChrome() {
   els.viewer.classList.toggle('annot-mode', state.annotMode);
   if (els.btnAnnotMode) els.btnAnnotMode.classList.toggle('on', state.annotMode);
 
-  
-  
   document.body.classList.toggle('dark', state.invert);
   if (els.btnDark) els.btnDark.classList.toggle('on', state.invert);
   document.body.classList.toggle('view-double', state.viewMode === 'double');
@@ -479,9 +745,7 @@ function refreshChrome() {
     buildOutline();
     renderAnnotList();
   } else {
-    
-    
-    
+
     if (els.stageBar) els.stageBar.hidden = true;
     els.thumbList.innerHTML = '';
     els.outlineList.innerHTML = '';
@@ -490,7 +754,7 @@ function refreshChrome() {
     if (els.annotActions) els.annotActions.hidden = true;
     if (els.pageTotal) els.pageTotal.textContent = '';
     if (els.pageInput) els.pageInput.value = '1';
-    
+
     if (!welcomeReady) renderWelcome();
   }
 
@@ -539,10 +803,8 @@ function syncBlankPages() {
   const inserts = (editState.pages && editState.pages.insert) || [];
   const need = inserts.length;
 
-  
   const blanks = state.pages.filter(r => r.blank);
 
-  
   for (let i = blanks.length - 1; i >= need; i--) {
     const rec = blanks[i];
     rec.wrap.remove();
@@ -550,15 +812,10 @@ function syncBlankPages() {
     if (idx >= 0) state.pages.splice(idx, 1);
   }
 
-  
   const first = els.pages.querySelector(':scope > .page:not(.blank)');
   const w = (first && first.offsetWidth) || 595;
   const h = (first && first.offsetHeight) || 842;
 
-  
-  
-  
-  
   for (let i = blanks.length; i < need; i++) {
     const num = state.pageCount + i + 1;
     const wrap = document.createElement('div');
@@ -581,12 +838,10 @@ function syncBlankPages() {
     });
   }
 
-  
   const total = state.pageCount + need;
   if (els.pageInput) els.pageInput.max = total;
   if (els.pageTotal) els.pageTotal.textContent = '/ ' + total;
 
-  
   if (editState.on) repaintEdits();
 }
 
@@ -596,9 +851,7 @@ function setupObserver() {
   if (state.observer) state.observer.disconnect();
 
   state.observer = new IntersectionObserver((entries) => {
-    
-    
-    
+
     let mine = false;
     for (const entry of entries) {
       if (!els.pages || !els.pages.contains(entry.target)) continue;
@@ -623,15 +876,10 @@ function setupObserver() {
 async function renderPage(rec) {
   if (rec.rendered || rec.rendering) return;
 
-  
   if (state.renderQueue.size >= 3) return;
   state.renderQueue.add(rec.num);
   rec.rendering = true;
 
-  
-  
-  
-  
   const pdf = state.pdf;
   const scale = state.scale;
   const rotation = state.rotation;
@@ -644,7 +892,6 @@ async function renderPage(rec) {
     if (stale()) { abort(); return; }
     const viewport = page.getViewport({ scale, rotation });
 
-    
     const outputScale = window.devicePixelRatio || 1;
     let cssW = viewport.width, cssH = viewport.height;
     let pxW = Math.floor(cssW * outputScale);
@@ -658,7 +905,6 @@ async function renderPage(rec) {
       effScale = outputScale * ratio;
     }
 
-    
     rec.wrap.style.width = Math.floor(cssW) + 'px';
     rec.wrap.style.height = Math.floor(cssH) + 'px';
 
@@ -681,13 +927,11 @@ async function renderPage(rec) {
     rec.task = null;
     if (stale()) { abort(); return; }
 
-    
     const textContent = await page.getTextContent();
     if (stale()) { abort(); return; }
     rec.textContent = textContent;
     buildTextLayer(rec, textContent, viewport);
 
-    
     loadPagePdfAnnots(rec);
 
     rec.wrap.classList.remove('pending');
@@ -696,19 +940,16 @@ async function renderPage(rec) {
     rec.rendering = false;
     queue.delete(rec.num);
 
-    
     const hitOnPage = state.searchHitsByPage.get(rec.num - 1);
     if (hitOnPage) {
       for (const hit of hitOnPage) paintHitsOnPage(rec, hit);
       markCurrentHit();
     }
 
-    
     paintPageAnnotations(rec);
-    
+
     paintPageEdits(rec);
-    
-    
+
     if (objBarId) {
       const sel = editState.objects.find(o => o.id === objBarId);
       if (sel && sel.page === rec.num) showObjBar(rec, sel);
@@ -716,7 +957,7 @@ async function renderPage(rec) {
   } catch (err) {
     rec.rendering = false;
     queue.delete(rec.num);
-    
+
     if (err?.name !== 'RenderingCancelledException' && !String(err).includes('cancel')) {
       console.warn(t('第 {num} 页渲染失败：', { num: rec.num }), err);
       rec.wrap.classList.remove('pending');
@@ -729,10 +970,8 @@ function buildTextLayer(rec, textContent, viewport) {
   const layer = rec.textLayer;
   layer.innerHTML = '';
 
-  
   textContent.items.forEach((it, i) => { it.__idx = i; });
 
-  
   const measureCtx = (rec._measureCanvas ||= document.createElement('canvas')).getContext('2d');
   const frag = document.createDocumentFragment();
 
@@ -745,31 +984,22 @@ function buildTextLayer(rec, textContent, viewport) {
 
     const span = document.createElement('span');
     span.textContent = item.str;
-    
-    
+
     span.dataset.itemIndex = String(item.__idx);
     span.style.left = tx[4] + 'px';
     span.style.top = (tx[5] - fontHeight) + 'px';
     span.style.fontSize = fontHeight + 'px';
     span.style.fontFamily = 'sans-serif';
 
-    
     const targetW = item.width * viewport.scale;
 
-    
-    
-    
-    
-    
-    
-    
     const isBlank = !item.str.trim();
     if (fontHeight > 0 && targetW > 0 && !isBlank) {
       measureCtx.font = `${fontHeight}px sans-serif`;
       const naturalW = measureCtx.measureText(item.str).width;
       if (naturalW > 0.01) {
         const ratio = targetW / naturalW;
-        
+
         if (Math.abs(ratio - 1) > 0.01) {
           span.style.transformOrigin = '0 0';
           span.style.transform = `scaleX(${ratio.toFixed(4)})`;
@@ -822,7 +1052,6 @@ async function applyScale(mode, anchor) {
   state.scaleMode = mode;
   state.scale = await computeScale(mode);
 
-  
   if (!anchor) {
     const viewerRect = els.viewer.getBoundingClientRect();
     anchor = {
@@ -837,7 +1066,7 @@ async function applyScale(mode, anchor) {
 }
 
 async function rebuildAtNewScale(anchor) {
-  
+
   for (const rec of state.pages) {
     if (rec.task) { try { rec.task.cancel(); } catch (e) {  } rec.task = null; }
   }
@@ -860,7 +1089,6 @@ async function rebuildAtNewScale(anchor) {
     }
   }
 
-  
   if (anchor) {
     requestAnimationFrame(() => {
       const rec = state.pages[anchor.page - 1];
@@ -869,7 +1097,7 @@ async function rebuildAtNewScale(anchor) {
         rec.wrap.offsetHeight * Math.min(Math.max(anchor.ratio, 0), 1) -
         els.viewer.clientHeight / 2;
       els.viewer.scrollTop = Math.max(0, target);
-      
+
       for (let d = -1; d <= 1; d++) {
         const r = state.pages[anchor.page - 1 + d];
         if (r) renderPage(r);
@@ -883,7 +1111,7 @@ function rotate() {
   if (!state.pdf) return;
   state.rotation = (state.rotation + 90) % 360;
   applyScale(state.scaleMode === 'auto' ? 'auto' : state.scaleMode);
-  
+
   buildThumbs();
   toast(t('旋转 {rotation}°', { rotation: state.rotation }), 1200);
 }
@@ -902,7 +1130,7 @@ async function applyViewMode(mode, silent = false) {
   els.pages.classList.toggle('double', mode === 'double');
 
   if (state.pdf && !silent) {
-    
+
     state.scale = await computeScale(state.scaleMode);
     await buildPages();
     setupObserver();
@@ -913,7 +1141,7 @@ async function applyViewMode(mode, silent = false) {
 }
 
 let autoScrollRAF = null;
-let autoScrollSpeed = 0.55;   
+let autoScrollSpeed = 0.55;
 
 function startAutoScroll() {
   if (autoScrollRAF) { stopAutoScroll(); return; }
@@ -965,9 +1193,7 @@ let thumbObserver = null;
 async function buildThumbs() {
   const box = els.thumbList;
   box.innerHTML = '';
-  
-  
-  
+
   thumbCache.clear();
   if (!state.pdf) return;
   if (thumbObserver) thumbObserver.disconnect();
@@ -984,15 +1210,11 @@ async function buildThumbs() {
   }
   box.appendChild(frag);
 
-  
   thumbObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
       const n = parseInt(e.target.dataset.page, 10);
-      
-      
-      
-      
+
       renderThumb(n)
         .then(ok => { if (ok) thumbObserver.unobserve(e.target); })
         .catch(() => {  });
@@ -1005,7 +1227,7 @@ async function buildThumbs() {
 const thumbCache = new Map();
 
 async function renderThumb(num) {
-  
+
   if (!state.pdf || thumbCache.has(num)) return true;
   const btn = els.thumbList.querySelector(`.thumb[data-page="${num}"]`);
   if (!btn) return false;
@@ -1038,7 +1260,7 @@ async function renderThumb(num) {
     holder.appendChild(canvas);
     return true;
   } catch (err) {
-    
+
     if (err && err.name !== 'RenderingCancelledException') {
       console.warn(t('缩略图渲染失败（下次可见时重试）'), num, err);
     }
@@ -1067,16 +1289,13 @@ async function buildOutline() {
   state.outlinMap = new Map();
   if (!state.pdf) return;
 
-  
-  
-  
   renderMyBookmarks(box);
 
   let outline = null;
   try { outline = await state.pdf.getOutline(); } catch (e) { outline = null; }
 
   if (!outline || !outline.length) {
-    
+
     if (!state.bookmarks.size) {
       const div = document.createElement('div');
       div.className = 'outline-empty';
@@ -1094,26 +1313,109 @@ async function buildOutline() {
 }
 
 function renderMyBookmarks(box) {
-  const pages = [...state.bookmarks].sort((a, b) => a - b);
-  if (!pages.length) return;
+  if (!state.bookmarks.size) return;
+
   const head = document.createElement('div');
-  head.className = 'outline-heading';
-  head.textContent = t('我的书签');
+  head.className = 'outline-heading bm-head';
+
+  const title = document.createElement('span');
+  title.className = 'bm-title';
+  title.textContent = t('我的书签');
+  head.appendChild(title);
+
+  const sortBtn = document.createElement('button');
+  sortBtn.className = 'bm-tool';
+  sortBtn.textContent = state.bmSort === 'page' ? t('页码') : t('添加');
+  sortBtn.title = state.bmSort === 'page'
+    ? t('当前按页码排序，点击改为按添加顺序')
+    : t('当前按添加顺序排序，点击改为按页码');
+  sortBtn.addEventListener('click', () => {
+    state.bmSort = state.bmSort === 'page' ? 'added' : 'page';
+    saveBmSort();
+    buildOutline();
+  });
+  head.appendChild(sortBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'bm-tool';
+  clearBtn.textContent = t('清空');
+  clearBtn.title = t('删除全部书签');
+  clearBtn.addEventListener('click', clearBookmarks);
+  head.appendChild(clearBtn);
+
   box.appendChild(head);
-  for (const p of pages) {
+
+  const entries = [...state.bookmarks];
+  if (state.bmSort === 'page') entries.sort((a, b) => a[0] - b[0]);
+
+  for (const [p, name] of entries) {
+    const row = document.createElement('div');
+    row.className = 'bm-row';
+
     const btn = document.createElement('button');
-    btn.className = 'outline-item';
-    btn.innerHTML = t('<span>第 {p} 页</span>', { p }) +
-      `<span class="outline-page">${p}</span>`;
+    btn.className = 'outline-item bm-item';
     btn.style.paddingLeft = '8px';
+    btn.title = t('双击可重命名');
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'bm-name';
+    nameEl.textContent = name || t('第 {p} 页', { p });
+    const pageEl = document.createElement('span');
+    pageEl.className = 'outline-page';
+    pageEl.textContent = p;
+    btn.append(nameEl, pageEl);
+
     btn.addEventListener('click', () => {
       goToPage(p, true);
       els.outlineList.querySelectorAll('.outline-item.on')
         .forEach(b => b.classList.remove('on'));
       btn.classList.add('on');
     });
-    box.appendChild(btn);
+    btn.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      startRenameBookmark(row, btn, p, name);
+    });
+
+    const del = document.createElement('button');
+    del.className = 'bm-del';
+    del.textContent = '×';
+    del.title = t('删除这个书签');
+    del.addEventListener('click', (e) => { e.stopPropagation(); removeBookmark(p); });
+
+    row.append(btn, del);
+    box.appendChild(row);
   }
+}
+
+function startRenameBookmark(row, btn, p, name) {
+  if (row.querySelector('.bm-input')) return;
+  const input = document.createElement('input');
+  input.className = 'bm-input';
+  input.value = name || '';
+  input.placeholder = t('第 {p} 页', { p });
+  input.maxLength = 40;
+
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) renameBookmark(p, input.value);
+    else buildOutline();
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(true));
+
+  btn.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 async function resolveDestPage(dest) {
@@ -1126,7 +1428,7 @@ async function resolveDestPage(dest) {
     }
     if (!ref) return null;
     if (ref[0] && typeof ref[0] === 'object') {
-      
+
       const idx = await state.pdf.getPageIndex(ref[0]);
       return idx + 1;
     }
@@ -1200,7 +1502,6 @@ async function runSearch(keyword) {
     }
     if (!textContent || !textContent.items.length) continue;
 
-    
     const pieces = [];
     const charMap = [];
     for (let ii = 0; ii < textContent.items.length; ii++) {
@@ -1215,7 +1516,7 @@ async function runSearch(keyword) {
 
     let at = lower.indexOf(q);
     while (at !== -1) {
-      
+
       const parts = [];
       let cur = null;
       for (let c = at; c < at + q.length; c++) {
@@ -1271,7 +1572,7 @@ function restoreSpan(span) {
 function clearSearchHighlights() {
   for (const rec of state.pages) {
     rec.textLayer.querySelectorAll('span[data-orig]').forEach(restoreSpan);
-    
+
     rec.textLayer.querySelectorAll('mark.hl').forEach(m => {
       const sp = m.closest('span');
       if (sp) restoreSpan(sp);
@@ -1290,7 +1591,6 @@ function findSpanForItem(rec, itemIndex) {
 function paintHitsOnPage(rec, hit) {
   if (!rec || !rec.rendered) return;
 
-  
   const byItem = new Map();
   hit.parts.forEach((p, idx) => {
     if (!byItem.has(p.itemIndex)) byItem.set(p.itemIndex, []);
@@ -1303,7 +1603,6 @@ function paintHitsOnPage(rec, hit) {
     const orig = span.dataset.orig !== undefined ? span.dataset.orig : span.textContent;
     span.dataset.orig = orig;
 
-    
     let html = escapeHtml(orig);
     [...segs].sort((a, b) => b.start - a.start).forEach(seg => {
       const inner = escapeHtml(orig.slice(seg.start, seg.end));
@@ -1349,7 +1648,6 @@ function gotoHit(index) {
 
   if (!rec.rendered) renderPage(rec);
 
-  
   let tries = 0;
   const locate = () => {
     const mark = rec.textLayer.querySelector(`mark.hl[data-seq="${hit.seq}"]`);
@@ -1370,7 +1668,7 @@ function gotoHit(index) {
     if (tries < 20) {
       setTimeout(locate, 100);
     } else {
-      
+
       goToPage(hit.pageNum, true);
       markCurrentHit();
     }
@@ -1378,11 +1676,11 @@ function gotoHit(index) {
   locate();
 }
 
-let pendingSel = null;   
-let popAnnotId = null;   
+let pendingSel = null;
+let popAnnotId = null;
 let currentAnnotColor = 'yellow';
 let currentAnnotColorHex = '#fbbf24';
-let menuBusy = false;    
+let menuBusy = false;
 
 let selMenuTimer = null;
 
@@ -1396,58 +1694,46 @@ function showSelMenu(rect) {
   if (!menu) return;
   menu.hidden = false;
 
-  
-  
-  
   const box = menu.getBoundingClientRect();
   const mw = box.width || menu.offsetWidth || 300;
   const mh = box.height || menu.offsetHeight || 34;
 
   const vr = els.viewer.getBoundingClientRect();
 
-  
-  
-  
   const sx = els.viewer.scrollLeft;
   const sy = els.viewer.scrollTop;
 
-  
   const selLeft = rect.left - vr.left + sx;
   const selTop = rect.top - vr.top + sy;
   const selBottom = rect.bottom - vr.top + sy;
 
-  
   const viewTop = sy + 6;
   const viewBottom = sy + vr.height - 6;
 
-  const GAP = 8;      
-  const EDGE = 6;     
+  const GAP = 8;
+  const EDGE = 6;
 
-  
   const minLeft = sx + EDGE;
   const maxLeft = sx + Math.max(EDGE, vr.width - mw - EDGE);
   let left = selLeft + rect.width / 2 - mw / 2;
   left = Math.min(Math.max(left, minLeft), maxLeft);
 
-  
-  
   const above = selTop - mh - GAP;
   const below = selBottom + GAP;
 
   let top;
   if (above >= viewTop) {
-    top = above;                                   
+    top = above;
   } else if (below + mh <= viewBottom) {
-    top = below;                                   
+    top = below;
   } else {
-    top = Math.min(Math.max(above, viewTop), viewBottom - mh);  
+    top = Math.min(Math.max(above, viewTop), viewBottom - mh);
   }
   top = Math.min(Math.max(top, viewTop), viewBottom - mh);
 
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
 
-  
   if (selMenuTimer) clearTimeout(selMenuTimer);
   selMenuTimer = setTimeout(() => {
     if (menuBusy) return;
@@ -1457,15 +1743,14 @@ function showSelMenu(rect) {
 }
 
 function onSelectionChange() {
-  
+
   if (menuBusy) return;
 
-  
   if (editState.on) return;
 
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) {
-    
+
     if (!pendingSel) hideSelMenu();
     return;
   }
@@ -1475,19 +1760,16 @@ function onSelectionChange() {
   const range = sel.getRangeAt(0);
   if (!els.viewer.contains(range.commonAncestorContainer)) { hideSelMenu(); return; }
 
-  
   const anchors = selectionToAnchors();
   if (!anchors) { hideSelMenu(); return; }
   pendingSel = anchors;
 
-  
-  
   let anchorRect = null;
   try {
     const rects = range.getClientRects();
     if (rects && rects.length) {
       const first = rects[0];
-      
+
       const whole = range.getBoundingClientRect();
       anchorRect = {
         left: whole.left, width: whole.width,
@@ -1504,11 +1786,11 @@ function finishMenuAction() {
   try { window.getSelection()?.removeAllRanges(); } catch (e) {  }
 }
 
-let dragState = null;      
-let moveState = null;      
-let resizeState = null;    
-let textPopInfo = null;    
-let objBarId = null;       
+let dragState = null;
+let moveState = null;
+let resizeState = null;
+let textPopInfo = null;
+let objBarId = null;
 
 const MOVE_THRESHOLD = 3;
 
@@ -1535,11 +1817,6 @@ function showObjBar(rec, obj) {
   if (els.objBarName) els.objBarName.textContent = names[obj.kind] || t('对象');
   objBarId = obj.id;
 
-  
-  
-  
-  
-  
   const r = rec.wrap.getBoundingClientRect();
   const ps = pageSize(obj.page);
   const p = pdfToNorm(obj.x, obj.y, obj.w || 0, obj.h || 0,
@@ -1585,7 +1862,7 @@ function onEditDoubleClick(e) {
     e.preventDefault();
     openTextPop(rec, e.clientX, e.clientY, obj);
   } else if (obj.kind === 'replace') {
-    
+
     e.preventDefault();
     openReplacePop(obj, e.clientX, e.clientY);
   }
@@ -1598,7 +1875,7 @@ function setAnnotMode(on, silent = false) {
   if (els.btnAnnotMode) els.btnAnnotMode.classList.toggle('on', next);
   if (els.viewer) els.viewer.classList.toggle('annot-mode', next);
 
-  if (next && editState.on) setEditMode(false);   
+  if (next && editState.on) setEditMode(false);
 
   if (!silent) {
     toast(next ? t('标注模式：拖拽可框选区域（已退出编辑）') : t('已退出标注模式'), 1600);
@@ -1609,9 +1886,6 @@ function onEditMouseDown(e) {
   if (!editState.on || !editState.tool) return;
   if (e.button !== 0) return;
 
-  
-  
-  
   const handle = e.target.closest('.ed-handle');
   if (handle) {
     if (editState.tool !== 'select') return;
@@ -1637,18 +1911,8 @@ function onEditMouseDown(e) {
     return;
   }
 
-  
-  
-  
-  
-  
-  
-  
-  
-  
   if (!e.target.closest('.page')) return;
 
-  
   closeTextPop();
 
   const rec = pageAt(e.clientX, e.clientY);
@@ -1656,15 +1920,12 @@ function onEditMouseDown(e) {
 
   const tool = editState.tool;
 
-  
   if (tool === 'para') {
     e.preventDefault();
     openParaPop(rec, e.clientX, e.clientY);
     return;
   }
 
-  
-  
   if (tool === 'select') {
     const obj = hitTest(rec, e.clientX, e.clientY);
     editState.selectedId = obj ? obj.id : null;
@@ -1678,8 +1939,7 @@ function onEditMouseDown(e) {
         rec,
         startX: e.clientX,
         startY: e.clientY,
-        
-        
+
         orig: { x: obj.x, y: obj.y, x2: obj.x2, y2: obj.y2 },
         rw: r.width,
         rh: r.height,
@@ -1693,10 +1953,8 @@ function onEditMouseDown(e) {
 
   e.preventDefault();
 
-  
   hideObjBar();
 
-  
   if (tool === 'text') {
     openTextPop(rec, e.clientX, e.clientY);
     return;
@@ -1719,10 +1977,10 @@ function dragMoveObject(e) {
 
   if (!st.moved) {
     if (Math.abs(dxs) < MOVE_THRESHOLD && Math.abs(dys) < MOVE_THRESHOLD) {
-      return;                    
+      return;
     }
     st.moved = true;
-    hideObjBar();                
+    hideObjBar();
   }
 
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
@@ -1734,7 +1992,7 @@ function dragResizeObject(e) {
   const dxs = e.clientX - st.startX;
   const dys = e.clientY - st.startY;
   const d = dragDeltaToPdf(dxs, dys, st.rw, st.rh, st.pw, st.ph);
-  
+
   const lock = editState.keepRatio || e.shiftKey;
   updateObject(st.id, resizedRect(st.orig, st.corner, d, lock));
 }
@@ -1752,7 +2010,6 @@ function onEditMouseMove(e) {
     : makeRectObject(rec, page, start, { x: e.clientX, y: e.clientY },
                      tool, opts);
 
-  
   if (tool === 'line') {
     temp._norm = {
       x: temp.x / pageSize(page).width,
@@ -1775,22 +2032,22 @@ function onEditMouseMove(e) {
 }
 
 function onEditMouseUp(e) {
-  
+
   if (resizeState) {
     const st = resizeState;
     resizeState = null;
     const obj = editState.objects.find(o => o.id === st.id);
-    if (obj) showObjBar(st.rec, obj);   
+    if (obj) showObjBar(st.rec, obj);
     toast(t('已缩放'), 900);
     return;
   }
-  
+
   if (moveState) {
     const st = moveState;
     moveState = null;
     if (st.moved) {
       const obj = editState.objects.find(o => o.id === st.id);
-      if (obj) showObjBar(st.rec, obj);   
+      if (obj) showObjBar(st.rec, obj);
       toast(t('已移动'), 900);
     }
     return;
@@ -1803,7 +2060,6 @@ function onEditMouseUp(e) {
   const dx = Math.abs(e.clientX - start.x);
   const dy = Math.abs(e.clientY - start.y);
 
-  
   if (tool !== 'line' && dx < 4 && dy < 4) {
     editState.tempShape = null;
     paintPageEdits(rec);
@@ -1826,13 +2082,12 @@ function onEditMouseUp(e) {
 
   editState.tempShape = null;
   const created = addObject(obj);
-  
-  
+
   setTool('select');
   editState.selectedId = created.id;
   showObjBar(rec, created);
   repaintEdits();
-  
+
   if (tool === 'replace') {
     toast(t('已框选替换区域，请输入要替换成的新文字'), 2600);
     openReplacePop(created, e.clientX, e.clientY);
@@ -1840,8 +2095,7 @@ function onEditMouseUp(e) {
   }
   const label = { whiteout: t('涂白'), rect: t('矩形'), ellipse: t('椭圆'),
                   line: t('直线'), redact: t('涂黑区域') }[tool] || t('对象');
-  
-  
+
   if (tool === 'redact') {
     toast(t('已标记涂黑区域，点「涂黑并另存为…」才会真正删除文字'), 3200);
   } else {
@@ -1849,14 +2103,11 @@ function onEditMouseUp(e) {
   }
 }
 
-let paraPopInfo = null;             
-const paraCache = new Map();        
+let paraPopInfo = null;
+const paraCache = new Map();
 
 async function fetchParagraphs(page) {
-  
-  
-  
-  
+
   const src = state.contentPath || state.filePath;
   const key = `${src}|${page}`;
   if (paraCache.has(key)) return paraCache.get(key);
@@ -1924,7 +2175,7 @@ function paragraphTextFromDom(rec, box) {
     }
   }
   if (!picked.length) return '';
-  
+
   return joinItemsByLines(picked);
 }
 
@@ -1954,16 +2205,21 @@ function flashBoxes(pageNum, boxes) {
   boxes.slice(0, 40).forEach(b => flashParaRange(rec, b, null));
 }
 
-async function openParaPop(rec, clientX, clientY) {
-  if (!state.filePath) { toast(t('请先打开一个文档'), 1600); return; }
+function noFilePath() {
+  if (state.filePath) return false;
+  toast(t(state.pdf ? '这份文件没有磁盘副本，暂时不能编辑'
+                    : '请先打开一个文档'), 1600);
+  return true;
+}
+
+async function openInlineEditAt(rec, clientX, clientY) {
+  if (noFilePath()) return;
 
   const r = rec.wrap.getBoundingClientRect();
   if (!r.width || !r.height) return;
-  const nx = (clientX - r.left) / r.width;
-  const ny = (clientY - r.top) / r.height;
   const { width: pw, height: ph } = pageSize(rec.num);
-  const px = nx * pw;
-  const py = ph * (1 - ny);          
+  const px = ((clientX - r.left) / r.width) * pw;
+  const py = ph * (1 - (clientY - r.top) / r.height);
 
   let list;
   try {
@@ -1973,7 +2229,6 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
-  
   const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
                              py >= p.y0 - 2 && py <= p.y1 + 2);
   if (!hit) {
@@ -1981,12 +2236,49 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
-  
-  
-  
-  
-  
-  
+  if (hit.table_like) return openParaPop(rec, clientX, clientY);
+
+  if (hit.needs_text || !Array.isArray(hit.rows) || !hit.rows.length) {
+    return openParaPop(rec, clientX, clientY);
+  }
+
+  const ok = beginInlineEdit(rec.wrap, hit, {
+    pw, ph,
+    onCommit: (text) => {
+
+      reflowParagraph(rec.num, hit.index, text, null, null, null);
+    },
+    onCancel: () => toast(t('已放弃这次修改'), 1500),
+  });
+  if (!ok) return openParaPop(rec, clientX, clientY);
+}
+
+async function openParaPop(rec, clientX, clientY) {
+  if (noFilePath()) return;
+
+  const r = rec.wrap.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const nx = (clientX - r.left) / r.width;
+  const ny = (clientY - r.top) / r.height;
+  const { width: pw, height: ph } = pageSize(rec.num);
+  const px = nx * pw;
+  const py = ph * (1 - ny);
+
+  let list;
+  try {
+    list = await fetchParagraphs(rec.num);
+  } catch (e) {
+    toast(e.message || t('取段落失败'), 3200);
+    return;
+  }
+
+  const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
+                             py >= p.y0 - 2 && py <= p.y1 + 2);
+  if (!hit) {
+    toast(t('这里没有可编辑的段落（点正文里的任意一行试试）'), 2800);
+    return;
+  }
+
   if (hit.table_like) {
     const cell = (hit.cells || []).find(c =>
       px >= c.x0 - 2 && px <= c.x1 + 2 && py >= c.y0 - 2 && py <= c.y1 + 2);
@@ -2000,9 +2292,9 @@ async function openParaPop(rec, clientX, clientY) {
       page: rec.num,
       para: hit.index,
       cell: [cell.row, cell.col],
-      
+
       gid: (cell.gid != null ? cell.gid : cell.row),
-      
+
       orig: cell.text || null,
       pageText: null,
     };
@@ -2013,7 +2305,7 @@ async function openParaPop(rec, clientX, clientY) {
     if (els.paraInsertBelow) els.paraInsertBelow.hidden = false;
     if (els.paraInsertAbove) {
       els.paraInsertAbove.hidden = false;
-      
+
       els.paraInsertAbove.textContent = cell.row === 0 ? t('加表头') : t('上插一行');
     }
     if (els.paraPage) els.paraPage.textContent = t('第 {num} 页', { num: rec.num });
@@ -2031,8 +2323,6 @@ async function openParaPop(rec, clientX, clientY) {
     return;
   }
 
-  
-  
   let paraText = hit.text || '';
   let usedDom = false;
   if (!paraText && rec.textContent) {
@@ -2047,12 +2337,11 @@ async function openParaPop(rec, clientX, clientY) {
   paraPopInfo = {
     page: rec.num,
     para: hit.index,
-    
+
     gid: null,
-    
+
     orig: usedDom ? paraText : null,
-    
-    
+
     pageText: usedDom ? pageTextFromDom(rec) : null,
   };
   if (els.paraDropRow) els.paraDropRow.hidden = true;
@@ -2071,9 +2360,6 @@ async function openParaPop(rec, clientX, clientY) {
   if (!box) return;
   box.hidden = false;
 
-  
-  
-  
   box.scrollIntoView({ block: 'nearest' });
   els.paraText && els.paraText.focus();
 }
@@ -2081,7 +2367,7 @@ async function openParaPop(rec, clientX, clientY) {
 function updateParaCount() {
   if (!els.paraCount) return;
   const t = (els.paraText && els.paraText.value) || '';
-  
+
   const n = [...t.replace(/\s/g, '')].length;
   els.paraCount.textContent = t('{n} 字', { n });
 }
@@ -2093,6 +2379,8 @@ async function reloadContentFrom(path) {
   const task = pdfjsLib.getDocument({
     url: '/api/file?path=' + encodeURIComponent(path),
     rangeChunkSize: 262144,
+
+    ...(state.exportPassword ? { password: state.exportPassword } : {}),
   });
   const pdf = await task.promise;
 
@@ -2101,8 +2389,7 @@ async function reloadContentFrom(path) {
   state.pageCount = pdf.numPages;
   els.pageTotal.textContent = '/ ' + pdf.numPages;
   els.pageInput.max = pdf.numPages;
-  
-  
+
   paraCache.clear();
   state.searchHits = [];
   state.searchHitsByPage = new Map();
@@ -2119,8 +2406,6 @@ async function reloadContentFrom(path) {
   await goToPage(Math.min(keepPage, pdf.numPages));
   els.viewer.scrollTop = keepScroll;
 
-  
-  
   if (state.contentPath) {
     try {
       const info = await api('/api/pdfinfo?path=' +
@@ -2154,15 +2439,13 @@ async function applyStagePreview(res) {
   if (res.pages > 1) msg += t('，跨 {pages} 页续排', { pages: res.pages });
   if (res.newPages > 0) msg += t('，新增 {newPages} 页', { newPages: res.newPages });
 
-  
-  
   const staleRedact = redactCount();
   if (staleRedact > 0) {
     msg += t('　⚠ 版面已变，之前画的 {staleRedact} 处涂黑框请重画', { staleRedact });
   }
 
   if (res.fallback) {
-    
+
     msg += t('　⚠ 这些字用了替代字体，字形会与原文不同：{fallback}', { fallback: res.fallback });
     toast(msg, 9000);
   } else {
@@ -2186,7 +2469,7 @@ async function undoStagePreview() {
     return false;
   }
   if (!r.ok) {
-    
+
     if (r.status === 400 && !errText(j)) return false;
     if (r.status === 400) { toast(errText(j), 2200); return true; }
     toast(errText(j) || t('撤销失败'), 4000);
@@ -2212,8 +2495,7 @@ function updateStageBar(saved = false) {
   const bar = els.stageBar;
   if (!bar) return;
   const has = !!state.stage.id;
-  
-  
+
   setStagePresent(has);
   bar.hidden = !has && !saved;
   bar.classList.toggle('is-saved', !!saved);
@@ -2234,8 +2516,7 @@ async function saveStagePreview() {
 
 async function exitStagePreview() {
   await discardStage();
-  
-  
+
   const back = state.savedPath || state.filePath;
   state.contentPath = back;
   updateStageBar(false);
@@ -2252,7 +2533,7 @@ async function exitStagePreview() {
 
 function closeParaPop() {
   if (els.paraEdit) els.paraEdit.hidden = true;
-  
+
   if (els.paraDropRow) els.paraDropRow.hidden = true;
   if (els.paraInsertBelow) els.paraInsertBelow.hidden = true;
   if (els.paraInsertAbove) els.paraInsertAbove.hidden = true;
@@ -2270,7 +2551,7 @@ async function confirmParaPop() {
   const res = await reflowParagraph(info.page, info.para, txt,
                                     info.orig, info.pageText, info.cell);
   if (!res) return;
-  
+
   closeParaPop();
   await applyStagePreview(res);
 }
@@ -2319,9 +2600,6 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   const vr = els.viewer.getBoundingClientRect();
   const r = rec.wrap.getBoundingClientRect();
 
-  
-  
-  
   textPopInfo = {
     rec,
     page: rec.num,
@@ -2331,14 +2609,12 @@ function openTextPop(rec, clientX, clientY, editing = null) {
   };
 
   pop.hidden = false;
-  
+
   if (els.tipText) els.tipText.value = editing ? (editing.text || '') : '';
   if (els.tipSize) {
     els.tipSize.value = String(editing ? (editing.size || 14) : 14);
   }
 
-  
-  
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -2353,9 +2629,7 @@ function openTextPop(rec, clientX, clientY, editing = null) {
 function closeTextPop() {
   if (els.textPop) els.textPop.hidden = true;
   textPopInfo = null;
-  
-  
-  
+
   if (els.tipText && document.activeElement === els.tipText) els.tipText.blur();
 }
 
@@ -2426,7 +2700,6 @@ function confirmTextPop() {
   const size = parseFloat(els.tipSize && els.tipSize.value) || 14;
   const { page, nx, ny, editingId } = textPopInfo;
 
-  
   if (editingId) {
     if (!txt) {
       toast(t('文字不能为空。要删掉这段文字，请用选择工具删掉对象'), 2600);
@@ -2478,7 +2751,7 @@ function confirmTextPop() {
   toast(pages > 1 ? t('已添加文字（跨 {pages} 页）', { pages }) : t('已添加文字'), 1100);
 }
 
-let replacePopInfo = null;   
+let replacePopInfo = null;
 
 function openReplacePop(obj, clientX, clientY) {
   const pop = els.replaceTextPop;
@@ -2489,7 +2762,6 @@ function openReplacePop(obj, clientX, clientY) {
   pop.hidden = false;
   if (els.replaceText) els.replaceText.value = obj.text || '';
 
-  
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let left = Math.max(8, Math.min(clientX, vw - 250));
@@ -2504,8 +2776,7 @@ function openReplacePop(obj, clientX, clientY) {
 function closeReplacePop() {
   if (els.replaceTextPop) els.replaceTextPop.hidden = true;
   replacePopInfo = null;
-  
-  
+
   if (els.replaceText && document.activeElement === els.replaceText) els.replaceText.blur();
 }
 
@@ -2529,7 +2800,7 @@ function applyAnnotation(sel, type, color) {
   }
 
   if (type === 'note') {
-    
+
     const an = addAnnotation(sel, 'highlight', color || currentAnnotColorHex, '');
     setTimeout(() => openAnnotPop(an.id), 60);
     return;
@@ -2551,16 +2822,12 @@ function openAnnotPop(id) {
   els.apText.textContent = an.text || t('（区域标注）');
   els.apNote.value = an.note || '';
 
-  
   const rec = state.pages[an.page - 1];
   const el = rec && rec.wrap.querySelector(`.an[data-id="${id}"]`);
   const vr = els.viewer.getBoundingClientRect();
   const pop = els.annotPop;
   pop.hidden = false;
 
-  
-  
-  
   const pw = pop.offsetWidth || 306;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -2702,7 +2969,7 @@ async function mergeSelected() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(errText(d) || t('合并失败 ({status})', { status: r.status }));
     toast(t('已合并 {pages} 页：{name}', { pages: d.pages, name: d.name }), 5000);
-    
+
     window.location.href = '/api/file?download=1&path=' +
       encodeURIComponent(d.path);
     setMergeMode(false);
@@ -2799,7 +3066,7 @@ function bindWelcome() {
   $('btnNewHere').addEventListener('click', (ev) => openNewPop(ev.currentTarget));
   $('mergeCancel').addEventListener('click', () => setMergeMode(false));
   $('mergeGo').addEventListener('click', mergeSelected);
-  
+
   mergeMode = false;
   document.body.classList.remove('merge-mode');
   paintMergeBar();
@@ -2859,12 +3126,12 @@ function paintFileList() {
   list.querySelectorAll('.file-item').forEach(el => {
     el.addEventListener('click', (e) => {
       const f = serverFiles[parseInt(el.dataset.i, 10)];
-      
+
       if (e.target.closest('.fi-check')) {
         e.preventDefault();
         const at = mergeSel.indexOf(f.path);
         if (at >= 0) mergeSel.splice(at, 1);
-        else mergeSel.push(f.path);          
+        else mergeSel.push(f.path);
         paintMergeBar();
         el.querySelector('.fi-check input').checked = at < 0;
         return;
@@ -2876,16 +3143,14 @@ function paintFileList() {
           .catch(() => toast(t('打开失败')));
         return;
       }
-      
-      
-      
+
       loadPdfFromPath(f.path, f.name, f.docId);
     });
   });
 }
 
 async function pickServerDir() {
-  
+
   const dir = prompt(t('请输入要扫描的文件夹完整路径：\\n例如 D:\\\\我的PDF'), '');
   if (!dir) return;
   showLoading(t('正在扫描目录…'));
@@ -2916,11 +3181,10 @@ async function handleLocalFile(file) {
 }
 
 function bindToolbar() {
-  
+
   els.stageSave && els.stageSave.addEventListener('click', saveStagePreview);
   els.stageDrop && els.stageDrop.addEventListener('click', exitStagePreview);
 
-  
   els.colorPicker.querySelectorAll('.color-dot').forEach(dot => {
     dot.addEventListener('click', () => {
       els.colorPicker.querySelectorAll('.color-dot').forEach(d => d.classList.remove('on'));
@@ -2930,25 +3194,18 @@ function bindToolbar() {
     });
   });
 
-  
   els.btnAnnotMode.addEventListener('click', () => {
     setAnnotMode(!state.annotMode);
   });
 
-  
   document.addEventListener('pdf:edit-on', () => setAnnotMode(false, true));
 
-  
   els.btnViewSingle.addEventListener('click', () => applyViewMode('single'));
   els.btnViewDouble.addEventListener('click', () => applyViewMode('double'));
   els.btnScrollPlay.addEventListener('click', startAutoScroll);
 
-  
   els.btnBookmark.addEventListener('click', toggleBookmark);
 
-  
-  
-  
   const guardMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2982,19 +3239,17 @@ function bindToolbar() {
       }
 
       const color = act === 'highlight' ? currentAnnotColorHex : btn.dataset.color;
-      const sel = pendingSel;   
-      finishMenuAction();       
+      const sel = pendingSel;
+      finishMenuAction();
       applyAnnotation(sel, act, color);
     });
   });
 
-  
   els.selMenu.addEventListener('mousedown', () => {
     menuBusy = true;
     setTimeout(() => { menuBusy = false; }, 300);
   }, true);
 
-  
   els.annotPop.addEventListener('mousedown', guardMenu, true);
   els.annotPop.addEventListener('mouseup', (e) => e.stopPropagation(), true);
   els.annotPop.addEventListener('mousedown', () => {
@@ -3013,7 +3268,7 @@ function bindToolbar() {
     closeAnnotPop();
   });
   els.apCancel.addEventListener('click', () => {
-    
+
     const an = annState.items.find(a => a.id === popAnnotId);
     if (an && !an.note && !an.text) removeAnnotation(popAnnotId);
     closeAnnotPop();
@@ -3023,7 +3278,6 @@ function bindToolbar() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); els.apSave.click(); }
   });
 
-  
   els.annotFilter.querySelectorAll('.af-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       els.annotFilter.querySelectorAll('.af-chip').forEach(c => c.classList.remove('on'));
@@ -3033,7 +3287,6 @@ function bindToolbar() {
     });
   });
 
-  
   els.pages.addEventListener('click', (e) => {
     const an = e.target.closest('.an');
     if (an) {
@@ -3043,10 +3296,8 @@ function bindToolbar() {
     }
   });
 
-  
   els.viewer.addEventListener('mousedown', onBoxDown);
 
-  
   els.annotActions.hidden = false;
   els.btnExportMd.addEventListener('click', () => {
     if (!state.docId) { toast(t('请先打开文档')); return; }
@@ -3067,28 +3318,23 @@ function bindToolbar() {
     setTimeout(() => URL.revokeObjectURL(a.href), 3000);
   });
 
-  
   document.addEventListener('mousedown', (e) => {
     if (menuBusy) return;
 
-    
     if (!els.selMenu.hidden && els.selMenu.contains(e.target)) return;
 
-    
     if (!els.annotPop.hidden && els.annotPop.contains(e.target)) return;
 
-    
     if (!els.selMenu.hidden) {
       hideSelMenu();
       pendingSel = null;
     }
 
-    
     const onText = !!e.target.closest('.text-layer');
     const onAnnot = !!e.target.closest('.an');
 
     if (!els.annotPop.hidden && !onText && !onAnnot) {
-      
+
       if (popAnnotId) {
         const an = annState.items.find(a => a.id === popAnnotId);
         if (an) {
@@ -3103,10 +3349,8 @@ function bindToolbar() {
     }
   });
 
-  
   document.addEventListener('selectionchange', debounce(onSelectionChange, 90));
 
-  
   els.progressBar.addEventListener('click', (e) => {
     const r = els.progressBar.getBoundingClientRect();
     const ratio = (e.clientX - r.left) / r.width;
@@ -3114,7 +3358,6 @@ function bindToolbar() {
     v.scrollTop = ratio * (v.scrollHeight - v.clientHeight);
   });
 
-  
   window.addEventListener('blur', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   });
@@ -3122,7 +3365,6 @@ function bindToolbar() {
     if (document.hidden && !els.selMenu.hidden) hideSelMenu();
   });
 
-  
   els.viewer.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !els.selMenu.hidden) {
       hideSelMenu();
@@ -3130,7 +3372,6 @@ function bindToolbar() {
     }
   });
 
-  
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (els.redactConfirm && !els.redactConfirm.hidden) {
@@ -3139,24 +3380,32 @@ function bindToolbar() {
     }
   });
 
-  
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
       if (el) el.addEventListener('click', () => hideSelMenu());
     });
 
-  
   bindEditUI();
 
-  
   els.viewer.addEventListener('mousedown', onEditMouseDown);
-  
+
   els.viewer.addEventListener('dblclick', onEditDoubleClick);
+
+  els.viewer.addEventListener('dblclick', (e) => {
+    if (e.defaultPrevented) return;
+    if (state.annotMode) return;
+    if (!e.target.closest('.page')) return;
+
+    if (editState.on && editState.tool && editState.tool !== 'select') return;
+    const rec = pageAt(e.clientX, e.clientY);
+    if (!rec) return;
+    e.preventDefault();
+    openInlineEditAt(rec, e.clientX, e.clientY);
+  });
   window.addEventListener('mousemove', onEditMouseMove);
   window.addEventListener('mouseup', onEditMouseUp);
 
-  
   if (els.tipOk) els.tipOk.addEventListener('click', confirmTextPop);
   if (els.tipCancel) els.tipCancel.addEventListener('click', closeTextPop);
   if (els.tipText) {
@@ -3167,7 +3416,7 @@ function bindToolbar() {
       }
     });
   }
-  
+
   document.addEventListener('mousedown', (e) => {
     if (els.objBar && !els.objBar.hidden && !els.objBar.contains(e.target)) {
       hideObjBar();
@@ -3177,7 +3426,6 @@ function bindToolbar() {
     closeTextPop();
   }, true);
 
-  
   if (els.replaceOk) els.replaceOk.addEventListener('click', confirmReplacePop);
   if (els.replaceCancel) els.replaceCancel.addEventListener('click', closeReplacePop);
   if (els.replaceText) {
@@ -3188,14 +3436,13 @@ function bindToolbar() {
       }
     });
   }
-  
+
   document.addEventListener('mousedown', (e) => {
     if (!els.replaceTextPop || els.replaceTextPop.hidden) return;
     if (els.replaceTextPop.contains(e.target)) return;
     closeReplacePop();
   }, true);
 
-  
   if (els.paraOk) els.paraOk.addEventListener('click', confirmParaPop);
   if (els.paraCancel) els.paraCancel.addEventListener('click', closeParaPop);
   if (els.paraDropRow) els.paraDropRow.addEventListener('click', confirmDropRow);
@@ -3214,32 +3461,25 @@ function bindToolbar() {
     els.paraText.addEventListener('input', updateParaCount);
     els.paraText.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeParaPop(); }
-      
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault(); confirmParaPop();
       }
     });
   }
 
-  
   if (els.sideClose) {
     els.sideClose.addEventListener('click', () => setEditMode(false));
   }
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
 
-    
-    
-    
     const overlays = [
       els.paraEdit, els.textPop, els.replaceTextPop,
       els.annotPop, els.selMenu, els.redactConfirm,
     ];
     if (overlays.some(p => p && !p.hidden)) return;
 
-    
-    
-    
     const tgt = e.target;
     if (tgt && tgt.closest &&
         tgt.closest('.text-input-pop, .annot-pop, input, textarea')) return;
@@ -3250,12 +3490,10 @@ function bindToolbar() {
     }
   });
 
-  
   if (els.paraFold) {
     els.paraFold.addEventListener('click', closeParaPop);
   }
 
-  
   const DW_KEY = LS_PREFIX + 'drawerW';
   const setDrawerW = (px, persist = true) => {
     const w = Math.max(240, Math.min(620, Math.round(px)));
@@ -3275,7 +3513,7 @@ function bindToolbar() {
       try { els.spResizer.setPointerCapture(e.pointerId); } catch (err) {  }
       e.preventDefault();
     });
-    
+
     window.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       setDrawerW(window.innerWidth - e.clientX);
@@ -3288,7 +3526,6 @@ function bindToolbar() {
     els.spResizer.addEventListener('dblclick', () => setDrawerW(300));
   }
 
-  
   if (els.objBarDel) {
     els.objBarDel.addEventListener('click', () => {
       if (objBarId == null) return;
@@ -3300,7 +3537,7 @@ function bindToolbar() {
   if (els.objBarFront) {
     els.objBarFront.addEventListener('click', () => {
       if (objBarId == null) return;
-      
+
       const i = editState.objects.findIndex(o => o.id === objBarId);
       if (i >= 0 && i < editState.objects.length - 1) {
         const [o] = editState.objects.splice(i, 1);
@@ -3323,10 +3560,9 @@ function bindToolbar() {
     });
   }
 
-  
   els.btnSidebar.addEventListener('click', () => {
     els.sidebar.classList.toggle('collapsed');
-    
+
     setTimeout(() => {
       if (state.pdf && state.scaleMode === 'auto') applyScale('auto');
     }, 220);
@@ -3358,10 +3594,6 @@ function bindToolbar() {
     els.zoomSelect.value = 'width';
   });
 
-  
-  
-  
-  
   if (els.btnExportTop) {
     els.btnExportTop.addEventListener('click', () => {
       if (!state.pdf) { toast(t('请先打开一个文档'), 1600); return; }
@@ -3371,16 +3603,43 @@ function bindToolbar() {
 
   els.btnPrint.addEventListener('click', () => {
     if (!state.pdf) return;
-    state.pdf.getData().then(d => {
+
+    if (redactCount() > 0 || replaceCount() > 0) {
+      toast(t('打印不含涂黑 / 替换。要带上它们，请先点对应的「并另存为…」'), 4600);
+      return;
+    }
+
+    currentPdfBytes().then(async (d) => {
+
+      if (/Electron/i.test(navigator.userAgent)) {
+        try {
+          const r = await fetch('/api/print', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/pdf' },
+            body: new Blob([d], { type: 'application/pdf' }),
+          });
+          let j = null;
+          try { j = await r.json(); } catch (e) {  }
+          if (!r.ok || (j && j.ok === false)) {
+            throw new Error((j && (j.error || j.msg))
+              || t('请求失败 ({status})', { status: r.status }));
+          }
+          toast(t('已用系统默认阅读器打开，按 Ctrl+P 打印'), 3200);
+        } catch (e) {
+          toast(t('打开打印失败：') + errText(e), 2800);
+        }
+        return;
+      }
+
       const blob = new Blob([d], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const w = window.open(url);
       if (w) setTimeout(() => { try { w.print(); } catch (e) {} }, 800);
       else toast(t('打印窗口被浏览器拦截，请允许弹出窗口'));
+    }).catch((e) => {
+      toast(t('打开打印失败：') + errText(e), 2800);
     });
   });
-
-  
 
   if (els.langLabel) {
     els.langLabel.textContent = LANG_SHORT[currentLang()] || currentLang().toUpperCase();
@@ -3390,13 +3649,12 @@ function bindToolbar() {
       const busy = document.body.classList.contains('edit-mode')
         || !!(state.stage && state.stage.id);
       if (busy && !confirm(t('切换语言会重新载入页面，未保存的改动会丢失。继续吗？'))) return;
-      
+
       snapshotOpenTabs();
       setLang(nextLang());
     });
   }
 
-  
   const si = els.searchInput;
   si.addEventListener('input', debounce(() => {
     els.searchWrap.classList.toggle('has-text', si.value.length > 0);
@@ -3419,27 +3677,21 @@ function bindToolbar() {
   els.btnPrevHit.addEventListener('click', () => gotoHit(state.hitIndex - 1));
   els.btnNextHit.addEventListener('click', () => gotoHit(state.hitIndex + 1));
 
-  
   document.querySelectorAll('.side-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.side-tab').forEach(t => t.classList.toggle('on', t === tab));
       const key = tab.dataset.tab;
-      
-      
-      
+
       $('panelThumbs').classList.toggle('on', key === 'thumbs');
       $('panelOutline').classList.toggle('on', key === 'outline');
       $('panelAnnots').classList.toggle('on', key === 'annots');
     });
   });
 
-  
   els.viewer.addEventListener('scroll', () => {
     if (!els.selMenu.hidden) hideSelMenu();
   }, { passive: true });
 
-  
-  
   ['zoomSelect', 'btnZoomIn', 'btnZoomOut', 'btnRotate', 'btnFitWidth']
     .forEach(id => {
       const el = els[id];
@@ -3451,7 +3703,6 @@ function bindToolbar() {
     updateProgress();
   }, 60), { passive: true });
 
-  
   els.viewer.addEventListener('wheel', (e) => {
     if (!state.pdf) return;
     if (e.ctrlKey || e.metaKey) {
@@ -3460,7 +3711,6 @@ function bindToolbar() {
     }
   }, { passive: false });
 
-  
   els.viewer.addEventListener('click', (e) => {
     if (!state.pdf) return;
     const rec = e.target.closest('.page');
@@ -3470,14 +3720,13 @@ function bindToolbar() {
     }
   });
 
-  
   ['dragover', 'drop'].forEach(ev => {
     document.addEventListener(ev, (e) => {
       if (ev === 'dragover') { e.preventDefault(); return; }
       e.preventDefault();
       const f = e.dataTransfer?.files?.[0];
       if (!f) return;
-      
+
       if (editState.on && /^image\//.test(f.type || '')) {
         const rec = pageAt(e.clientX, e.clientY);
         if (rec) {
@@ -3497,17 +3746,13 @@ function bindToolbar() {
     });
   });
 
-  
-  
-  
-  
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
     e.preventDefault();
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
     if (typing) {
-      
+
       toast(t('请先完成当前输入（确定 / 取消）再导出'), 2600);
       return;
     }
@@ -3520,7 +3765,7 @@ function bindToolbar() {
     const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
 
     if ((e.ctrlKey || e.metaKey) && !typing) {
-      
+
       if (editState.on) {
         const k = e.key.toLowerCase();
         if (k === 'z') { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); return; }
@@ -3538,6 +3783,15 @@ function bindToolbar() {
     }
 
     if (typing) return;
+
+    if (e.key === '?' || e.key === '？') {
+      e.preventDefault(); openShortcuts(); return;
+    }
+
+    if (e.key === 'Escape' && els.scModal && !els.scModal.hidden) {
+      e.preventDefault(); closeShortcuts(); return;
+    }
+
     if (!state.pdf) return;
 
     switch (e.key) {
@@ -3588,7 +3842,7 @@ function stepZoom(dir) {
   els.zoomSelect.value = String(target);
   const opt = [...els.zoomSelect.options].find(o => o.value === String(target));
   if (!opt) {
-    
+
     const o = new Option(Math.round(target * 100) + '%', String(target));
     els.zoomSelect.add(o);
     els.zoomSelect.value = String(target);
@@ -3611,8 +3865,15 @@ function cacheAllEls() {
     'searchWrap', 'searchInput', 'searchClear', 'searchCount', 'searchNav',
     'btnPrevHit', 'btnNextHit', 'searchSep', 'fileGroup', 'btnExportTop',
     'btnLang', 'langLabel',
+
+    'btnHelp', 'scModal', 'scClose', 'scBody',
     'btnPrint', 'filePicker',
-    
+
+    'pwMask', 'pwInput', 'pwErr', 'pwOk', 'pwCancel',
+
+    'btnEncExportTop', 'btnEncExportPdf', 'encMask', 'encUser', 'encOwner',
+    'encAlgo', 'encPrint', 'encCopy', 'encModify', 'encErr', 'encOk', 'encCancel',
+
     'annotGroup', 'annotSep', 'btnAnnotMode', 'colorPicker',
     'viewGroup', 'btnViewSingle', 'btnViewDouble', 'btnScrollPlay',
     'btnBookmark',
@@ -3621,7 +3882,7 @@ function cacheAllEls() {
     'progressBar', 'progressFill', 'progressMarkers',
     'stageBar', 'stageText', 'stageSave', 'stageDrop',
     'selMenu', 'annotPop', 'apTag', 'apText', 'apNote', 'apSave', 'apCancel', 'apDelete',
-    
+
     'editGroup', 'editSep', 'btnEditMode', 'editPalette', 'editColor',
     'sidePanel', 'sideClose', 'sideTitle',
     'editColorValue', 'btnEditUndo', 'btnEditRedo', 'btnEditClear', 'btnExportPdf',
@@ -3629,19 +3890,19 @@ function cacheAllEls() {
     'editSaveHint', 'pagePanel', 'pageListBody',
     'textPop', 'tipText', 'tipSize', 'tipCancel', 'tipOk',
     'objBar', 'objBarName', 'objBarFront', 'objBarBack', 'objBarDel',
-    
+
     'btnRedactPdf', 'redactCount', 'redactConfirm', 'redactConfirmStats',
     'redactCancel', 'redactOk',
-    
+
     'btnReplacePdf', 'replaceCount', 'replaceTextPop', 'replaceText',
     'replaceCancel', 'replaceOk',
-    
+
     'paraEdit', 'paraText', 'paraTip', 'paraPage', 'paraCount',
     'paraFold', 'spResizer',
     'paraCancel', 'paraOk', 'paraDropRow', 'paraInsertAbove', 'paraInsertBelow',
     'btnNewPdf', 'newPop', 'newSize', 'newPages', 'newLandscape',
     'newOk', 'newCancel',
-    
+
     'btnInsertImage', 'imagePicker',
   ]);
   els.sideBody = document.querySelector('.side-body');
@@ -3653,7 +3914,7 @@ function snapshotOpenTabs() {
   const cur = tabs.active();
   const open = [];
   for (const tab of tabs.list()) {
-    if (tab.home || !tab.path) continue;   
+    if (tab.home || !tab.path) continue;
     const page = (cur && tab.id === cur.id)
       ? state.currentPage
       : (tab.snap && tab.snap.state ? tab.snap.state.currentPage : 1);
@@ -3688,7 +3949,7 @@ async function restoreOpenTabs() {
       const page = Math.max(1, Number(item.page) || 1);
       if (page > 1) goToPage(page);
     } catch (e) {
-      
+
     }
   }
   const back = data.activePath && tabs.findByPath(data.activePath);
@@ -3696,12 +3957,10 @@ async function restoreOpenTabs() {
 }
 
 async function init() {
-  
-  
+
   await initI18n();
   cacheAllEls();
 
-  
   tabs.initTabs();
   tabs.bindTabHost({
     refreshChrome,
@@ -3713,23 +3972,21 @@ async function init() {
 
   bindNavHelpers(goToPage, renderPage);
   bindEditHelpers({ goToPage, renderPage });
-  
-  
+
   initBatchUI({
     goToPage: (p) => goToPage(p, true),
     flashBoxes,
     applyStagePreview,
   });
   bindToolbar();
+  bindShortcutsUI();
   window.addEventListener('resize', onResize);
-
-  
 
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     const k = String(e.key).toLowerCase();
     if (k === 'w') {
-      
+
       const cur = tabs.active();
       if (cur && !cur.home) { e.preventDefault(); closeDocument(); }
       return;
@@ -3739,14 +3996,13 @@ async function init() {
       cycleTab(e.shiftKey ? -1 : 1);
       return;
     }
-    
+
     if (/^[1-9]$/.test(e.key)) {
       const target = tabs.list()[Number(e.key) - 1];
       if (target) { e.preventDefault(); tabs.activate(target.id); }
     }
   });
 
-  
   window.addEventListener('beforeunload', savePosition);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { savePosition(); doSave(); saveEdits(); }
@@ -3755,7 +4011,6 @@ async function init() {
   const params = new URLSearchParams(location.search);
   const direct = params.get('path');
   if (direct) {
-    
 
     try {
       await api('/api/allow', { method: 'POST', body: { path: direct } });

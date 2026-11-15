@@ -1,8 +1,5 @@
-
-
 export default {
 
-  
   'PDF 查看器': 'PDF Viewer',
   ' - PDF 查看器': ' - PDF Viewer',
   '取消': 'Cancel',
@@ -26,7 +23,6 @@ export default {
   '服务返回异常 ({status})': 'Unexpected response from the server ({status})',
   '请求失败 ({status})': 'Request failed ({status})',
 
-  
   '正在打开文档…': 'Opening document…',
   '打开失败：': 'Could not open: ',
   '打开失败': 'Could not open',
@@ -39,7 +35,6 @@ export default {
   '关闭当前文档并返回列表？': 'Close this document and go back to the list?',
   '返回文件列表 (H)': 'Back to file list (H)',
 
-  
   '第 {num} 页': 'Page {num}',
   '第 {i} 页': 'Page {i}',
   '第 1 页': 'Page 1',
@@ -60,7 +55,6 @@ export default {
   '自动滚动已开启，按空格暂停': 'Auto-scroll on — press Space to pause',
   '已滚动到文档末尾': 'Reached the end of the document',
 
-  
   '已缩放': 'Resized',
   '旋转 {rotation}°': 'Rotated {rotation}°',
   '顺时针旋转 (R)': 'Rotate clockwise (R)',
@@ -74,7 +68,6 @@ export default {
   '适应宽度': 'Fit width',
   '拖动调整侧栏宽度（双击恢复默认）': 'Drag to resize the sidebar (double-click to reset)',
 
-  
   '收起/展开侧边栏 (S)': 'Toggle sidebar (S)',
   '收起侧栏（Esc）': 'Collapse sidebar (Esc)',
   '缩略图': 'Thumbnails',
@@ -86,7 +79,6 @@ export default {
   '已取消书签': 'Bookmark removed',
   '第 {p} 页已加书签': 'Bookmark added on page {p}',
 
-  
   '搜索文档…': 'Search document…',
   '搜索中…': 'Searching…',
   '无结果': 'No results',
@@ -94,7 +86,6 @@ export default {
   '下一个匹配 (Enter)': 'Next match (Enter)',
   '{total} 处': '{total} matches',
 
-  
   '标注': 'Annotations',
   '高亮': 'Highlight',
   '下划线': 'Underline',
@@ -130,7 +121,6 @@ export default {
   '标注模式：拖拽可框选区域（已退出编辑）': 'Annotation mode — drag to select an area (editing turned off)',
   '已退出标注模式': 'Annotation mode off',
 
-  
   '编辑': 'Edit',
   '进入编辑模式 (E)': 'Edit mode (E)',
   '编辑模式：拖拽绘制，点选可删除': 'Edit mode — drag to draw, click to delete',
@@ -188,7 +178,6 @@ export default {
   '文字不能为空。要删掉这段文字，请用选择工具删掉对象': 'Text cannot be empty. To remove this text, delete the object with the Select tool.',
   '文字不能为空。要整段删掉，请用涂黑工具': 'Text cannot be empty. To remove a whole paragraph, use the redaction tool.',
 
-  
   '涂黑': 'Redact',
   '涂黑区域': 'Redaction area',
   '涂黑 — 永久销毁该区域的文字（不可逆！）': 'Redact — permanently destroy the text in an area (cannot be undone)',
@@ -215,7 +204,6 @@ export default {
   '<li>第 {p} 页：<b>{v}</b> 处</li>': '<li>Page {p}: <b>{v}</b></li>',
   '<li>合计：<b>{length}</b> 处区域</li>': '<li>Total: <b>{length}</b> area(s)</li>',
 
-  
   '取段落失败': 'Could not read paragraphs',
   '取段落失败 ({status})': 'Could not read paragraphs ({status})',
   '这里没有可编辑的段落（点正文里的任意一行试试）': 'Nothing editable here — try clicking a line of body text',
@@ -253,7 +241,6 @@ export default {
   '插入行失败 ({status})': 'Could not insert the row ({status})',
   '插入行失败：{v}': 'Could not insert the row: {v}',
 
-  
   '正在刷新预览…': 'Refreshing preview…',
   '刷新预览失败：': 'Could not refresh the preview: ',
   '已更新预览': 'Preview updated',
@@ -300,8 +287,6 @@ export default {
   '打印': 'Print',
   '打印窗口被浏览器拦截，请允许弹出窗口': 'The print window was blocked — please allow pop-ups',
   '请先完成当前输入（确定 / 取消）再导出': 'Finish the current input (OK / Cancel) before exporting',
-
-  
 
   '新建失败 ({status})': 'Could not create ({status})',
   '服务端没有返回新文件位置': 'The server did not return a path for the new file',
@@ -483,7 +468,6 @@ export default {
   '切换界面语言 / Switch language': 'Switch language / 切换界面语言',
   '、': ', ',
 
-  
   '主页': 'Home',
   '文档': 'Document',
   '关闭标签页': 'Close tab',
@@ -492,7 +476,6 @@ export default {
   '这份文档还有未保存的预览，关闭标签页会丢弃它。仍要关闭？':
     'This document has an unsaved preview. Closing the tab discards it. Close anyway?',
 
-  
   '检查更新': 'Check for updates',
   '检查中…': 'Checking…',
   '启动时检查': 'Check on startup',
@@ -501,7 +484,6 @@ export default {
   '检查更新失败': 'Update check failed',
   '去下载': 'Open the download page',
 
-  
   '图片': 'Image',
   '图片 — 插入 PNG / JPEG（可拖动、拖四角缩放）':
     'Image — insert a PNG / JPEG (drag to move, drag corners to resize)',
@@ -513,4 +495,94 @@ export default {
   '锁比例': 'Lock ratio',
   '拖四角缩放时保持原比例（按住 Shift 可临时锁住）':
     'Keep the original proportions when resizing (hold Shift to lock temporarily)',
+
+  '添加': 'Added',
+  '当前按页码排序，点击改为按添加顺序':
+    'Sorted by page number. Click to sort by when added',
+  '当前按添加顺序排序，点击改为按页码':
+    'Sorted by when added. Click to sort by page number',
+  '删除全部书签': 'Delete all bookmarks',
+  '双击可重命名': 'Double-click to rename',
+  '删除这个书签': 'Delete this bookmark',
+  '删除全部 {n} 个书签？': 'Delete all {n} bookmarks?',
+  '已清空 {n} 个书签': 'All {n} bookmarks cleared',
+  '第 {p} 页': 'Page {p}',
+
+  '快捷键': 'Keyboard shortcuts',
+  '快捷键（按 ? 打开）': 'Keyboard shortcuts (press ?)',
+  '关闭（Esc）': 'Close (Esc)',
+  '文件': 'File',
+  '翻页与搜索': 'Navigation',
+  '缩放与视图': 'View',
+  '标注与编辑': 'Annotate & edit',
+  '打开文件': 'Open file',
+  '下一页': 'Next page',
+  '上一页': 'Previous page',
+  '第一页 / 最后一页': 'First / last page',
+  '自动滚动': 'Auto-scroll',
+  '搜索': 'Search',
+  '放大 / 缩小': 'Zoom in / out',
+  '自适应窗口': 'Fit to window',
+  '适合宽度': 'Fit width',
+  '单页 / 双页': 'Single / two pages',
+  '旋转页面': 'Rotate page',
+  '反色': 'Invert colors',
+  '侧栏': 'Sidebar',
+  '回到主页': 'Back to home',
+  '标注模式': 'Annotation mode',
+  '编辑模式': 'Edit mode',
+  '本页加书签': 'Bookmark this page',
+  '关闭浮层 / 退出模式': 'Close popover / leave mode',
+  '撤销 / 重做': 'Undo / redo',
+  '复制 / 粘贴 / 原地复制': 'Copy / paste / duplicate',
+  '打开这个面板': 'Open this panel',
+
+  '已用系统默认阅读器打开，按 Ctrl+P 打印':
+    'Opened in your default PDF reader — press Ctrl+P there to print',
+  '打开打印失败：': 'Could not open for printing: ',
+  '打印不含涂黑 / 替换。要带上它们，请先点对应的「并另存为…」':
+    'Printing does not include redaction or text replacement. Use the matching "Save as…" button first.',
+  '生成打印副本失败 ({status})': 'Could not build the print copy ({status})',
+  '批注换算失败，打印的副本将不含批注：':
+    'Could not convert annotations; the printed copy will not include them:',
+  '已放弃这次修改': 'Discarded this edit',
+
+  '该 PDF 已加密': 'This PDF is encrypted',
+  '打开口令': 'Open password',
+  '口令只在本机使用，不会上传，也不会写进文件。':
+    'The password is used locally only — never uploaded, never written into the file.',
+  '解锁': 'Unlock',
+  '口令不能为空': 'Password cannot be empty',
+  '口令不正确，请重试': 'Wrong password, please try again',
+  '多次口令错误，已放弃打开': 'Too many wrong attempts — gave up opening',
+  '这份文件没有磁盘副本，暂时不能编辑':
+    'This file has no on-disk copy yet, so it cannot be edited',
+
+  '加密导出': 'Encrypt on export',
+  '加密导出…': 'Encrypt…',
+  '加密导出… — 给导出的新文件加打开口令与权限':
+    'Encrypt on export — add an open password and permissions to the new file',
+  '加密导出… — 给新文件设打开口令、权限口令，并限制打印 / 复制 / 修改':
+    'Encrypt on export — set open/owner passwords and restrict printing, copying and editing',
+  '打开口令（没有它打不开这份文件）':
+    'Open password (the file cannot be opened without it)',
+  '至少 1 个字符，建议 8 位以上': 'At least 1 character; 8+ is recommended',
+  '权限口令（可选：用来解除下面的限制）':
+    'Owner password (optional: lifts the restrictions below)',
+  '留空则与打开口令相同': 'Leave empty to use the open password',
+  '加密强度': 'Encryption',
+  'AES-256（推荐）': 'AES-256 (recommended)',
+  'AES-128（兼容旧阅读器）': 'AES-128 (older readers)',
+  '允许别人做什么': 'Allow the recipient to',
+  '复制文字': 'Copy text',
+  '修改内容': 'Edit content',
+  '口令只在本机使用，不会上传、不写日志。口令丢了这份文件就再也打不开 —— 没有找回途径。打开口令是真正的加密；打印 / 复制 / 修改是阅读器层面的约定，能挡随手操作，挡不住专门的破解工具。':
+    'Passwords stay on this machine — never uploaded, never logged. Lose the password and the file can never be opened again: there is no recovery. The open password is real encryption; the print/copy/edit bits are reader-level flags that stop casual use, not a determined cracker.',
+  '打开口令不能为空 —— 空口令等于没有加密':
+    'The open password cannot be empty — an empty password is no encryption at all',
+  '打开口令太长：{v} 字节，最多 {max} 字节（1 个汉字算 3 字节）':
+    'Open password is too long: {v} bytes, at most {max} (a CJK character counts as 3)',
+  '权限口令太长：最多 {max} 字节':
+    'Owner password is too long: at most {max} bytes',
+  '，已加密（{v}）': ', encrypted ({v})',
 };

@@ -1,4 +1,3 @@
-
 import statistics
 
 def eff_size(g):

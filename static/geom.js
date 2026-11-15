@@ -1,9 +1,3 @@
-
-
-
-
-
-
 export function screenToNorm(clientX, clientY, left, top, rw, rh) {
   return {
     x: (clientX - left) / (rw || 1),
@@ -11,7 +5,6 @@ export function screenToNorm(clientX, clientY, left, top, rw, rh) {
     w: 0, h: 0,
   };
 }
-
 
 export function normToScreen(nx, ny, nw, nh, rw, rh) {
   return {
@@ -22,16 +15,14 @@ export function normToScreen(nx, ny, nw, nh, rw, rh) {
   };
 }
 
-
 export function normToPdf(nx, ny, nw, nh, pw, ph) {
   return {
     x: nx * pw,
-    y: ph * (1 - ny - nh),        
+    y: ph * (1 - ny - nh),
     w: nw * pw,
     h: nh * ph,
   };
 }
-
 
 export function pdfToNorm(x, y, w, h, pw, ph) {
   if (!pw || !ph) return { x: 0, y: 0, w: 0, h: 0 };
@@ -43,7 +34,6 @@ export function pdfToNorm(x, y, w, h, pw, ph) {
   };
 }
 
-
 export function distToSegment(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
@@ -54,10 +44,7 @@ export function distToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-
 export const HIT_LINE_TOL = 0.012;
-
-
 
 export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   const mine = objects.filter(o => o.page === pageNum);
@@ -89,14 +76,12 @@ export function hitTestNorm(objects, pageNum, nx, ny, getSize) {
   return null;
 }
 
-
-
 export function payloadObjects(objects) {
   return objects
     .filter(o => o.kind !== 'redact' && o.kind !== 'replace')
     .map(o => {
       const out = { ...o };
-      
+
       delete out._norm;
       delete out._box;
       delete out.id;
@@ -109,7 +94,6 @@ export function payloadObjects(objects) {
     });
 }
 
-
 export function hasAnyEdit(payload) {
   if (payload.objects && payload.objects.length > 0) return true;
   const p = payload.pages || {};
@@ -120,16 +104,12 @@ export function hasAnyEdit(payload) {
   return false;
 }
 
-
-
 export function dragDeltaToPdf(dxScreen, dyScreen, rw, rh, pw, ph) {
   return {
     dx: (dxScreen / (rw || 1)) * pw,
     dy: -(dyScreen / (rh || 1)) * ph,
   };
 }
-
-
 
 export function movedPosition(orig, d) {
   const out = { x: orig.x + d.dx, y: orig.y + d.dy };
@@ -140,30 +120,25 @@ export function movedPosition(orig, d) {
   return out;
 }
 
-
-
 export function resizedRect(orig, corner, d, keepRatio = false) {
   const MIN = 6;
-  const east = corner.indexOf('e') >= 0;    
-  const north = corner.indexOf('n') >= 0;   
+  const east = corner.indexOf('e') >= 0;
+  const north = corner.indexOf('n') >= 0;
 
   let x = orig.x, y = orig.y, w = orig.w, h = orig.h;
 
   if (east) {
-    w = w + d.dx;                 
+    w = w + d.dx;
   } else {
-    x = x + d.dx;                 
+    x = x + d.dx;
     w = w - d.dx;
   }
   if (north) {
-    h = h + d.dy;                 
+    h = h + d.dy;
   } else {
-    y = y + d.dy;                 
+    y = y + d.dy;
     h = h - d.dy;
   }
-
-  
-
 
   if (keepRatio && orig.w > 0 && orig.h > 0) {
     const ratio = orig.w / orig.h;
@@ -175,10 +150,10 @@ export function resizedRect(orig, corner, d, keepRatio = false) {
       nh = h;
       nw = h * ratio;
     }
-    
+
     if (nw < MIN) { nw = MIN; nh = MIN / ratio; }
     if (nh < MIN) { nh = MIN; nw = MIN * ratio; }
-    
+
     if (!east) x = orig.x + orig.w - nw;
     else x = orig.x;
     if (!north) y = orig.y + orig.h - nh;
@@ -186,19 +161,16 @@ export function resizedRect(orig, corner, d, keepRatio = false) {
     return { x, y, w: nw, h: nh };
   }
 
-  
   if (w < MIN) {
     w = MIN;
-    if (!east) x = orig.x + orig.w - MIN;    
+    if (!east) x = orig.x + orig.w - MIN;
   }
   if (h < MIN) {
     h = MIN;
-    if (!north) y = orig.y + orig.h - MIN;   
+    if (!north) y = orig.y + orig.h - MIN;
   }
   return { x, y, w, h };
 }
-
-
 
 export function makeTextBoxAuto(el) {
   el.style.width = 'auto';
@@ -207,8 +179,6 @@ export function makeTextBoxAuto(el) {
   el.style.whiteSpace = 'pre';
   return el;
 }
-
-
 
 export function wrapText(text, measure, maxWidth) {
   const src = String(text == null ? '' : text);
@@ -236,8 +206,6 @@ export function wrapText(text, measure, maxWidth) {
   return out.join('\n');
 }
 
-
-
 export function paginateText(lines, opts) {
   const { page, firstBaseline, pageW, pageH, size } = opts;
   const marginTop = opts.marginTop != null ? opts.marginTop : Math.max(18, pageH * 0.04);
@@ -245,8 +213,8 @@ export function paginateText(lines, opts) {
   const lineH = size * 1.25;
   const asc = size * 0.80;
   const desc = size * 0.20;
-  const topMost = (pageH - marginTop) - asc;   
-  const botMost = marginBot + desc;            
+  const topMost = (pageH - marginTop) - asc;
+  const botMost = marginBot + desc;
   const perPage = Math.max(1, Math.floor((topMost - botMost) / lineH) + 1);
 
   const arr = (lines && lines.length) ? lines : [''];

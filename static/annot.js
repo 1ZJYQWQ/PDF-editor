@@ -1,19 +1,10 @@
-
-
-
-
 import { t } from '/static/i18n.js';
 import { state, els, api, toast, uid, escapeHtml } from '/static/core.js';
 
-
-
-
 export const annState = {
   docId: null,
-  items: [],          
-  
-  
-  
+  items: [],
+
   ext: [],
   filter: 'all',
   activeId: null,
@@ -21,13 +12,10 @@ export const annState = {
 
 let saveTimer = null;
 
-
-
-
 export async function loadAnnotations(docId) {
   annState.docId = docId;
   annState.items = [];
-  annState.ext = [];        
+  annState.ext = [];
   annState.activeId = null;
   if (!docId) { renderAnnotList(); return; }
   try {
@@ -39,7 +27,6 @@ export async function loadAnnotations(docId) {
   renderAnnotList();
   repaintAnnotations();
 }
-
 
 export function scheduleSave() {
   clearTimeout(saveTimer);
@@ -62,11 +49,6 @@ export async function doSave() {
   }
 }
 
-
-
-
-
-
 export function selectionToAnchors() {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -74,7 +56,6 @@ export function selectionToAnchors() {
   const range = sel.getRangeAt(0);
   if (!range.toString().trim()) return null;
 
-  
   let node = range.startContainer;
   let pageEl = null;
   while (node && node !== document.body) {
@@ -86,7 +67,6 @@ export function selectionToAnchors() {
   const rec = state.pages[parseInt(pageEl.dataset.page, 10) - 1];
   if (!rec || !rec.textContent) return null;
 
-  
   const byItem = buildSpanItemMap(rec);
   const spanItems = new Map();
   for (const [itemIndex, span] of byItem) spanItems.set(span, itemIndex);
@@ -114,7 +94,6 @@ export function selectionToAnchors() {
   }
   if (!parts.length) return null;
 
-  
   const text = parts.map(p => {
     const it = rec.textContent.items[p.itemIndex];
     return (it && it.str ? it.str : '').slice(p.charStart, p.charEnd);
@@ -123,10 +102,8 @@ export function selectionToAnchors() {
   return { page: rec.num, parts, text };
 }
 
-
-
 export function buildSpanItemMap(rec) {
-  const map = new Map();                       
+  const map = new Map();
   if (!rec || !rec.textLayer) return map;
 
   const allSpans = [...rec.textLayer.querySelectorAll('span')];
@@ -141,7 +118,6 @@ export function buildSpanItemMap(rec) {
     indexed.add(span);
   }
 
-  
   const missing = allSpans.filter(s => !indexed.has(s));
   if (missing.length && rec.textContent && rec.textContent.items) {
     const used = new Set(map.keys());
@@ -155,17 +131,15 @@ export function buildSpanItemMap(rec) {
   return map;
 }
 
-
-
 function offsetWithin(span, container, offset) {
-  
+
   if (container === span) {
     let count = 0;
     let idx = 0;
     const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     let n;
     while ((n = walker.nextNode())) {
-      
+
       let top = n;
       while (top.parentNode && top.parentNode !== span) top = top.parentNode;
       const topIndex = [...span.childNodes].indexOf(top);
@@ -175,26 +149,24 @@ function offsetWithin(span, container, offset) {
     return count;
   }
 
-  
   let count = 0;
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
   let n;
   while ((n = walker.nextNode())) {
     if (n === container) {
-      
+
       return count + offset;
     }
     count += n.textContent.length;
   }
 
-  
   if (container.nodeType === 1 && span.contains(container)) {
     let acc = 0;
     const w2 = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     let n2;
     while ((n2 = w2.nextNode())) {
       if (container.contains(n2)) {
-        
+
         let inner = 0;
         for (let i = 0; i < offset && i < container.childNodes.length; i++) {
           inner += container.childNodes[i].textContent.length;
@@ -207,9 +179,6 @@ function offsetWithin(span, container, offset) {
 
   return count;
 }
-
-
-
 
 export function addAnnotation(sel, type, color, note = '') {
   const item = {
@@ -225,9 +194,9 @@ export function addAnnotation(sel, type, color, note = '') {
   annState.items.push(item);
   scheduleSave();
   renderAnnotList();
-  
+
   repaintAnnotations();
-  
+
   requestAnimationFrame(() => {
     const rec = state.pages[item.page - 1];
     if (rec && rec.rendered) {
@@ -259,9 +228,6 @@ export function removeAnnotation(id) {
   updateProgressMarkers();
 }
 
-
-
-
 const TYPE_LABEL = {
   highlight: t('高亮'), underline: t('下划线'), wavy: t('波浪线'),
   strike: t('删除线'), note: t('笔记'), box: t('区域'),
@@ -279,9 +245,6 @@ export function repaintAnnotations() {
   }
   return painted;
 }
-
-
-
 
 const _EXT_TYPES = {
   Highlight: 'highlight',
@@ -301,7 +264,7 @@ export async function loadPagePdfAnnots(rec) {
     const page = await state.pdf.getPage(rec.num);
     list = await page.getAnnotations({ intent: 'display' });
   } catch (e) {
-    return;                     
+    return;
   }
 
   const out = [];
@@ -318,12 +281,9 @@ export async function loadPagePdfAnnots(rec) {
     });
   }
 
-  
-  
-  
   out.forEach((o, i) => { o.eid = `ext-${rec.num}-${i}`; });
   annState.ext = (annState.ext || [])
-    .filter(x => x.page !== rec.num)          
+    .filter(x => x.page !== rec.num)
     .concat(out);
   rec.pdfAnnots = out;
 
@@ -342,7 +302,6 @@ export async function loadPagePdfAnnots(rec) {
   }
 }
 
-
 function bboxPx(vp, x0, y0, x1, y1) {
   const a = vp.convertToViewportPoint([x0, y0]);
   const b = vp.convertToViewportPoint([x1, y1]);
@@ -354,14 +313,13 @@ function bboxPx(vp, x0, y0, x1, y1) {
   };
 }
 
-
 function extBoxes(ex, vp) {
   const out = [];
   if (typeof vp.convertToViewportPoint !== 'function') return out;
 
   const qp = ex.quadPoints;
   if (qp && qp.length >= 8) {
-    
+
     for (let i = 0; i + 7 < qp.length; i += 8) {
       const xs = [qp[i], qp[i + 2], qp[i + 4], qp[i + 6]];
       const ys = [qp[i + 1], qp[i + 3], qp[i + 5], qp[i + 7]];
@@ -380,7 +338,7 @@ function extBoxes(ex, vp) {
 }
 
 export function paintPageAnnotations(rec) {
-  
+
   const old = rec.wrap.querySelector('.annot-layer');
   if (old) old.remove();
 
@@ -391,13 +349,12 @@ export function paintPageAnnotations(rec) {
   const layer = document.createElement('div');
   layer.className = 'annot-layer';
 
-  
   const spanByItem = buildSpanItemMap(rec);
 
   const dbg = { total: mine.length, noSpan: 0, noRect: 0, drawn: 0 };
 
   for (const an of mine) {
-    
+
     if (an.type === 'box' && an.rect) {
       const el = document.createElement('div');
       el.className = 'an an-box';
@@ -414,7 +371,6 @@ export function paintPageAnnotations(rec) {
       continue;
     }
 
-    
     const rects = [];
     for (const part of (an.parts || [])) {
       const span = spanByItem.get(part.itemIndex);
@@ -425,10 +381,6 @@ export function paintPageAnnotations(rec) {
       for (const r of rs) rects.push(r);
     }
 
-    
-    
-    
-    
     for (const r of mergeLineRuns(rects)) {
       const el = document.createElement('div');
       el.className = 'an an-' + an.type;
@@ -451,8 +403,6 @@ export function paintPageAnnotations(rec) {
     }
   }
 
-  
-  
   if (ext.length && rec.viewport) {
     for (const ex of ext) {
       const boxes = mergeLineRuns(extBoxes(ex, rec.viewport));
@@ -464,7 +414,7 @@ export function paintPageAnnotations(rec) {
         el.style.width = r.width + 'px';
         el.style.height = r.height + 'px';
         el.style.color = ex.color;
-        el.dataset.id = ex.eid;          
+        el.dataset.id = ex.eid;
         if (ex.contents) el.title = ex.contents;
         if (ex.eid === annState.activeId) el.classList.add('active');
         layer.appendChild(el);
@@ -473,7 +423,6 @@ export function paintPageAnnotations(rec) {
     }
   }
 
-  
   if (dbg.drawn > 0 || layer.childElementCount) {
     rec.wrap.appendChild(layer);
   }
@@ -488,8 +437,6 @@ export function paintPageAnnotations(rec) {
   }
 }
 
-
-
 function charRects(span, start, end) {
   const textLen = (span.dataset.orig !== undefined
     ? span.dataset.orig : span.textContent).length;
@@ -501,16 +448,14 @@ function charRects(span, start, end) {
   if (!pageEl) return [];
   const pageRect = pageEl.getBoundingClientRect();
 
-  
   const rects = rectsViaRange(span, start, end, pageRect);
   if (rects.length) return rects;
 
-  
   return rectsViaRatio(span, start, end, textLen, pageRect);
 }
 
 function rectsViaRange(span, start, end, pageRect) {
-  
+
   const map = [];
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
   let n;
@@ -558,8 +503,6 @@ function rectsViaRatio(span, start, end, textLen, pageRect) {
   }];
 }
 
-
-
 function mergeLineRuns(rects) {
   if (!rects || !rects.length) return [];
   const sorted = [...rects].sort((a, b) => a.top - b.top || a.left - b.left);
@@ -604,11 +547,7 @@ function mergeLineRuns(rects) {
   return out;
 }
 
-
-
-
 const _tcCache = new Map();
-
 
 async function pageTextItems(pageNum) {
   if (_tcCache.has(pageNum)) return _tcCache.get(pageNum);
@@ -628,26 +567,24 @@ async function pageTextItems(pageNum) {
   }
 }
 
-
 function itemRectPdf(item, start, end) {
   const t = item.transform || [1, 0, 0, 1, 0, 0];
-  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;   
+  const h = Math.abs(Math.hypot(t[2], t[3])) || 10;
   const len = (item.str || '').length || 1;
   const w = Math.abs(item.width || 0);
   const s = Math.max(0, Math.min(start, len));
   const e = Math.max(s, Math.min(end, len));
   const x = t[4];
   const y = t[5];
-  
+
   return [x + (s / len) * w, y, x + (e / len) * w, y + h];
 }
-
 
 async function pageGeom(pageNum) {
   if (!state.pdf) return null;
   try {
     const page = await state.pdf.getPage(pageNum);
-    const v = page.view;                     
+    const v = page.view;
     return { x0: v[0], y0: v[1], x1: v[2], y1: v[3],
              W: v[2] - v[0], H: v[3] - v[1] };
   } catch (e) {
@@ -663,7 +600,6 @@ export async function annotationsToPdfItems() {
     const color = an.color || '#f59e0b';
     const note = an.note || '';
 
-    
     if (an.type === 'box' && an.rect) {
       const g = await pageGeom(an.page);
       if (!g) continue;
@@ -706,9 +642,6 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-
-
-
 export function renderAnnotList() {
   const box = els.annotList;
   if (!box) return;
@@ -717,7 +650,6 @@ export function renderAnnotList() {
   const ext = annState.ext || [];
   const filt = annState.filter;
 
-  
   const view = [
     ...mine.map(a => ({
       id: a.id, page: a.page, type: a.type, color: a.color,
@@ -734,7 +666,6 @@ export function renderAnnotList() {
   const list = filt === 'all' ? view : view.filter(a => a.type === filt);
   const nAll = view.length;
 
-  
   els.annotCount.textContent = nAll ? `${list.length}/${nAll}` : '';
 
   if (!list.length) {
@@ -770,11 +701,8 @@ export function renderAnnotList() {
   });
 }
 
-
-
 let goToPageForAnnot = () => {};
 let renderPageForAnnot = () => {};
-
 
 function revealAnnot(page, id) {
   if (page !== state.currentPage) goToPageForAnnot(page);
@@ -806,7 +734,6 @@ export function focusAnnotation(id) {
   revealAnnot(an.page, id);
 }
 
-
 export function focusExt(eid) {
   const ex = (annState.ext || []).find(x => x.eid === eid);
   if (!ex) return;
@@ -819,9 +746,6 @@ export function bindNavHelpers(goToPage, renderPage) {
   renderPageForAnnot = renderPage;
 }
 
-
-
-
 export function updateProgressMarkers() {
   const box = els.progressMarkers;
   if (!box) return;
@@ -829,7 +753,7 @@ export function updateProgressMarkers() {
   if (!state.pageCount) return;
 
   const seen = new Set();
-  
+
   const allMark = [
     ...(annState.items || []),
     ...(annState.ext || []).map(x => ({ page: x.page, type: x.type, color: x.color })),
@@ -856,4 +780,3 @@ function escapeHtmlLocal(s) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
 }
-

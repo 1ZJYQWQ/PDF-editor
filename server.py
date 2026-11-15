@@ -1,4 +1,3 @@
-
 import argparse
 import base64
 import hashlib
@@ -7,7 +6,9 @@ import mimetypes
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -16,6 +17,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pdfedit
+import pdfcrypt
 import pdfimage
 import pdfredact
 import appenv
@@ -94,6 +96,10 @@ CHUNK = 64 * 1024
 MAX_BODY = 8 * 1024 * 1024
 MAX_IMAGE_BODY = 24 * 1024 * 1024
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
+MAX_PRINT_BODY = 128 * 1024 * 1024
+MAX_STAGE_BODY = 128 * 1024 * 1024
+MAX_UPLOAD_BODY = 128 * 1024 * 1024
+PRINT_KEEP_SEC = 24 * 3600
 
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
@@ -466,6 +472,43 @@ def unique_out_path(path):
             return cand
         i += 1
 
+def parse_encrypt_opts(raw):
+    if raw is None:
+        return None, b"", ""
+    if not isinstance(raw, dict):
+        return None, b"", "加密参数格式不对"
+
+    user = raw.get("user")
+    if not isinstance(user, str) or not user:
+        return None, b"", "打开口令不能为空"
+    owner = raw.get("owner")
+    if not isinstance(owner, str):
+        owner = ""
+
+    ubytes = user.encode("utf-8")
+    obytes = owner.encode("utf-8")
+    if len(ubytes) > pdfcrypt.MAX_PASSWORD_BYTES:
+        return None, b"", "打开口令太长（最多 %d 字节）" % (
+            pdfcrypt.MAX_PASSWORD_BYTES,)
+    if len(obytes) > pdfcrypt.MAX_PASSWORD_BYTES:
+        return None, b"", "权限口令太长（最多 %d 字节）" % (
+            pdfcrypt.MAX_PASSWORD_BYTES,)
+
+    algo = str(raw.get("algorithm") or "aes256").lower()
+    if algo not in ("aes256", "aes128"):
+        return None, b"", "不支持的加密算法"
+
+    perms = pdfcrypt.make_permissions(
+        allow_print=raw.get("allowPrint") is not False,
+        allow_copy=raw.get("allowCopy") is not False,
+        allow_modify=raw.get("allowModify") is not False)
+    try:
+        enc = pdfcrypt.SecurityEncoder(ubytes, obytes, perms=perms,
+                                       algorithm=algo)
+    except Exception as exc:
+        return None, b"", "加密参数生成失败: %s" % (exc,)
+    return enc, ubytes, ""
+
 def sanitize_redactions(regions):
     dropped = 0
     clean = []
@@ -525,6 +568,13 @@ def pdf_page_info(path):
     with open(path, "rb") as fp:
         data = fp.read()
     doc = pdfedit.PDFDocument.load(data)
+    if doc.encrypted and not doc.password_ok:
+        return {
+            "ok": False,
+            "encrypted": True,
+            "needPassword": True,
+            "error": "这份 PDF 需要口令才能打开",
+        }
     refs = doc.page_refs()
     pages = []
     for i, ref in enumerate(refs):
@@ -549,7 +599,8 @@ def pdf_page_info(path):
             "height": y1 - y0,
             "rotate": rot,
         })
-    return {"ok": True, "count": len(pages), "pages": pages}
+    return {"ok": True, "count": len(pages), "pages": pages,
+            "encrypted": doc.encrypted}
 
 def export_markdown(did, doc_name=""):
     data = load_annotations(did)
@@ -678,17 +729,27 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/find", "/api/replace_all", "/api/redact_terms",
                          "/api/table/drop_row", "/api/table/insert_row",
                          "/api/new", "/api/allow", "/api/image",
-                         "/api/split", "/api/merge"):
+                         "/api/split", "/api/merge", "/api/print",
+                         "/api/unlock", "/api/upload"):
             return self.send_error_json(404, "未找到该路径")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        limit = MAX_IMAGE_BODY if route == "/api/image" else MAX_BODY
+        if route == "/api/image":
+            limit = MAX_IMAGE_BODY
+        elif route in ("/api/print", "/api/upload"):
+            limit = MAX_UPLOAD_BODY
+        else:
+            limit = MAX_BODY
         if length <= 0 or length > limit:
             return self.send_error_json(413, "请求体过大或为空")
 
         raw = self.rfile.read(length)
+        if route == "/api/print":
+            return self._post_print(raw)
+        if route == "/api/upload":
+            return self._post_upload(raw)
         try:
             payload = json.loads(raw.decode("utf-8"))
         except Exception:
@@ -728,6 +789,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_split(payload)
         if route == "/api/merge":
             return self._post_merge(payload)
+        if route == "/api/unlock":
+            return self.api_unlock(payload)
         return self._post_export(payload)
 
     def _post_annotations(self, payload):
@@ -789,6 +852,53 @@ class Handler(BaseHTTPRequestHandler):
             "format": info["format"], "alpha": bool(info.get("alpha")),
             "size": len(data),
         })
+
+    def _post_upload(self, raw):
+        if not raw:
+            return self.send_error_json(400, "没有收到文件内容")
+        if not raw.startswith(b"%PDF-"):
+            return self.send_error_json(400, "这不是 PDF 数据")
+        if len(raw) > MAX_UPLOAD_BODY:
+            return self.send_error_json(413, "文件太大（上限 128MB）")
+        try:
+            os.makedirs(STAGE_DIR, exist_ok=True)
+            tag = hashlib.sha1(raw).hexdigest()[:16]
+            path = os.path.join(STAGE_DIR, "upload-%s.pdf" % tag)
+            if not os.path.exists(path):
+                tmp = path + ".part"
+                with open(tmp, "wb") as fp:
+                    fp.write(raw)
+                os.replace(tmp, path)
+        except OSError as exc:
+            return self.send_error_json(500, f"写入暂存区失败: {exc}")
+        return self.send_json({"ok": True, "path": path, "size": len(raw)})
+
+    def _post_print(self, raw):
+        if not raw:
+            return self.send_error_json(400, "没有收到 PDF 数据")
+        if not raw.startswith(b"%PDF-"):
+            return self.send_error_json(400, "这不是 PDF 数据")
+        if len(raw) > MAX_PRINT_BODY:
+            return self.send_error_json(413, "文件太大，无法打印")
+        try:
+            fd, path = tempfile.mkstemp(prefix="pdfviewer-print-", suffix=".pdf")
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+        except OSError as exc:
+            return self.send_error_json(500, f"写临时文件失败: {exc}")
+
+        if os.environ.get("PDFVIEWER_PRINT_NOOPEN") == "1":
+            return self.send_json({"ok": True, "path": path, "opened": False})
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            return self.send_error_json(500, f"无法打开系统阅读器: {exc}")
+        self.send_json({"ok": True, "path": path, "opened": True})
 
     def _post_edits(self, payload):
         did = payload.get("docId")
@@ -1469,6 +1579,10 @@ class Handler(BaseHTTPRequestHandler):
         pages, objects, dropped = sanitize_edits(
             payload.get("pages"), payload.get("objects"))
 
+        enc, enc_pw, enc_err = parse_encrypt_opts(payload.get("encrypt"))
+        if enc_err:
+            return self.send_error_json(400, enc_err)
+
         annots, ann_dropped = sanitize_annotations(payload.get("annotations"))
         dropped += ann_dropped
 
@@ -1494,9 +1608,16 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path,
                     {"pages": pages, "objects": objects,
                      "annotations": annots},
-                    image_dir=IMAGE_DIR)
+                    image_dir=IMAGE_DIR,
+                    security=enc)
         except Exception as exc:
             return self.send_error_json(500, f"导出失败: {exc}")
+
+        if enc is not None and enc_pw:
+            try:
+                pdfedit.remember_password(out_path, enc_pw)
+            except Exception:
+                pass
 
         rng = payload.get("range")
         if isinstance(rng, str) and rng.strip():
@@ -1540,6 +1661,9 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Disposition",
             "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
         self.send_header("X-Export-Path", urllib.parse.quote(out_path, safe=""))
+        if enc is not None:
+            self.send_header("X-Export-Encrypted",
+                             "aes-256" if enc.r >= 5 else "aes-128")
         self.send_header("X-Export-Pages", str(result.get("pages", 0)))
         self.send_header("X-Export-Objects", str(result.get("objects", 0)))
         self.send_header("X-Export-Dropped", str(dropped))
@@ -2166,6 +2290,35 @@ class Handler(BaseHTTPRequestHandler):
             pass
         self.send_json(info)
 
+    def api_unlock(self, payload):
+        path = (payload.get("path") or "").strip()
+        password = payload.get("password") or ""
+        if not path:
+            return self.send_error_json(400, "缺少 path 参数")
+        real = os.path.realpath(path)
+        if not os.path.isfile(real):
+            return self.send_error_json(404, "文件不存在")
+        if not is_allowed(real, None, self):
+            return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        try:
+            with open(real, "rb") as fp:
+                data = fp.read()
+        except OSError as exc:
+            return self.send_error_json(500, f"读取失败: {exc}")
+
+        try:
+            doc = pdfedit.PDFDocument.load(data, password.encode("utf-8"))
+        except Exception as exc:
+            return self.send_error_json(500, f"解析失败: {exc}")
+        if not doc.encrypted:
+            return self.send_json({"ok": True, "encrypted": False})
+        if not doc.password_ok:
+            return self.send_json({"ok": False, "encrypted": True,
+                                   "error": "口令不正确"})
+        pdfedit.remember_password(data, password.encode("utf-8"))
+        return self.send_json({"ok": True, "encrypted": True,
+                               "pages": len(doc.page_refs())})
+
     def api_open(self, query):
         paths = query.get("path", [])
         if not paths:
@@ -2313,6 +2466,26 @@ def clean_stage_orphans():
             continue
     return n
 
+def clean_print_temp():
+    tmp = tempfile.gettempdir()
+    limit = time.time() - PRINT_KEEP_SEC
+    n = 0
+    try:
+        names = os.listdir(tmp)
+    except OSError:
+        return 0
+    for name in names:
+        if not (name.startswith("pdfviewer-print-") and name.endswith(".pdf")):
+            continue
+        fp = os.path.join(tmp, name)
+        try:
+            if os.path.isfile(fp) and os.path.getmtime(fp) < limit:
+                os.remove(fp)
+                n += 1
+        except OSError:
+            continue
+    return n
+
 def main():
     global SCAN_DIRS, PORT, EXPORT_DIR, EDIT_DIR, ANNOT_DIR, STAGE_DIR
     global IMAGE_DIR
@@ -2376,6 +2549,10 @@ def main():
     dropped = clean_stage_orphans()
     if dropped:
         print("已清理 %d 个过期预览暂存文件" % dropped)
+
+    old_prints = clean_print_temp()
+    if old_prints:
+        print("已清理 %d 个过期打印副本" % old_prints)
 
     SCAN_DIRS = [os.path.realpath(d) for d in (args.dir or default_dirs())
                  if os.path.isdir(d)]

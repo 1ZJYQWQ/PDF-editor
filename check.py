@@ -1,4 +1,3 @@
-
 import os
 import re
 import subprocess
@@ -8,7 +7,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
 FILES = ["geom.js", "core.js", "annot.js", "edit.js", "batch.js", "tabs.js", "update.js", "app.js"]
 
-NODE_CANDIDATES = ["node"]
+NODE_CANDIDATES = [
+    r"C:\Users\zhangjiayang\.workbuddy\binaries\node\versions\22.22.2-3\node.exe",
+    "node",
+]
 
 BUILTIN = {
     'console','window','document','Math','JSON','Object','Array','String','Number',
@@ -50,6 +52,15 @@ def collect_defined(src):
     d |= set(re.findall(r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)', src))
     d |= set(re.findall(r'\bclass\s+([A-Za-z_$][\w$]*)', src))
     d |= set(re.findall(r'\bcatch\s*\(\s*([A-Za-z_$][\w$]*)', src))
+
+    for params in re.findall(r'\(([^()]*)\)\s*=>', src):
+        for p in params.split(','):
+            p = p.split('=')[0].split(':')[-1].strip().lstrip('.')
+            p = p.strip('{}[] ')
+            for name in re.findall(r'[A-Za-z_$][\w$]*', p)[:1]:
+                d.add(name)
+    for name in re.findall(r'(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>', src):
+        d.add(name)
 
     for m in re.findall(r'\b(?:const|let|var)\s*\{([^}]+)\}\s*=', src):
         for x in m.split(','):
@@ -164,7 +175,7 @@ def run_syntax_check(node_exe, results):
         for line in (r.stdout or "").splitlines():
             if line.startswith("OK ") or line.startswith("FAIL "):
                 results.append(line)
-    except Exception as exc:  
+    except Exception as exc:
         results.append(f"SKIP 语法检查（无法调用 Node: {exc}）")
     finally:
         try:

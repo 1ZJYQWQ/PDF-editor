@@ -1,11 +1,46 @@
-
 import hashlib
 import os
 import re
 import zlib
 
+import pdfcrypt
 import pdfimage
 import pdffont
+
+_SEC_CACHE = {}
+_SEC_CACHE_MAX = 8
+
+_PW_BY_SIG = {}
+
+def remember_password(path_or_data, password):
+    data = path_or_data
+    if isinstance(data, str):
+        try:
+            with open(data, "rb") as fp:
+                data = fp.read()
+        except OSError:
+            return False
+    try:
+        sig = hashlib.sha1(data).hexdigest()[:20]
+    except TypeError:
+        return False
+    _PW_BY_SIG[sig] = bytes(password or b"")
+    return True
+
+def forget_password(path_or_data):
+    data = path_or_data
+    if isinstance(data, str):
+        try:
+            with open(data, "rb") as fp:
+                data = fp.read()
+        except OSError:
+            return False
+    try:
+        sig = hashlib.sha1(data).hexdigest()[:20]
+    except TypeError:
+        return False
+    _PW_BY_SIG.pop(sig, None)
+    return True
 
 WHITESPACE = b"\x00\t\n\x0c\r "
 DELIMITERS = b"()<>[]{}/%,;"
@@ -204,6 +239,12 @@ class PDFDocument:
         self.root_ref = None
         self.pages_ref = None
         self.max_obj = 0
+        self.security = None
+        self._decryptor = None
+        self._encrypt_ref = None
+        self._pending = set()
+        self.encrypted = False
+        self.password_ok = True
 
     @staticmethod
     def is_stream(val):
@@ -211,16 +252,103 @@ class PDFDocument:
                 and isinstance(val[0], dict) and isinstance(val[1], bytes))
 
     def stream_data(self, ref):
-        val = self.objects.get(tuple(ref)) if isinstance(ref, Ref) else None
-        return val[1] if self.is_stream(val) else None
+        if not isinstance(ref, Ref):
+            return None
+        key = (ref.num, ref.gen)
+        val = self.objects.get(key)
+        if not self.is_stream(val):
+            return None
+        if key in self._pending:
+            dic, raw = val
+            data = self._apply_filter(dic, raw, self._decryptor, ref.num, ref.gen)
+            dic = dict(dic)
+            dic.pop("Filter", None)
+            dic.pop("DecodeParms", None)
+            dic["Length"] = len(data)
+            self.objects[key] = (dic, data)
+            self._pending.discard(key)
+            return data
+        return val[1]
+
+    def flush_pending(self):
+        n = 0
+        for key in list(self._pending):
+            num, gen = key
+            self.stream_data(Ref(num, gen))
+            n += 1
+        return n
 
     @classmethod
-    def load(cls, data):
+    def load(cls, data, password=b""):
         doc = cls()
         doc._parse_objects(data)
+        doc._find_root(data)
+        if doc._setup_security(password, data) and doc._decryptor is not None:
+            doc.objects.clear()
+            doc.trailer = {}
+            doc.max_obj = 0
+            doc._parse_objects(data)
         doc._expand_objstm()
         doc._find_root(data)
         return doc
+
+    def _setup_security(self, password, data=b""):
+        ref = self.trailer.get("Encrypt")
+        if not isinstance(ref, Ref):
+            return False
+        self.encrypted = True
+        self._encrypt_ref = (ref.num, ref.gen)
+        enc = self.objects.get((ref.num, ref.gen))
+        if self.is_stream(enc):
+            enc = enc[0]
+        if not isinstance(enc, dict):
+            self.password_ok = False
+            return True
+
+        sig = hashlib.sha1(data).hexdigest()[:20] if data else ""
+        if not password and sig:
+            password = _PW_BY_SIG.get(sig, b"")
+        ck = (sig, bytes(password or b""))
+        hit = _SEC_CACHE.get(ck) if sig else None
+        if hit is not None:
+            self.security = hit
+            self.password_ok = hit.ok
+            self._decryptor = hit if hit.ok else None
+            return True
+
+        ids = self.trailer.get("ID")
+        id0 = pdfcrypt.string_bytes(ids[0]) if isinstance(ids, list) and ids else b""
+        try:
+            sec = pdfcrypt.StandardSecurity(enc, id0, password or b"")
+        except Exception:
+            self.password_ok = False
+            return True
+        if sig:
+            if len(_SEC_CACHE) >= _SEC_CACHE_MAX:
+                _SEC_CACHE.clear()
+            _SEC_CACHE[ck] = sec
+        self.security = sec
+        self.password_ok = sec.ok
+        self._decryptor = sec if sec.ok else None
+        return True
+
+    def _decrypt_value(self, num, gen, val):
+        sec = self._decryptor
+        if sec is None:
+            return val
+        if isinstance(val, bytes):
+            if val.startswith(b"(") or (val.startswith(b"<") and
+                                        not val.startswith(b"<<")):
+                raw = pdfcrypt.string_bytes(val)
+                if not raw:
+                    return val
+                return sec.decrypt(num, gen, raw, False)
+            return val
+        if isinstance(val, dict):
+            return {k: self._decrypt_value(num, gen, v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [self._decrypt_value(num, gen, v) for v in val]
+        return val
 
     def _expand_objstm(self):
         for val in list(self.objects.values()):
@@ -274,10 +402,26 @@ class PDFDocument:
             head = body[:sm.start()] if sm else body
             tokens = tokenize(head)
             value, _ = parse_object(tokens, 0)
+            if self._decryptor is not None and (num, gen) != self._encrypt_ref:
+                value = self._decrypt_value(num, gen, value)
 
             if sm:
-                sdata = self._read_stream(body, sm, value, data, body_start)
+                raw = self._locate_stream(body, sm, value)
                 if isinstance(value, dict):
+                    lazy = (self._decryptor is not None
+                            and (num, gen) != self._encrypt_ref
+                            and value.get("Type") != "ObjStm"
+                            and value.get("Type") != "XRef")
+                    if lazy:
+                        value = dict(value)
+                        value["Length"] = len(raw)
+                        self.objects[(num, gen)] = (value, raw)
+                        self._pending.add((num, gen))
+                        self.max_obj = max(self.max_obj, num)
+                        continue
+
+                    sdata = self._apply_filter(value, raw, self._decryptor,
+                                               num, gen)
                     value = dict(value)
                     value.pop("Filter", None)
                     value.pop("DecodeParms", None)
@@ -290,7 +434,7 @@ class PDFDocument:
             self.max_obj = max(self.max_obj, num)
 
     @staticmethod
-    def _read_stream(body, sm, value, full_data, body_start):
+    def _locate_stream(body, sm, value):
         raw_start = sm.end()
         if body[raw_start:raw_start + 1] == b"\r":
             raw_start += 1
@@ -304,14 +448,20 @@ class PDFDocument:
                 length = None
 
         if isinstance(length, int) and length >= 0:
-            raw = body[raw_start:raw_start + length]
-        else:
-            e = body.find(b"endstream", raw_start)
-            raw = body[raw_start:e] if e >= 0 else body[raw_start:]
-            if raw.endswith(b"\r\n"):
-                raw = raw[:-2]
-            elif raw.endswith(b"\n"):
-                raw = raw[:-1]
+            return body[raw_start:raw_start + length]
+
+        e = body.find(b"endstream", raw_start)
+        raw = body[raw_start:e] if e >= 0 else body[raw_start:]
+        if raw.endswith(b"\r\n"):
+            raw = raw[:-2]
+        elif raw.endswith(b"\n"):
+            raw = raw[:-1]
+        return raw
+
+    @staticmethod
+    def _apply_filter(value, raw, sec=None, num=0, gen=0):
+        if sec is not None:
+            raw = sec.decrypt(num, gen, raw, True)
 
         filters = value.get("Filter") if isinstance(value, dict) else None
         fname = None
@@ -449,8 +599,16 @@ class PDFDocument:
             seen += 1
         return default
 
+class Encrypted(bytes):
+    __slots__ = ()
+
+def _hex_string(raw):
+    return b"<" + bytes(raw).hex().encode("ascii") + b">"
+
 def serialize_value(val, out):
-    if val is None:
+    if isinstance(val, Encrypted):
+        out += b"<" + bytes(val).hex().encode("ascii") + b">"
+    elif val is None:
         out += b"null"
     elif val is True:
         out += b"true"
@@ -510,9 +668,57 @@ def _escape_literal(raw):
     out += b")"
     return bytes(out)
 
-def build_pdf(doc, extra_streams, out_path):
+def _encrypt_dict(sec):
+    d = {
+        "Filter": Name("Standard"),
+        "V": sec.v,
+        "R": sec.r,
+        "Length": 128 if sec.r == 4 else 256,
+        "O": _hex_string(sec.o),
+        "U": _hex_string(sec.u),
+        "P": sec.p,
+        "CF": {"StdCF": {"CFM": Name(sec.cfm),
+                         "AuthEvent": Name("DocOpen"),
+                         "Length": 16 if sec.r == 4 else 32}},
+        "StmF": Name("StdCF"),
+        "StrF": Name("StdCF"),
+        "EncryptMetadata": sec.encrypt_metadata,
+    }
+    if sec.r >= 5:
+        d["OE"] = _hex_string(sec.oe)
+        d["UE"] = _hex_string(sec.ue)
+        d["Perms"] = _hex_string(sec.perms)
+    return d
+
+def _encrypt_value(val, sec, num, gen):
+    if isinstance(val, Name):
+        return val
+    if isinstance(val, bytes):
+        return Encrypted(sec.encrypt(num, gen, val, False))
+    if isinstance(val, str):
+        return Encrypted(sec.encrypt(num, gen,
+                                     val.encode("latin-1", "replace"), False))
+    if isinstance(val, dict):
+        return {k: _encrypt_value(v, sec, num, gen) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_encrypt_value(v, sec, num, gen) for v in val]
+    return val
+
+def _encrypt_stream(sdict, sdata, sec, num, gen):
+    stype = str(sdict.get("Type") or "")
+    if stype == "XRef" or (stype == "Metadata" and not sec.encrypt_metadata):
+        return dict(sdict), sdata
+    body = sec.encrypt(num, gen, sdata, True)
+    nd = _encrypt_value(dict(sdict), sec, num, gen)
+    nd["Length"] = len(body)
+    return nd, body
+
+def build_pdf(doc, extra_streams, out_path, security=None):
     out = bytearray()
     out += b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"
+
+    if hasattr(doc, "flush_pending"):
+        doc.flush_pending()
 
     for (pnum, pgen), content in extra_streams.items():
         if not content:
@@ -533,17 +739,33 @@ def build_pdf(doc, extra_streams, out_path):
         else:
             page["Contents"] = [old, stream_ref]
 
+    enc_ref = None
+    old_enc = None
+    enc_key = None
+    if security is not None:
+        enc_ref = doc.new_obj(_encrypt_dict(security))
+        enc_key = (enc_ref.num, enc_ref.gen)
+        old_enc = getattr(doc, "_encrypt_ref", None)
+        old_enc = tuple(old_enc) if old_enc else None
+
     offsets = {}
     for (num, gen), val in sorted(doc.objects.items()):
+        if old_enc is not None and (num, gen) == old_enc:
+            continue
         offsets[(num, gen)] = len(out)
         out += b"%d %d obj\n" % (num, gen)
+        seal = security is not None and (num, gen) != enc_key
         if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], dict):
             sdict, sdata = val
+            if seal:
+                sdict, sdata = _encrypt_stream(sdict, sdata, security, num, gen)
             serialize_value(sdict, out)
             out += b"\nstream\n"
             out += sdata
             out += b"\nendstream"
         else:
+            if seal:
+                val = _encrypt_value(val, security, num, gen)
             serialize_value(val, out)
         out += b"\nendobj\n"
 
@@ -565,6 +787,10 @@ def build_pdf(doc, extra_streams, out_path):
     }
     if isinstance(doc.trailer.get("Info"), Ref):
         trailer["Info"] = doc.trailer["Info"]
+    if enc_ref is not None:
+        trailer["Encrypt"] = enc_ref
+        trailer["ID"] = [_hex_string(security.id0),
+                         _hex_string(security.id0)]
     out += b"trailer\n"
     serialize_value(trailer, out)
     out += b"\nstartxref\n%d\n%%%%EOF\n" % xref_pos
@@ -1012,7 +1238,7 @@ def build_cjk_font(doc, chars, base_name="NotoSansSC"):
     ref = embed_cid_font(doc, subset, ps_name=ps_name, unicode_map=used)
     return ref, subset
 
-def apply_edits(src_path, out_path, edits, image_dir=None):
+def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
     with open(src_path, "rb") as fp:
         data = fp.read()
 
@@ -1132,10 +1358,14 @@ def apply_edits(src_path, out_path, edits, image_dir=None):
         from pdfannot import apply_annotations
         annot_stat = apply_annotations(doc, refs, anns)
 
-    size = build_pdf(doc, extra_streams, out_path)
+    size = build_pdf(doc, extra_streams, out_path, security=security)
     return {
         "ok": True,
         "size": size,
+        "encrypted": bool(security),
+        "algorithm": ("aes-256" if security is not None and security.r >= 5
+                      else "aes-128" if security is not None else ""),
+        "permissions": security.p if security is not None else 0,
         "pages": len(doc.page_refs()),
         "objects": sum(len(v) for v in per_page.values()),
         "images": image_count,

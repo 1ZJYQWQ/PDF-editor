@@ -15,12 +15,12 @@ VSVersionInfo(
         '080404B0',
         [StringStruct('CompanyName', ''),
          StringStruct('FileDescription', 'PDF 查看器 —— 本地离线 PDF 工具'),
-         StringStruct('FileVersion', '1.1.6-pre'),
+         StringStruct('FileVersion', '1.2.0-pre'),
          StringStruct('InternalName', 'PDFViewer'),
          StringStruct('LegalCopyright', ''),
          StringStruct('OriginalFilename', 'PDFViewer.exe'),
          StringStruct('ProductName', 'PDF 查看器'),
-         StringStruct('ProductVersion', '1.1.6-pre')])
+         StringStruct('ProductVersion', '1.2.0-pre')])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])
   ]

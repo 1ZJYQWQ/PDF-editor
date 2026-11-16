@@ -163,13 +163,27 @@ def _pad_password(pw):
     pw = pw[:32]
     return pw + PAD[:32 - len(pw)]
 
+_HEXDIGITS = frozenset(b"0123456789abcdefABCDEF")
+
+def looks_like_token(v):
+    if not isinstance(v, bytes) or len(v) < 2:
+        return False
+    if v.startswith(b"<"):
+        if v.startswith(b"<<") or not v.endswith(b">"):
+            return False
+        inner = v[1:-1]
+        return bool(inner) and all(c in _HEXDIGITS for c in inner)
+    if v.startswith(b"("):
+        return v.endswith(b")")
+    return False
+
 def string_bytes(v):
     if isinstance(v, bytes):
+        if not looks_like_token(v):
+            return v
         if v.startswith(b"("):
             return _decode_literal(v[1:-1])
-        if v.startswith(b"<") and not v.startswith(b"<<"):
-            return _from_hex(v[1:-1])
-        return v
+        return _from_hex(v[1:-1])
     if isinstance(v, str):
         return v.encode("latin-1", "replace")
     return b""

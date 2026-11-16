@@ -337,8 +337,7 @@ class PDFDocument:
         if sec is None:
             return val
         if isinstance(val, bytes):
-            if val.startswith(b"(") or (val.startswith(b"<") and
-                                        not val.startswith(b"<<")):
+            if pdfcrypt.looks_like_token(val):
                 raw = pdfcrypt.string_bytes(val)
                 if not raw:
                     return val
@@ -627,7 +626,7 @@ def serialize_value(val, out):
         else:
             out += b"%d" % val
     elif isinstance(val, bytes):
-        if val.startswith(b"(") or val.startswith(b"<"):
+        if pdfcrypt.looks_like_token(val):
             out += val
         else:
             out += _escape_literal(val)

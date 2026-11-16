@@ -7,7 +7,7 @@
 ;
 ; 编译（在项目根目录）：
 ;   "%LOCALAPPDATA%\electron-builder\Cache\nsis\nsis-3.0.4.1\Bin\makensis.exe" ^
-;       -DVERSION=1.1.6-pre -DVERNUM=1.1.6.0 packaging\installer.nsi
+;       -DVERSION=1.2.0-pre -DVERNUM=1.2.0.0 packaging\installer.nsi
 ;   （输入目录固定取 ..\dist\PDFViewer，产物固定落到 ..\dist\）
 ;
 ;   脚本必须以 UTF-8 BOM 保存：makensis 默认按系统 ACP 读脚本，

@@ -176,7 +176,7 @@ flowchart LR
         UI --> PJ
     end
     subgraph P["本地 Python 进程 · 仅标准库"]
-        API["server.py<br/>HTTP + 路径白名单"]
+        API["server.py<br/>HTTP + 白名单"]
         EDIT["pdfedit.py<br/>解析 / 序列化"]
         CRYPT["pdfcrypt.py<br/>AES / RC4"]
         RED["pdfredact.py<br/>内容流解释器"]

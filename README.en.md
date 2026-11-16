@@ -180,7 +180,7 @@ flowchart LR
         UI --> PJ
     end
     subgraph P["Local Python process · stdlib only"]
-        API["server.py<br/>HTTP + path allowlist"]
+        API["server.py<br/>HTTP + allowlist"]
         EDIT["pdfedit.py<br/>parse / serialize"]
         CRYPT["pdfcrypt.py<br/>AES / RC4"]
         RED["pdfredact.py<br/>content-stream interpreter"]

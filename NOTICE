@@ -1,0 +1,48 @@
+PDF Editor
+Copyright 2026 NEWSfuturEStudio
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+This product includes the following third-party components.
+
+1. pdf.js
+   Location: static/vendor/
+   License: Apache License 2.0
+   Copyright: Mozilla Foundation
+   https://github.com/mozilla/pdf.js
+
+2. Noto Sans SC (Source Han Sans)
+   Location: assets/fonts/NotoSansSC-Regular.ttf
+   License: SIL Open Font License 1.1
+   Copyright: Adobe / Google
+   https://github.com/notofonts/noto-cjk
+
+   The font is distributed unmodified. Its reserved font name is not used
+   for any modified version, and the font is not sold on its own.
+
+3. Electron (standalone-window builds only)
+   License: MIT
+   Copyright: Electron contributors, OpenJS Foundation
+   https://github.com/electron/electron
+
+4. Chromium (standalone-window builds only)
+   License: BSD 3-Clause and others
+   Copyright: The Chromium Authors
+   https://www.chromium.org
+
+5. Python runtime (packaged builds only)
+   License: Python Software Foundation License
+   Copyright: Python Software Foundation
+   https://www.python.org

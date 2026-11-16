@@ -4,87 +4,141 @@ README 只讲"能做什么"。这里讲"为什么这样做"和"坑在哪"。
 
 ---
 
+## 进程模型
+
+```
+你的浏览器 / Electron 窗口                    Python 进程（本机）
+┌────────────────────────┐   HTTP    ┌──────────────────────────────┐
+│ 原生 ES Module          │ ────────► │ http.server（标准库）         │
+│ pdf.js（本地 vendor）    │ ◄──────── │ 路径白名单 + 端口顺延          │
+│ Canvas 渲染 + 编辑覆盖层 │  JSON/字节 │ 14 个模块，0 个第三方依赖      │
+└────────────────────────┘           └──────────────────────────────┘
+```
+
+**为什么不是单文件应用。** PDF 的读写要精确到字节：解析对象表、解开对象流、
+重算 xref、逐字形算位置。这些用 Python 写最省事（标准库就有 zlib 和 hashlib），
+而界面用浏览器最省事。两边各自用最合适的语言，中间只隔一层 HTTP。
+
+**为什么不用框架。** 前端是原生 ES Module，没有 webpack / vite / React。
+代价是要自己管 DOM，好处是断网能用、`file://` 之外零构建、改一行立刻生效。
+
+**为什么零依赖是硬指标。** 一旦引入 PyCryptodome 或 fontTools，PyInstaller
+产物就会从 12 MB 涨到几十 MB，还要处理 wheel 的平台差异。所以 AES、TTF 子集化
+都是自己写的——见下面「技术高点」。
+
+---
+
 ## 数据模型
 
-编辑与标注都不进 PDF，单独存 JSON，键是文档指纹 `sha1(文件名|文件大小)` 前 16 位：
+**三份状态，各管一件事：**
+
+| | 是什么 | 谁写 | 用户能删吗 |
+|---|---|---|---|
+| **原文件** | 你拖进来的 PDF | 谁都不写 | 随意 |
+| **暂存** | 编辑后的快照（`_stage/<id>.pdf`） | 服务端 | 会自动清理 |
+| **元数据** | 标注 / 编辑对象的 JSON | 前端 + 服务端 | 删了等于放弃修改 |
+
+**核心约束：原文件一个字节都不改。** 这是涂黑能成立的前提——如果允许就地改写，
+一次失败的删除就能让原文永久消失。
+
+### 指纹
+
+元数据键是 `sha1(文件名|文件大小)[:16]`：
 
 ```
 annotations/<hash>.json    标注
 edits/<hash>.json          编辑对象与页面操作
 ```
 
-指纹只看文件名和大小，**挪动文件位置不丢标注**。
+只看文件名和大小，**挪动文件位置不丢标注**。反过来说：同名同大小但内容不同的
+两份文件会被认成同一份——这是刻意的取舍，换来的是"换个文件夹就找不到标注"这种
+更烦人的问题不会发生。
 
-标注存的是**内容锚点**，不是像素坐标：
+### 暂存不是"临时文件"
 
-```js
-{ page, parts: [{ itemIndex, charStart, charEnd }], text }
-```
+`_stage/<id>.pdf` 是**当前编辑状态的正本**，不是缓存：
 
-所以缩放、旋转、切换视图后，标注自动贴回原文。
+- 双击改一段 → 服务端重排 → 写出新一版暂存 → 前端重新加载它
+- 导出 = 把暂存拷成最终文件；**不导出就退出，改动就没了**
+- 覆写前把当前版本存进版本栈（`<id>.v01.pdf`、`.v02.pdf`…），
+  因为前端的撤销栈只管画框涂鸦，**不知道服务端已经改了文件**
+
+> 踩过的坑：一开始把暂存当缓存，用户改完段落按 `Ctrl+Z`，
+> 前端说"没有可撤销的操作"，而文件其实已经变了。版本栈是为这个加的。
 
 ---
 
 ## 文件地图
 
 ```
-服务端（零依赖 PDF 引擎）
-  server.py           HTTP 路由 + API + 路径白名单 + 端口顺延
-  pdfedit.py          PDF 读写引擎（解析/序列化/对象表/内容流追加）
-  pdfredact.py        ★ 涂黑引擎（内容流解释器 + 整字删除 + 泄漏面清理）
-  pdfannot.py         批注 → PDF 原生注释（/Annots、/QuadPoints、UTF-16BE 备注）
+服务端（零第三方依赖）
+  server.py           HTTP 路由 + API + 路径白名单 + 端口顺延 + 打印落盘
+  launcher.py         exe 入口（起服务、开窗口）
+  appenv.py           源码跑 / exe 跑的路径规则（资源只读、数据进 AppData）
+  appversion.py       版本号解析与比较（纯函数，可单测）
+
+  引擎
+  pdfedit.py          PDF 读写（解析 / 序列化 / 对象表 / 加密写出 / 内容流追加）
+  pdfcrypt.py         ★ 标准安全处理器：RC4 / AES-128 / AES-256，读 + 写
+  pdfredact.py        ★ 涂黑（内容流解释器 + 整字删除 + 泄漏面清理）
+  pdfreflow.py        ★ 段落重排（避头尾折行 + 页内下移 + 跨页续排）
   pdfpara.py          段落模型（按行距与首行缩进聚行、聚段）
-  pdfreflow.py        ★ 段落重排（重新折行 + 页内下移 + 跨页续排）
-                       / 表格横线 table_rules（唯一入口）/ 删整行 / 插一行
-  pdfbatch.py         批量：查找替换 / 按词删除并重排 / 按词涂黑 / 范围导出 / 拆分 / 合并
-  pdfnew.py           新建空白 PDF（纸张 / 页数 / 横向）
   pdffont.py          ★ TrueType 子集化（glyf 重排 + 复合字形重映射）
-  check.py            前端静态自检
-  fontcheck.py        字体骨架 + 字重体检
-  makefont.py         开发期工具：可变字体实例化（依赖 fontTools，仅开发期用）
+  pdfannot.py         批注 → PDF 原生注释（/Annots、/QuadPoints、UTF-16BE）
+  pdfbatch.py         批量：查找替换 / 按词删除或涂黑 / 范围导出 / 拆分 / 合并
+  pdfimage.py         图片嵌入（PNG / JPEG，含 alpha 与色彩空间处理）
+  pdfnew.py           新建空白 PDF
 
 前端（原生 ES Module）
   static/core.js      共享状态、els、api()、工具
   static/app.js       主逻辑（渲染、搜索、交互）—— 最大文件
-  static/annot.js     标注模块
-  static/edit.js      编辑 + 涂黑 + 替换 + 段落模块
-  static/batch.js     批量操作（查找替换面板、按词删除、范围/拆分、合并勾选）
-  static/geom.js      纯几何逻辑（可测，无 DOM 依赖）
+  static/annot.js     标注
+  static/edit.js      编辑对象 + 涂黑 + 替换 + 页面管理 + 加密导出
+  static/textedit.js  ★ 原地改字：按原始行坐标铺编辑层、实测字体度量
+  static/batch.js     批量操作面板
+  static/tabs.js      多标签
+  static/update.js    检查更新
+  static/geom.js      纯几何（可测，无 DOM 依赖）
+  static/i18n.js      翻译函数 t() + data-i18n 扫描
+  static/lang/en.js   英文词表
   static/vendor/      pdf.js（本地）
-
-测试（run_tests.py 一条命令跑全部）
-  pdffont_test.py     子集化（48 项）
-  pdfembed_test.py    中文嵌入（49 项）
-  pdfredact_test.py   涂黑引擎（52 项）
-  pdfedit_test.py     编辑引擎
-  pdfedit_verify.py   输出结构校验
-  editapi_test.py     编辑 API（25 项）
-  redactapi_test.py   涂黑 API（28 项）
-  pdfbatch_test.py    批量操作（52 项，样本自造）
-  newpdf_test.py      新建空白 PDF（24 项）
-  rules_test.py       表格横线的坐标口径（14 项）
-  droprow_test.py     删表格行（21 项，样本自造）
-  cascade_test.py     连锁跨页（7 项）
-  ctm_test.py         图形平移的 CTM 处理（14 项）
-  objstm_test.py      对象流 / 交叉引用流解析（9 项）
-  webtest.mjs         前端纯逻辑（67 项，node 跑）
 ```
 
----
-
-## 两个技术高点
-
-**`pdfredact.py`** —— 最难的是一个**内容流解释器**：维护完整图形状态栈
-（`q`/`Q`/`cm`/`Tf`/`Td`/`Tm`/`Tc`/`Tw`/`Tz`/`TL`/`Ts`），算出每个字形在页面上的精确矩形
-（TRM × CTM、字形空间 1/1000 em、字体宽度三级回退、CID 的 `/W`）。
-算子编号必须与解释器**完全一致**，否则整字删除会静默失效——这是踩过的坑。
-
-**`pdffont.py`** —— 用标准库从零写 TTF 子集化：重排 `glyf/loca/hmtx`、
-重写复合字形组件索引、组装 sfnt 并算 `checkSumAdjustment`。一般这事要引 fontTools。
+**开发期工具**（不进产物）：`check.py` 静态自检、`i18ncheck.py` 漏翻检查、
+`fontcheck.py` 字体体检、`makefont.py` 可变字体实例化（唯一需要 fontTools 的地方）、
+`sync_opensource.py` 同步开源副本（白名单 + 去注释 + 语法校验）。
 
 ---
 
-## 三个必须理解的模型
+## 四个技术高点
+
+**`pdfredact.py` —— 内容流解释器。** 维护完整图形状态栈
+（`q`/`Q`/`cm`/`Tf`/`Td`/`Tm`/`Tc`/`Tw`/`Tz`/`TL`/`Ts`），算出每个字形在页面上的
+精确矩形（TRM × CTM、字形空间 1/1000 em、字体宽度三级回退、CID 的 `/W`）。
+算子编号必须与解释器**完全一致**，否则整字删除会静默失效。
+
+**`pdfcrypt.py` —— 两套算法，两个方向。** AES 是纯 Python 实现（T-table 查表，
+不是为了炫技，是为了不带 PyCryptodome）。R6 的 hash 是 64 轮
+`AES-128-CBC + 哈希` 循环。真正难的不是算法本身，是**分清哪些字节不加密**：
+
+- `/Encrypt` 字典自己 —— 加密它就是密文加密密文，谁也打不开
+- trailer 的 `/ID` —— 它是明文身份，R4 的文件密钥还由它派生
+- 交叉引用流 —— 按规范不加密
+
+其余**所有**字符串与流都要加密，包括页面上看不见的那些（元数据、字体名、
+大纲标题、表单字段名）。漏一个就等于没加密。
+
+**`pdffont.py` —— 从零写 TTF 子集化。** 重排 `glyf/loca/hmtx`、重写复合字形
+组件索引、组装 sfnt 并算 `checkSumAdjustment`。一般这事要引 fontTools。
+
+**`pdfreflow.py` —— 折行 + 避头尾。** 中文禁则与服务端同一套规则：
+`，。、；：？！）】》」` 悬挂（允许超右界一字宽，连排一起悬挂），
+`（【《「` 推下一行。前端 CSS 用 `line-break: strict` 对齐同一规则——
+两边不一致就会出现"编辑时看到的换行和导出后不一样"。
+
+---
+
+## 必须理解的五个模型
 
 ### 1. 「预览层」vs「焊死」
 
@@ -110,16 +164,38 @@ PDF 里文字是"画上去的"（`BT /F1 12 Tf 72 720 Td (Hello) Tj ET`），不
 ### 3. 「焊死」为什么改不动
 
 子集字体里**只有用户写过的字形**。别人想改字 → 目标字形不存在 → 改不动。
-能选中复制靠 `/ToUnicode`（CID 字体的唯一线索；标准 14 字体有内置 WinAnsiEncoding 兜底）。
+能选中复制靠 `/ToUnicode`（CID 字体的唯一线索；标准 14 字体有内置
+WinAnsiEncoding 兜底）。
+
+### 4. 原地改字的对齐是量出来的，不是猜的
+
+编辑层要盖在原文上，差 1px 就能看出来。三个坑：
+
+- **盒模型**：`border` + `padding` 会把内容推进去 3px → 改用 `outline`（不占位）
+- **基线**：`ascent` 写死成 `0.88em` 必偏 → 用 canvas `fontBoundingBoxAscent` 实测
+- **右端宽度**：PDF 嵌入子集字体与实际渲染字体不同，右端会有几像素差，
+  这个不修（不影响正确性，只影响视觉贴合度）
+
+### 5. 加密里的"不加密清单"
+
+见上面 `pdfcrypt.py` 那段。这条单独列出来是因为它**不会报错**：
+漏加密一个看不到的字符串，文件照样能打开、页面照样正常，只有对比原始字节
+或用专门的检查工具才能发现。
 
 ---
 
 ## 测试的判据不是"跑通"，是"证明"
 
+`python run_tests.py` 一条命令跑 25 个套件。
+
 - **涂黑**：用攻击者手段（`strings` / 正则）验"字真的读不出来"
 - **重写**：把输出**重新解释一遍**，看字形对不对（字节级断言会放过结构性错误）
 - **中文**：用 `/ToUnicode` 把 GID 还原，与原文比对
 - **跨引擎**：涂黑引擎能解释新写入的中文，涂黑后真的删掉
+- **加密**：产物同时交给本仓库解密器、**pdf.js**、逐字节比对明文版内容流。
+  自己加密自己解密会两边一起错互相抵消，所以必须有第三方裁判
+- **前端**：`webtest.mjs` 在 node 里跑纯逻辑；`check.py` 查 DOM id、
+  import/export 匹配、`hidden` 兜底、变量遮蔽翻译函数
 
-**硬约定**：测试**永不写用户的真实目录**（`documents/`、`exports/`、`edits/`、`annotations/`），
-全部走 `_scratch/`，并用"跑前跑后快照对比"证明目录未变。
+**硬约定**：测试**永不写用户的真实目录**（`documents/`、`exports/`、`edits/`、
+`annotations/`），全部走 `_scratch/`，并用"跑前跑后快照对比"证明目录未变。

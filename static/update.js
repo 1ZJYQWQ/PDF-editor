@@ -3,7 +3,8 @@ import { t } from '/static/i18n.js';
 const CACHE_KEY = 'pdfviewer:update-cache';
 const AUTO_KEY = 'pdfviewer:update-auto';
 const CACHE_MS = 6 * 3600 * 1000;
-const REPO_URL = 'https://github.com/1ZJYQWQ/PDF-editor/releases';
+
+const REPO_URL = 'https://github.com/NEWSfuturestudio/PDF-editor/releases';
 
 let current = '';
 let busy = false;

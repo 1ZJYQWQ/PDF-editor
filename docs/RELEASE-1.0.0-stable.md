@@ -59,6 +59,25 @@
 想用加密或原地改字，去 [预发布](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version)
 下载 `pre` 通道的包。两边的数据目录是同一个，可以并存。
 
+### 已知问题（都已在新版本修复）
+
+这个版本发布于 11-08，之后发现并修掉了下面这些：
+
+| 问题 | 从哪个版本起修好 |
+|---|---|
+| 重新打开同一份文档后，编辑对象点得中但删不掉 | 1.1.0-pre |
+| 设成默认打开方式后，双击 PDF 只打开主页、不加载文件 | 1.1.0-pre |
+| 搜索框聚焦时的光圈被工具栏底边裁掉 | 1.1.0-pre |
+| 从本地拖入的文件不能编辑（提示"请先打开一个文档"） | 1.1.6-pre |
+| 编辑之后打印，打出来的是改动前的内容 | 1.1.6-pre |
+
+**这些都不动数据**：不会损坏原文件，也不会让标注丢失。核心能力
+（涂黑、重排、表格、批注、中文嵌入）在 V1.0.0 里就是稳的，
+上面这些都是交互层的小毛病。
+
+介意的话去 [pre 通道](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version)
+下更新的包；只求稳，这个版本足够日常用。
+
 ### 已知边界
 
 | | |
@@ -130,6 +149,26 @@ The stable build lags behind development on purpose:
 For encryption or in-place editing, grab the
 [pre-release](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version).
 Both channels share the same data directory and can coexist.
+
+### Known issues (all fixed in later builds)
+
+This release dates from Nov 8. These were found and fixed afterwards:
+
+| Issue | Fixed in |
+|---|---|
+| After reopening a document, edit objects can be selected but not deleted | 1.1.0-pre |
+| Set as the default PDF app, double-clicking a PDF opened only the home tab | 1.1.0-pre |
+| The focus ring on the search box was clipped by the toolbar's bottom edge | 1.1.0-pre |
+| Files dragged in from disk could not be edited ("open a document first") | 1.1.6-pre |
+| Printing after editing produced the pre-edit content | 1.1.6-pre |
+
+**None of these touch your data** — the source file is never modified, and annotations
+are never lost. The core (redaction, reflow, tables, annotations, CJK embedding) is solid
+in V1.0.0; everything above is interaction-layer polish.
+
+If any of those bite you, grab a newer build from the
+[pre channel](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version).
+For "just works", this release is enough.
 
 ### Known limits
 

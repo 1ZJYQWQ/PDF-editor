@@ -104,7 +104,7 @@ PRINT_KEEP_SEC = 24 * 3600
 _annot_lock = threading.Lock()
 _edit_lock = threading.Lock()
 
-UPDATE_REPO = "1ZJYQWQ/PDF-editor"
+UPDATE_REPO = "NEWSfuturestudio/PDF-editor"
 UPDATE_TTL = 6 * 3600
 _update_cache = {"at": 0.0, "data": None}
 

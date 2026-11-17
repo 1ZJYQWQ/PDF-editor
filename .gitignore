@@ -52,3 +52,5 @@ Thumbs.db
 
 # 构建日志
 _*.log
+# electron-builder 的备用输出目录（release/ 被占用时用）
+release-build*/

@@ -33,6 +33,8 @@ import * as tabs from '/static/tabs.js';
 
 import { bindWelcomeUpdate } from '/static/update.js';
 
+import { isTypingTarget, topModal, topPopup, dblclickMode } from '/static/input.js';
+
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const BUFFER_PAGES = 1;
 const LS_PREFIX = 'pdfviewer:';
@@ -3405,7 +3407,7 @@ function bindToolbar() {
     if (state.annotMode) return;
     if (!e.target.closest('.page')) return;
 
-    if (editState.on && editState.tool && editState.tool !== 'select') return;
+    if (dblclickMode(editState.on, editState.tool) === 'draw') return;
     const rec = pageAt(e.clientX, e.clientY);
     if (!rec) return;
     e.preventDefault();
@@ -3479,24 +3481,6 @@ function bindToolbar() {
   if (els.sideClose) {
     els.sideClose.addEventListener('click', () => setEditMode(false));
   }
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-
-    const overlays = [
-      els.paraEdit, els.textPop, els.replaceTextPop,
-      els.annotPop, els.selMenu, els.redactConfirm,
-    ];
-    if (overlays.some(p => p && !p.hidden)) return;
-
-    const tgt = e.target;
-    if (tgt && tgt.closest &&
-        tgt.closest('.text-input-pop, .annot-pop, input, textarea')) return;
-
-    if (els.sidePanel && !els.sidePanel.hidden) {
-      e.preventDefault();
-      setEditMode(false);
-    }
-  });
 
   if (els.paraFold) {
     els.paraFold.addEventListener('click', closeParaPop);
@@ -3815,10 +3799,17 @@ function bindToolbar() {
         break;
       case ' ':
         e.preventDefault(); startAutoScroll(); break;
-      case 'Escape':
-        hideSelMenu(); closeAnnotPop();
+      case 'Escape': {
+
+        if (topModal()) break;
+        if (topPopup()) { hideSelMenu(); closeAnnotPop(); break; }
+        if (isTypingTarget(e.target)) break;
+        if (els.sidePanel && !els.sidePanel.hidden) {
+          e.preventDefault(); setEditMode(false); break;
+        }
         if (state.annotMode) setAnnotMode(false, true);
         break;
+      }
       case 'r': case 'R': rotate(); break;
       case 'd': case 'D': toggleInvert(); break;
       case 'w': case 'W': applyScale('width'); els.zoomSelect.value = 'width'; break;

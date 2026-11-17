@@ -2232,7 +2232,7 @@ async function openInlineEditAt(rec, clientX, clientY) {
   const hit = list.find(p => px >= p.x0 - 2 && px <= p.x1 + 2 &&
                              py >= p.y0 - 2 && py <= p.y1 + 2);
   if (!hit) {
-    toast(t('这里没有可编辑的段落（点正文里的任意一行试试）'), 2800);
+
     return;
   }
 
@@ -2244,9 +2244,14 @@ async function openInlineEditAt(rec, clientX, clientY) {
 
   const ok = beginInlineEdit(rec.wrap, hit, {
     pw, ph,
-    onCommit: (text) => {
+    onCommit: async (text) => {
 
-      reflowParagraph(rec.num, hit.index, text, null, null, null);
+      try {
+        const res = await reflowParagraph(rec.num, hit.index, text, null, null, null);
+        if (res) await applyStagePreview(res);
+      } catch (e) {
+        toast(t('刷新预览失败：{v}', { v: (e && e.message) || e }), 6000);
+      }
     },
     onCancel: () => toast(t('已放弃这次修改'), 1500),
   });

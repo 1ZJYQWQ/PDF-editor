@@ -260,10 +260,12 @@ class PDFDocument:
             return None
         if key in self._pending:
             dic, raw = val
+            keep_packed = PDFDocument._png_parms(dic) is not None
             data = self._apply_filter(dic, raw, self._decryptor, ref.num, ref.gen)
             dic = dict(dic)
-            dic.pop("Filter", None)
-            dic.pop("DecodeParms", None)
+            if not keep_packed:
+                dic.pop("Filter", None)
+                dic.pop("DecodeParms", None)
             dic["Length"] = len(data)
             self.objects[key] = (dic, data)
             self._pending.discard(key)
@@ -419,11 +421,13 @@ class PDFDocument:
                         self.max_obj = max(self.max_obj, num)
                         continue
 
+                    keep_packed = PDFDocument._png_parms(value) is not None
                     sdata = self._apply_filter(value, raw, self._decryptor,
                                                num, gen)
                     value = dict(value)
-                    value.pop("Filter", None)
-                    value.pop("DecodeParms", None)
+                    if not keep_packed:
+                        value.pop("Filter", None)
+                        value.pop("DecodeParms", None)
                     value["Length"] = len(sdata)
                     self.objects[(num, gen)] = (value, sdata)
                     self.max_obj = max(self.max_obj, num)
@@ -458,6 +462,18 @@ class PDFDocument:
         return raw
 
     @staticmethod
+    def _png_parms(value):
+        parms = value.get("DecodeParms") if isinstance(value, dict) else None
+        if isinstance(parms, list) and parms:
+            parms = parms[0]
+        if not isinstance(parms, dict):
+            return None
+        try:
+            return parms if int(parms.get("Predictor") or 1) >= 10 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _apply_filter(value, raw, sec=None, num=0, gen=0):
         if sec is not None:
             raw = sec.decrypt(num, gen, raw, True)
@@ -471,6 +487,8 @@ class PDFDocument:
             fname = first if isinstance(first, Name) else None
 
         if fname in ("FlateDecode", "Fl"):
+            if PDFDocument._png_parms(value):
+                return raw
             try:
                 return zlib.decompress(raw)
             except zlib.error:

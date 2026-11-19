@@ -13,7 +13,7 @@
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-success?style=flat-square)](#)
 [![Offline](https://img.shields.io/badge/network-not%20required-2ea44f?style=flat-square)](#)
 [![Encryption](https://img.shields.io/badge/AES--256-R6-critical?style=flat-square)](#-加密不只是加个口令)
-[![Tests](https://img.shields.io/badge/tests-28%20suites%20passing-brightgreen?style=flat-square)](#-它凭什么值得信任)
+[![Tests](https://img.shields.io/badge/tests-28%20suites%20local-brightgreen?style=flat-square)](#-它凭什么值得信任)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/1ZJYQWQ/PDF-editor?include_prereleases&style=flat-square&color=orange&label=release)](https://github.com/1ZJYQWQ/PDF-editor/releases)
@@ -85,7 +85,7 @@ python server.py --dir "你的 PDF 目录"
 常用命令：
 
 ```bash
-python run_tests.py        # 全部测试（25 个套件）
+python run_tests.py        # 全部测试（28 个套件）
 python check.py            # 前端静态自检
 python fontcheck.py x.ttf  # 换字体前体检
 pip install pyinstaller && python -m PyInstaller pdfviewer.spec   # 自己打 exe
@@ -211,9 +211,12 @@ flowchart LR
 ## 🧪 它凭什么值得信任
 
 ```
-python run_tests.py   →  25 个套件，0 失败
+python run_tests.py   →  28 个套件，0 失败
 python check.py       →  前端静态自检全过
 ```
+
+> 没有 CI。这些数字是本机（Windows）跑出来的，徽章上写 `local` 就是这个意思——
+> 不冒充自动构建的绿灯。
 
 - **零第三方依赖是真的**：33 个 `import` 全部来自标准库或本地模块，
   连 `requirements.txt` 都不存在

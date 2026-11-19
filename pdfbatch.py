@@ -1,6 +1,7 @@
 import os
 
-from pdfedit import (PDFDocument, Ref, build_pdf, reorder_pages)
+from pdfedit import (PDFDocument, NeedPassword, Ref, build_pdf,
+                     reorder_pages)
 from pdfredact import (ContentStreamInterpreter, read_page_content)
 from pdfpara import build_page_model, table_cells
 from pdfreflow import (apply_paragraph_edit, apply_paragraph_flow,
@@ -8,9 +9,16 @@ from pdfreflow import (apply_paragraph_edit, apply_paragraph_flow,
 
 MAX_EDITS_DEFAULT = 300
 
-def open_doc(path):
+def open_doc(path, password=b""):
     with open(path, "rb") as fp:
-        return PDFDocument.load(fp.read())
+        doc = PDFDocument.load(fp.read(), password or b"")
+    if doc.encrypted and not doc.password_ok:
+        raise NeedPassword("这份文档有口令保护，请先输入口令再操作")
+    return doc
+
+def doc_security(doc):
+    build = getattr(doc, "reencrypt_encoder", None)
+    return build() if callable(build) else None
 
 def page_model(doc, page_no, refs=None):
     if refs is None:
@@ -548,8 +556,8 @@ def parse_pages(spec, total):
         raise ValueError("页码范围里没有有效页（本文档共 %d 页）" % total)
     return out
 
-def export_pages(src_path, out_path, pages):
-    doc = open_doc(src_path)
+def export_pages(src_path, out_path, pages, security=None, password=b""):
+    doc = open_doc(src_path, password)
     refs = doc.page_refs()
     total = len(refs)
     order = []
@@ -564,17 +572,17 @@ def export_pages(src_path, out_path, pages):
     if not order:
         raise ValueError("没有有效的页码（本文档共 %d 页）" % total)
     reorder_pages(doc, order)
-    build_pdf(doc, {}, out_path)
+    build_pdf(doc, {}, out_path, security=security)
     return {"pages": len(order), "total": total}
 
-def split_document(src_path, out_dir, per=1, base_name=None):
+def split_document(src_path, out_dir, per=1, base_name=None, password=b""):
     try:
         per = int(per)
     except (TypeError, ValueError):
         raise ValueError("拆分份数无效")
     if per < 1:
         raise ValueError("每份至少 1 页")
-    doc = open_doc(src_path)
+    doc = open_doc(src_path, password)
     total = len(doc.page_refs())
     if total == 0:
         raise ValueError("这份文档没有页面")
@@ -597,7 +605,8 @@ def split_document(src_path, out_dir, per=1, base_name=None):
             n += 1
             out = os.path.join(out_dir, "%s-第%d部分（第%d-%d页）-%d.pdf" %
                                (stem, idx, pages[0], pages[-1], n))
-        export_pages(src_path, out, pages)
+        export_pages(src_path, out, pages, security=doc_security(doc),
+                     password=password)
         made.append({"path": out, "name": os.path.basename(out),
                      "pages": len(pages)})
     return made
@@ -613,11 +622,11 @@ def _rewrite_refs(val, offset):
         return (_rewrite_refs(val[0], offset), val[1])
     return val
 
-def merge_documents(paths, out_path):
+def merge_documents(paths, out_path, password=b""):
     if not isinstance(paths, (list, tuple)) or len(paths) < 2:
         raise ValueError("合并至少需要两份文档")
 
-    base = open_doc(paths[0])
+    base = open_doc(paths[0], password)
     if not base.pages_ref:
         raise ValueError("第一份文档没有页面树")
     pages_node = base.resolve(base.pages_ref)
@@ -627,7 +636,7 @@ def merge_documents(paths, out_path):
     count = len(base.page_refs())
 
     for path in paths[1:]:
-        other = open_doc(path)
+        other = open_doc(path, password)
         refs = other.page_refs()
         if not refs:
             continue
@@ -657,5 +666,5 @@ def merge_documents(paths, out_path):
 
     pages_node["Kids"] = kids
     pages_node["Count"] = count
-    build_pdf(base, {}, out_path)
+    build_pdf(base, {}, out_path, security=doc_security(base))
     return {"pages": count, "sources": len(paths)}

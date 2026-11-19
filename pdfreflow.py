@@ -2,7 +2,8 @@ import re
 import statistics
 import struct
 
-from pdfedit import build_cjk_font, _attach_font_resource, Ref
+from pdfedit import (NeedPassword, build_cjk_font,
+                     _attach_font_resource, Ref)
 from pdfredact import (PDFDocument, ContentStreamInterpreter,
                        read_page_content, _rewrite_text)
 from pdfpara import build_rows, build_page_model, table_cells
@@ -12,6 +13,8 @@ FALLBACK_ALIAS = "CJKfloor"
 def load_page_model(path, page_no=1):
     with open(path, "rb") as fp:
         doc = PDFDocument.load(fp.read())
+    if doc.encrypted and not doc.password_ok:
+        raise NeedPassword("这份文档有口令保护，请先输入口令再编辑")
     refs = doc.page_refs()
     if not (1 <= page_no <= len(refs)):
         raise ValueError("页码超出范围：%d（共 %d 页）" % (page_no, len(refs)))

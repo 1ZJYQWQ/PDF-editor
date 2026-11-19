@@ -245,6 +245,7 @@ class PDFDocument:
         self._pending = set()
         self.encrypted = False
         self.password_ok = True
+        self._open_password = b""
 
     @staticmethod
     def is_stream(val):
@@ -272,6 +273,20 @@ class PDFDocument:
             return data
         return val[1]
 
+    def reencrypt_encoder(self):
+        if not self.encrypted or not self.password_ok or not self._open_password:
+            return None
+        sec = self.security
+        if sec is None:
+            return None
+        try:
+            return pdfcrypt.SecurityEncoder(
+                self._open_password, b"",
+                perms=getattr(sec, "p", pdfcrypt.PERM_ALL),
+                algorithm="aes128" if getattr(sec, "r", 6) == 4 else "aes256")
+        except Exception:
+            return None
+
     def flush_pending(self):
         n = 0
         for key in list(self._pending):
@@ -282,6 +297,8 @@ class PDFDocument:
 
     @classmethod
     def load(cls, data, password=b""):
+        if b"%PDF-" not in data[:1024]:
+            raise ValueError("这不是 PDF 文件（缺少 %PDF- 文件头）")
         doc = cls()
         doc._parse_objects(data)
         doc._find_root(data)
@@ -316,6 +333,7 @@ class PDFDocument:
             self.security = hit
             self.password_ok = hit.ok
             self._decryptor = hit if hit.ok else None
+            self._open_password = bytes(password or b"")
             return True
 
         ids = self.trailer.get("ID")
@@ -331,6 +349,7 @@ class PDFDocument:
             _SEC_CACHE[ck] = sec
         self.security = sec
         self.password_ok = sec.ok
+        self._open_password = bytes(password or b"")
         self._decryptor = sec if sec.ok else None
         return True
 
@@ -615,6 +634,10 @@ class PDFDocument:
             node = self.resolve(parent)
             seen += 1
         return default
+
+class NeedPassword(ValueError):
+
+    pass
 
 class Encrypted(bytes):
     __slots__ = ()
@@ -905,7 +928,9 @@ class ContentBuilder:
         self.ops.append(f"/{alias} Do")
         self.ops.append("Q")
 
-    def text(self, x, y, s, size, rgb, base_font="Helvetica"):
+    def text(self, x, y, s, size, rgb, base_font="Helvetica", max_width=None):
+        if max_width and max_width > 0:
+            s = "\n".join(self.wrap_text(s, size, base_font, max_width))
         if s and self.cid_subset is not None and has_non_latin(s):
             self._text_cid(x, y, s, size, rgb)
             return
@@ -944,12 +969,37 @@ class ContentBuilder:
                 self.ops.append("<%s> Tj" % enc.hex().upper())
         self.ops.append("ET")
 
+    def wrap_text(self, s, size, base_font, max_width):
+        out = []
+        for line in split_lines(s):
+            cur = ""
+            for ch in line:
+                if not cur or self.measure_text(cur + ch, size,
+                                                base_font) <= max_width:
+                    cur += ch
+                    continue
+                if not _is_wide(ch) and ch != " ":
+                    k = cur.rfind(" ")
+                    if k > 0:
+                        out.append(cur[:k])
+                        cur = cur[k + 1:] + ch
+                        continue
+                out.append(cur)
+                cur = ch
+            out.append(cur)
+        return out
+
     def measure_text(self, s, size, base_font="Helvetica"):
-        widths = STANDARD_WIDTHS.get(base_font, STANDARD_WIDTHS["Helvetica"])
+        widths = STANDARD_WIDTHS.get(base_font) or STANDARD_WIDTHS["Helvetica"]
         total = 0.0
         for ch in s:
-            total += widths.get(ch, 0.556)
-        return total * size
+            if ch in widths:
+                total += widths[ch]
+            elif _is_wide(ch):
+                total += 1000.0
+            else:
+                total += 556.0
+        return total / 1000.0 * size
 
     def to_bytes(self):
         return ("\n".join(self.ops) + "\n").encode("latin-1", "replace")
@@ -989,6 +1039,13 @@ STANDARD_WIDTHS["Courier"] = {}
 
 def split_lines(s):
     return s.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+def _is_wide(ch):
+    o = ord(ch)
+    return (0x1100 <= o <= 0x115F or 0x2E80 <= o <= 0xA4CF
+            or 0xAC00 <= o <= 0xD7A3 or 0xF900 <= o <= 0xFAFF
+            or 0xFE30 <= o <= 0xFE6F or 0xFF00 <= o <= 0xFF60
+            or 0xFFE0 <= o <= 0xFFE6 or 0x1F300 <= o <= 0x1FAFF)
 
 def line_leading(size):
     return (size or 12.0) * 1.25
@@ -1260,6 +1317,8 @@ def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
         data = fp.read()
 
     doc = PDFDocument.load(data)
+    if doc.encrypted and not doc.password_ok:
+        raise NeedPassword("这份文档有口令保护，请先输入口令再导出")
     if not doc.pages_ref:
         raise ValueError("无法定位页面树，文件可能不是标准 PDF")
 
@@ -1337,6 +1396,12 @@ def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
     image_count = 0
     for pidx, objs in per_page.items():
         builder = ContentBuilder()
+        mb = doc.inherited(refs[pidx], "MediaBox")
+        if isinstance(mb, list) and len(mb) == 4:
+            page_w = _num(mb[2]) - _num(mb[0])
+            page_h = _num(mb[3]) - _num(mb[1])
+        else:
+            page_w, page_h = 595.0, 842.0
         if cjk_subset is not None:
             builder.set_cid_font(cjk_ref, cjk_subset)
         for obj in objs:
@@ -1355,7 +1420,7 @@ def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
                 builder.image(alias, x, y, w, h, ref)
                 image_count += 1
                 continue
-            _emit_object(builder, obj)
+            _emit_object(builder, obj, page_w, page_h)
         content = builder.to_bytes()
         if not content.strip():
             continue
@@ -1380,6 +1445,7 @@ def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
         "ok": True,
         "size": size,
         "encrypted": bool(security),
+        "source_encrypted": bool(doc.encrypted),
         "algorithm": ("aes-256" if security is not None and security.r >= 5
                       else "aes-128" if security is not None else ""),
         "permissions": security.p if security is not None else 0,
@@ -1396,7 +1462,7 @@ def apply_edits(src_path, out_path, edits, image_dir=None, security=None):
 def _original_indices(total, deleted):
     return [i for i in range(total) if i not in set(deleted)]
 
-def _emit_object(b, obj):
+def _emit_object(b, obj, page_w=0.0, page_h=0.0):
     kind = (obj.get("kind") or "").lower()
     x = _num(obj.get("x"))
     y = _num(obj.get("y"))
@@ -1426,9 +1492,21 @@ def _emit_object(b, obj):
 
     elif kind == "text":
         size = _num(obj.get("size"), 12.0)
-        b.text(x, y, str(obj.get("text") or ""), size,
+        font = obj.get("font") or "Helvetica"
+        txt = str(obj.get("text") or "")
+        max_w = None
+        if page_w > 0:
+            avail = page_w - 18.0 - x
+            if avail >= size * 4:
+                max_w = avail
+        if max_w and page_h > 0:
+            n = len(b.wrap_text(txt, size, font, max_w))
+            bottom = y - (n - 1) * line_leading(size)
+            if bottom < 12.0:
+                y = min(y + (12.0 - bottom), max(page_h - 12.0, y))
+        b.text(x, y, txt, size,
                _to_rgb(obj.get("color"), (0.0, 0.0, 0.0)),
-               base_font=obj.get("font") or "Helvetica")
+               base_font=font, max_width=max_w)
 
 def _attach_font_resource(doc, page_ref, font_map, overwrite=False):
     page = doc.resolve(page_ref)

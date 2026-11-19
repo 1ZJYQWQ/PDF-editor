@@ -1,7 +1,7 @@
 import re
 
 from pdfedit import (
-    PDFDocument, Ref, Name, tokenize, _is_number, _to_number,
+    PDFDocument, NeedPassword, Ref, Name, tokenize, _is_number, _to_number,
     _escape_literal, STANDARD_WIDTHS,
 )
 
@@ -978,6 +978,8 @@ def apply_redactions(src_path, out_path, redactions, clean_meta=True):
         data = fp.read()
 
     doc = PDFDocument.load(data)
+    if doc.encrypted and not doc.password_ok:
+        raise NeedPassword("这份文档有口令保护，请先输入口令再操作")
     if not doc.pages_ref:
         raise ValueError("无法定位页面树，文件可能不是标准 PDF")
 
@@ -1067,6 +1069,8 @@ def apply_text_replace(src_path, out_path, replacements, clean_meta=True):
     with open(src_path, "rb") as fp:
         data = fp.read()
     doc = PDFDocument.load(data)
+    if doc.encrypted and not doc.password_ok:
+        raise NeedPassword("这份文档有口令保护，请先输入口令再操作")
     if not doc.pages_ref:
         raise ValueError("无法定位页面树，文件可能不是标准 PDF")
     refs = doc.page_refs()

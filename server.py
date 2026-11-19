@@ -662,6 +662,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_engine_error(self, exc, prefix=""):
+        msg = ("%s%s" % (prefix, exc)) if prefix else str(exc)
+        if isinstance(exc, pdfedit.NeedPassword):
+            return self.send_json({"ok": False, "error": msg, "code": msg,
+                                   "needPassword": True, "encrypted": True},
+                                  status=400)
+        return self.send_error_json(500, msg)
+
     def send_error_json(self, status, message):
         self.send_json({"ok": False, "error": message, "code": message}, status=status)
 
@@ -1304,7 +1312,7 @@ class Handler(BaseHTTPRequestHandler):
                     os.remove(out_path)
             except OSError:
                 pass
-            return self.send_error_json(500, "替换失败: %s" % exc)
+            return self.send_engine_error(exc, "替换失败: ")
 
         try:
             with open(out_path, "rb") as fp:
@@ -1448,7 +1456,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self.send_error_json(400, f"涂黑失败: {exc}")
         except Exception as exc:
-            return self.send_error_json(500, f"涂黑失败: {exc}")
+            return self.send_engine_error(exc, "涂黑失败: ")
 
         if result.get("removed_glyphs", 0) <= 0:
             try:
@@ -1521,12 +1529,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             import pdfbatch
             with _edit_lock:
-                made = pdfbatch.split_document(real, EXPORT_DIR, per,
-                                               base_name=stem_src)
+                made = pdfbatch.split_document(
+                    real, EXPORT_DIR, per, base_name=stem_src,
+                    password=str(payload.get("password") or "").encode("utf-8"))
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
         except Exception as exc:
-            return self.send_error_json(500, "拆分失败: %s" % exc)
+            return self.send_engine_error(exc, "拆分失败: ")
         self.send_json({"ok": True, "files": made, "count": len(made)})
 
     def _post_merge(self, payload):
@@ -1553,11 +1562,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             import pdfbatch
             with _edit_lock:
-                result = pdfbatch.merge_documents(reals, out_path)
+                result = pdfbatch.merge_documents(
+                    reals, out_path,
+                    password=str(payload.get("password") or "").encode("utf-8"))
         except ValueError as exc:
             return self.send_error_json(400, str(exc))
         except Exception as exc:
-            return self.send_error_json(500, "合并失败: %s" % exc)
+            return self.send_engine_error(exc, "合并失败: ")
         self.send_json({"ok": True, "path": out_path,
                         "name": os.path.basename(out_path),
                         "pages": result["pages"]})
@@ -1611,7 +1622,7 @@ class Handler(BaseHTTPRequestHandler):
                     image_dir=IMAGE_DIR,
                     security=enc)
         except Exception as exc:
-            return self.send_error_json(500, f"导出失败: {exc}")
+            return self.send_engine_error(exc, "导出失败: ")
 
         if enc is not None and enc_pw:
             try:
@@ -1629,7 +1640,7 @@ class Handler(BaseHTTPRequestHandler):
                 picked = pdfbatch.parse_pages(rng, total)
                 if len(picked) != total:
                     tmp = out_path + ".range.pdf"
-                    pdfbatch.export_pages(out_path, tmp, picked)
+                    pdfbatch.export_pages(out_path, tmp, picked, security=enc)
                     spec = re.sub(r'[\\/:*?"<>|]', "_", rng.strip())[:24]
                     new_path = unique_out_path(os.path.join(
                         EXPORT_DIR, f"{stem}-第{spec}页-{stamp}.pdf"))
@@ -1644,7 +1655,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self.send_error_json(400, str(exc))
             except Exception as exc:
-                return self.send_error_json(500, f"按范围导出失败: {exc}")
+                return self.send_engine_error(exc, "按范围导出失败: ")
 
         try:
             with open(out_path, "rb") as fp:
@@ -1661,6 +1672,8 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Disposition",
             "attachment; filename*=UTF-8''" + urllib.parse.quote(out_name))
         self.send_header("X-Export-Path", urllib.parse.quote(out_path, safe=""))
+        if result.get("source_encrypted") and enc is None:
+            self.send_header("X-Export-Was-Encrypted", "1")
         if enc is not None:
             self.send_header("X-Export-Encrypted",
                              "aes-256" if enc.r >= 5 else "aes-128")
@@ -1700,7 +1713,7 @@ class Handler(BaseHTTPRequestHandler):
             import pdfreflow
             info = pdfreflow.list_paragraphs(real, page)
         except Exception as exc:
-            return self.send_error_json(500, "解析段落失败: %s" % exc)
+            return self.send_engine_error(exc, "解析段落失败: ")
         self.send_json(info)
 
     def _post_reflow(self, payload):
@@ -1954,7 +1967,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self.send_error_json(400, f"涂黑失败: {exc}")
         except Exception as exc:
-            return self.send_error_json(500, f"涂黑失败: {exc}")
+            return self.send_engine_error(exc, "涂黑失败: ")
 
         if result.get("removed_glyphs", 0) <= 0:
             try:

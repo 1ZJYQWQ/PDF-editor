@@ -264,6 +264,6 @@ static/        前端（原生 ES Module，无框架无构建）
 
 **用 `0x3f3f3f3f` 的时间，填补开源的每一块拼图。**
 
-<sub>Built by <a href="https://github.com/NEWSfuturestudio">NEWSfuturEStudio</a> · Apache-2.0 · <code>while(true) { code(); }</code></sub>
+<sub>Built by <a href="https://github.com/1ZJYQWQ">1ZJYQWQ</a> · Apache-2.0 · <code>while(true) { code(); }</code></sub>
 
 </div>

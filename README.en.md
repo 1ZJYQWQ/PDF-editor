@@ -271,6 +271,6 @@ as its default instance. Override the path with `PDFVIEWER_CJK_FONT`;
 
 **Filling in the missing pieces of open source, one `0x3f3f3f3f` at a time.**
 
-<sub>Built by <a href="https://github.com/NEWSfuturestudio">NEWSfuturEStudio</a> · Apache-2.0 · <code>while(true) { code(); }</code></sub>
+<sub>Built by <a href="https://github.com/1ZJYQWQ">1ZJYQWQ</a> · Apache-2.0 · <code>while(true) { code(); }</code></sub>
 
 </div>

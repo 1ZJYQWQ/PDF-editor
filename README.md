@@ -13,10 +13,10 @@
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-success?style=flat-square)](#)
 [![Offline](https://img.shields.io/badge/network-not%20required-2ea44f?style=flat-square)](#)
 [![Encryption](https://img.shields.io/badge/AES--256-R6-critical?style=flat-square)](#-加密不只是加个口令)
-[![Tests](https://img.shields.io/badge/tests-25%20suites%20passing-brightgreen?style=flat-square)](#-它凭什么值得信任)
+[![Tests](https://img.shields.io/badge/tests-28%20suites%20passing-brightgreen?style=flat-square)](#-它凭什么值得信任)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](LICENSE)
 
-[![Release](https://img.shields.io/github/v/release/NEWSfuturestudio/PDF-editor?include_prereleases&style=flat-square&color=orange&label=release)](https://github.com/NEWSfuturestudio/PDF-editor/releases)
+[![Release](https://img.shields.io/github/v/release/1ZJYQWQ/PDF-editor?include_prereleases&style=flat-square&color=orange&label=release)](https://github.com/1ZJYQWQ/PDF-editor/releases)
 
 简体中文 | [English](README.en.md)
 

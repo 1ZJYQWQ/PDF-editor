@@ -56,7 +56,7 @@
 | 打印走系统阅读器 | ❌ | ✅ |
 | 稳定性 | 完整测试通过 | 功能新，可能有问题 |
 
-想用加密或原地改字，去 [预发布](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version)
+想用加密或原地改字，去 [预发布](https://github.com/1ZJYQWQ/PDF-editor/releases/tag/pre_version)
 下载 `pre` 通道的包。两边的数据目录是同一个，可以并存。
 
 ### 已知问题（都已在新版本修复）
@@ -75,7 +75,7 @@
 （涂黑、重排、表格、批注、中文嵌入）在 V1.0.0 里就是稳的，
 上面这些都是交互层的小毛病。
 
-介意的话去 [pre 通道](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version)
+介意的话去 [pre 通道](https://github.com/1ZJYQWQ/PDF-editor/releases/tag/pre_version)
 下更新的包；只求稳，这个版本足够日常用。
 
 ### 已知边界
@@ -147,7 +147,7 @@ The stable build lags behind development on purpose:
 | Stability | Fully tested | Newer features, may have bugs |
 
 For encryption or in-place editing, grab the
-[pre-release](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version).
+[pre-release](https://github.com/1ZJYQWQ/PDF-editor/releases/tag/pre_version).
 Both channels share the same data directory and can coexist.
 
 ### Known issues (all fixed in later builds)
@@ -167,7 +167,7 @@ are never lost. The core (redaction, reflow, tables, annotations, CJK embedding)
 in V1.0.0; everything above is interaction-layer polish.
 
 If any of those bite you, grab a newer build from the
-[pre channel](https://github.com/NEWSfuturestudio/PDF-editor/releases/tag/pre_version).
+[pre channel](https://github.com/1ZJYQWQ/PDF-editor/releases/tag/pre_version).
 For "just works", this release is enough.
 
 ### Known limits

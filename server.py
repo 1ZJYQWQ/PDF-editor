@@ -2451,6 +2451,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_error_json(404, "文件不存在")
             if not is_allowed(real, query, self):
                 return self.send_error_json(403, "该文件不在允许的扫描目录内")
+            if not real.lower().endswith(".pdf"):
+                return self.send_error_json(403, "只允许用系统程序打开 PDF")
+            if (self.headers.get("X-PDFViewer-Client") or "") != "1":
+                return self.send_error_json(
+                    403, "拒绝：该操作需要客户端标识（X-PDFViewer-Client）")
             if sys.platform == "win32":
                 os.startfile(real)
             elif sys.platform == "darwin":

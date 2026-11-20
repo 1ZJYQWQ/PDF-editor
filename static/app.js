@@ -3145,7 +3145,9 @@ function paintFileList() {
         return;
       }
       if (e.target.closest('.fi-open')) {
-        fetch('/api/open?path=' + encodeURIComponent(f.path))
+
+        fetch('/api/open?path=' + encodeURIComponent(f.path),
+              { headers: { 'X-PDFViewer-Client': '1' } })
           .then(r => r.json())
           .then(d => toast(d.ok ? t('已用系统默认程序打开') : (t('打开失败：') + errText(d))))
           .catch(() => toast(t('打开失败')));

@@ -13,7 +13,7 @@ Encryption really is AES-256 — not a black box painted over, not a page flatte
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-success?style=flat-square)](#)
 [![Offline](https://img.shields.io/badge/network-not%20required-2ea44f?style=flat-square)](#)
 [![Encryption](https://img.shields.io/badge/AES--256-R6-critical?style=flat-square)](#-encryption-is-more-than-a-password)
-[![Tests](https://img.shields.io/badge/tests-28%20suites%20local-brightgreen?style=flat-square)](#-why-trust-it)
+[![Tests](https://img.shields.io/badge/tests-29%20suites%20local-brightgreen?style=flat-square)](#-why-trust-it)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square)](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/1ZJYQWQ/PDF-editor?include_prereleases&style=flat-square&color=orange&label=release)](https://github.com/1ZJYQWQ/PDF-editor/releases)
@@ -216,7 +216,7 @@ An honest list, no varnish:
 ## 🧪 Why trust it
 
 ```
-python run_tests.py   →  28 suites, 0 failures
+python run_tests.py   →  29 suites, 0 failures
 python check.py       →  front-end static checks all pass
 ```
 

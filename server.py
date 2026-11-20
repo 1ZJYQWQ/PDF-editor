@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -135,19 +136,45 @@ def is_allowed(real, query=None, handler=None):
         return True
     return any(_clean_path(real) == _clean_path(f) for f in OPEN_FILES)
 
+_HOST_NAMES = None
+
+def local_host_names():
+    global _HOST_NAMES
+    if _HOST_NAMES is None:
+        names = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+        try:
+            hostname = socket.gethostname().lower()
+            names.add(hostname)
+            for info in socket.getaddrinfo(hostname, None):
+                names.add(str(info[4][0]).lower())
+        except OSError:
+            pass
+        try:
+            names.update(str(ip).lower()
+                         for ip in socket.gethostbyname_ex(socket.gethostname())[2])
+        except OSError:
+            pass
+        _HOST_NAMES = names
+    return _HOST_NAMES
+
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024.0
 
-def scan_pdfs(dirs):
+SCAN_BUDGET = 8.0
+
+def scan_pdfs(dirs, budget=SCAN_BUDGET):
     found = []
     seen = set()
+    deadline = time.time() + budget
     for root_dir in dirs:
         if not os.path.isdir(root_dir):
             continue
         for dirpath, dirnames, filenames in os.walk(root_dir):
+            if time.time() > deadline or len(found) >= MAX_LIST:
+                break
             dirnames[:] = [
                 d for d in dirnames
                 if not d.startswith(".") and d.lower() not in
@@ -645,6 +672,70 @@ class Handler(BaseHTTPRequestHandler):
             return
         sys.stderr.write(f"  {msg}\n")
 
+    def _request_host(self):
+        raw = (self.headers.get("Host") or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("["):
+            end = raw.find("]")
+            host = raw[1:end] if end > 0 else raw
+        elif raw.count(":") == 1:
+            host = raw.rsplit(":", 1)[0]
+        else:
+            host = raw
+        return host.strip().rstrip(".").lower()
+
+    def check_trusted_request(self, route, method):
+        if (self.headers.get("Host") or "").strip() and not self._host_ok():
+            self.send_error_json(
+                403, "拒绝：Host 不在本机名址范围内（疑似 DNS 重绑定）")
+            return False
+
+        if method == "POST":
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin:
+                try:
+                    oh = (urllib.parse.urlparse(origin).hostname or "").lower()
+                except ValueError:
+                    oh = ""
+                if oh not in local_host_names():
+                    self.send_error_json(403, "拒绝：不接受跨站请求")
+                    return False
+            site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+            if site == "cross-site":
+                self.send_error_json(403, "拒绝：不接受跨站请求")
+                return False
+
+            ctype = (self.headers.get("Content-Type") or "")
+            ctype = ctype.split(";")[0].strip().lower()
+            if route in ("/api/print", "/api/upload"):
+                ok = ctype in ("", "application/pdf", "application/octet-stream")
+            else:
+                ok = ctype == "application/json"
+            if not ok:
+                self.send_error_json(
+                    415, "请求体类型不对：只接受 application/json")
+                return False
+
+        if method == "GET" and (self.headers.get("X-PDFViewer-Client") or "") != "1":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if q.get("dir"):
+                self.send_error_json(
+                    403, "拒绝：添加目录需要客户端标识（X-PDFViewer-Client）")
+                return False
+        return True
+
+    def _host_ok(self):
+        return self._request_host() in local_host_names()
+
+    def end_headers(self):
+        if not getattr(self, "_sec_headers_done", False):
+            self._sec_headers_done = True
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+        super().end_headers()
+
     def send_json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -670,6 +761,12 @@ class Handler(BaseHTTPRequestHandler):
                                   status=400)
         return self.send_error_json(500, msg)
 
+    def send_input_error(self, exc, prefix=""):
+        if isinstance(exc, pdfedit.NeedPassword):
+            return self.send_engine_error(exc, prefix)
+        msg = ("%s%s" % (prefix, exc)) if prefix else str(exc)
+        return self.send_error_json(400, msg)
+
     def send_error_json(self, status, message):
         self.send_json({"ok": False, "error": message, "code": message}, status=status)
 
@@ -677,6 +774,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
+        self._sec_headers_done = False
+        if not self.check_trusted_request(route, "GET"):
+            return
 
         try:
             if route == "/":
@@ -731,6 +831,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
+        self._sec_headers_done = False
         if route not in ("/api/annotations", "/api/edits", "/api/export",
                          "/api/redact", "/api/replace", "/api/reflow",
                          "/api/stage", "/api/stage/undo",
@@ -740,6 +841,8 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/split", "/api/merge", "/api/print",
                          "/api/unlock", "/api/upload"):
             return self.send_error_json(404, "未找到该路径")
+        if not self.check_trusted_request(route, "POST"):
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -839,7 +942,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             info = pdfimage.inspect(data)
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
 
         ext = "jpg" if info["format"] == "jpeg" else "png"
         name = hashlib.sha1(data).hexdigest() + "." + ext
@@ -1059,7 +1162,7 @@ class Handler(BaseHTTPRequestHandler):
             import pdfnew
             body = pdfnew.build_blank_pdf(pages, size, landscape)
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
 
         os.makedirs(STAGE_DIR, exist_ok=True)
         sid = new_stage_id()
@@ -1223,7 +1326,7 @@ class Handler(BaseHTTPRequestHandler):
             res = pdfbatch.find_text(real, term,
                                      bool(payload.get("ignore_case")))
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
         except Exception as exc:
             return self.send_error_json(500, "查找失败: %s" % exc)
 
@@ -1362,7 +1465,7 @@ class Handler(BaseHTTPRequestHandler):
                     real, out_path, payload.get("terms"),
                     bool(payload.get("ignore_case", True)))
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
         except Exception as exc:
             return self.send_error_json(500, "删除失败: %s" % exc)
 
@@ -1432,7 +1535,7 @@ class Handler(BaseHTTPRequestHandler):
             regions, per_term = pdfbatch.term_regions(
                 real, terms, bool(payload.get("ignore_case", True)), mode=mode)
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
         except Exception as exc:
             return self.send_error_json(500, "定位关键词失败: %s" % exc)
 
@@ -1454,7 +1557,7 @@ class Handler(BaseHTTPRequestHandler):
             with _edit_lock:
                 result = pdfredact.apply_redactions(real, out_path, regions)
         except ValueError as exc:
-            return self.send_error_json(400, f"涂黑失败: {exc}")
+            return self.send_engine_error(exc, "涂黑失败: ")
         except Exception as exc:
             return self.send_engine_error(exc, "涂黑失败: ")
 
@@ -1533,7 +1636,7 @@ class Handler(BaseHTTPRequestHandler):
                     real, EXPORT_DIR, per, base_name=stem_src,
                     password=str(payload.get("password") or "").encode("utf-8"))
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
         except Exception as exc:
             return self.send_engine_error(exc, "拆分失败: ")
         self.send_json({"ok": True, "files": made, "count": len(made)})
@@ -1566,7 +1669,7 @@ class Handler(BaseHTTPRequestHandler):
                     reals, out_path,
                     password=str(payload.get("password") or "").encode("utf-8"))
         except ValueError as exc:
-            return self.send_error_json(400, str(exc))
+            return self.send_input_error(exc)
         except Exception as exc:
             return self.send_engine_error(exc, "合并失败: ")
         self.send_json({"ok": True, "path": out_path,
@@ -1653,7 +1756,7 @@ class Handler(BaseHTTPRequestHandler):
                     out_name = os.path.basename(out_path)
                     result["pages"] = len(picked)
             except ValueError as exc:
-                return self.send_error_json(400, str(exc))
+                return self.send_input_error(exc)
             except Exception as exc:
                 return self.send_engine_error(exc, "按范围导出失败: ")
 
@@ -1965,7 +2068,7 @@ class Handler(BaseHTTPRequestHandler):
             with _edit_lock:
                 result = pdfredact.apply_redactions(real, out_path, regions)
         except ValueError as exc:
-            return self.send_error_json(400, f"涂黑失败: {exc}")
+            return self.send_engine_error(exc, "涂黑失败: ")
         except Exception as exc:
             return self.send_engine_error(exc, "涂黑失败: ")
 
@@ -2089,6 +2192,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
+        self._sec_headers_done = False
+        if not self.check_trusted_request(parsed.path, "GET"):
+            return
         if parsed.path == "/api/file":
             query = urllib.parse.parse_qs(parsed.query)
             return self.api_file(query, head_only=True)
@@ -2180,6 +2286,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(404, "文件不存在")
         if not is_allowed(real, query, self):
             return self.send_error_json(403, "该文件不在允许的扫描目录内")
+        if not real.lower().endswith(".pdf"):
+            return self.send_error_json(403, "只允许读取 PDF 文件")
 
         ctype = mimetypes.guess_type(real)[0] or "application/pdf"
         range_header = self.headers.get("Range")
@@ -2605,6 +2713,8 @@ def main():
         httpd = Server((args.host, 0), Handler)
 
     PORT = httpd.server_address[1]
+    if args.host and args.host not in ("0.0.0.0", "::", ""):
+        local_host_names().add(args.host.strip("[]").lower())
 
     url = f"http://{args.host}:{PORT}/"
     print("=" * 58)

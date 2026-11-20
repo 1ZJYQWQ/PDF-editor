@@ -3163,7 +3163,9 @@ async function pickServerDir() {
   if (!dir) return;
   showLoading(t('正在扫描目录…'));
   try {
-    const r = await fetch('/api/files?dir=' + encodeURIComponent(dir));
+
+    const r = await fetch('/api/files?dir=' + encodeURIComponent(dir),
+                          { headers: { 'X-PDFViewer-Client': '1' } });
     const data = await r.json();
     hideLoading();
     if (!data.ok) { toast(t('扫描失败：') + errText(data)); return; }

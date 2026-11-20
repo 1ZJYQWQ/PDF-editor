@@ -5,6 +5,15 @@ PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 MAX_PIXELS = 8 * 1000 * 1000
 
+MAX_INFLATE = 64 * 1024 * 1024
+
+def _inflate(raw, limit=MAX_INFLATE):
+    d = zlib.decompressobj()
+    out = d.decompress(raw, limit + 1)
+    if len(out) > limit or (not d.eof and len(out + d.flush()) > limit):
+        raise ValueError("PNG 数据解压后超过 %d MB，已中止" % (limit // 1048576))
+    return out if d.eof else out
+
 _CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 
 def _png_chunks(data):
@@ -248,7 +257,7 @@ def decode(data):
         }
 
     try:
-        raw = zlib.decompress(packed)
+        raw = _inflate(packed)
     except zlib.error as exc:
         raise ValueError("PNG 数据解压失败：%s" % exc)
 

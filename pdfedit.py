@@ -185,6 +185,23 @@ def _is_int(b):
 def _to_number(b):
     return int(b) if _is_int(b) else float(b)
 
+MAX_INFLATE = 256 * 1024 * 1024
+
+def inflate_stream(raw, limit=MAX_INFLATE):
+    d = zlib.decompressobj()
+    out = d.decompress(raw, limit + 1)
+    if len(out) > limit:
+        raise ValueError(
+            "这段内容流解压后超过 %d MB，已中止（文件可能异常）"
+            % (limit // 1048576))
+    if not d.eof:
+        out += d.flush()
+        if len(out) > limit:
+            raise ValueError(
+                "这段内容流解压后超过 %d MB，已中止（文件可能异常）"
+                % (limit // 1048576))
+    return out
+
 class Name(str):
     __slots__ = ()
 
@@ -509,12 +526,11 @@ class PDFDocument:
             if PDFDocument._png_parms(value):
                 return raw
             try:
-                return zlib.decompress(raw)
+                return inflate_stream(raw)
+            except ValueError:
+                raise
             except zlib.error:
-                try:
-                    return zlib.decompressobj().decompress(raw)
-                except zlib.error:
-                    return raw
+                return raw
         return raw
 
     def _find_root(self, data):

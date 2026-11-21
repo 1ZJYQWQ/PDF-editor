@@ -403,6 +403,15 @@ async function handlePassword(path, name, docId) {
   toast(t('多次口令错误，已放弃打开'));
 }
 
+async function unlockWithPassword(path, pwd) {
+  try {
+    const r = await api('/api/unlock', { method: 'POST', body: { path, password: pwd } });
+    return !!(r && r.ok);
+  } catch (e) {
+    return false;
+  }
+}
+
 async function stageLocalPdf(buf) {
   try {
     const r = await fetch('/api/upload', {
@@ -2969,13 +2978,31 @@ async function mergeSelected() {
   const go = $('mergeGo');
   if (go) { go.disabled = true; go.classList.add('busy'); }
   try {
-    const r = await fetch('/api/merge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: mergeSel }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(errText(d) || t('合并失败 ({status})', { status: r.status }));
+    let r = null;
+    let d = null;
+    for (let tries = 0; ; tries++) {
+      r = await fetch('/api/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: mergeSel }),
+      });
+      d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) break;
+
+      if (d.needPassword && tries < 3) {
+        const target = d.path || mergeSel[0];
+        const nm = String(target).split(/[\\/]/).pop();
+        const pwd = await askPassword(
+          t('「{name}」有口令保护，请输入密码', { name: nm }));
+        if (pwd === null) return;
+        if (!pwd) { toast(t('口令不能为空'), 1600); continue; }
+        if (!(await unlockWithPassword(target, pwd))) {
+          toast(t('口令不正确，请重试'), 2000);
+        }
+        continue;
+      }
+      throw new Error(errText(d) || t('合并失败 ({status})', { status: r.status }));
+    }
     toast(t('已合并 {pages} 页：{name}', { pages: d.pages, name: d.name }), 5000);
 
     window.location.href = '/api/file?download=1&path=' +
@@ -3980,6 +4007,7 @@ async function init() {
     goToPage: (p) => goToPage(p, true),
     flashBoxes,
     applyStagePreview,
+    askPassword,
   });
   bindToolbar();
   bindShortcutsUI();

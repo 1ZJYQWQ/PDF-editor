@@ -13,7 +13,9 @@ def open_doc(path, password=b""):
     with open(path, "rb") as fp:
         doc = PDFDocument.load(fp.read(), password or b"")
     if doc.encrypted and not doc.password_ok:
-        raise NeedPassword("这份文档有口令保护，请先输入口令再操作")
+        exc = NeedPassword("这份文档有口令保护，请先输入口令再操作")
+        exc.path = path
+        raise exc
     return doc
 
 def doc_security(doc):

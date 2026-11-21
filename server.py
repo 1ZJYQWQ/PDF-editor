@@ -756,9 +756,11 @@ class Handler(BaseHTTPRequestHandler):
     def send_engine_error(self, exc, prefix=""):
         msg = ("%s%s" % (prefix, exc)) if prefix else str(exc)
         if isinstance(exc, pdfedit.NeedPassword):
-            return self.send_json({"ok": False, "error": msg, "code": msg,
-                                   "needPassword": True, "encrypted": True},
-                                  status=400)
+            body = {"ok": False, "error": msg, "code": msg,
+                    "needPassword": True, "encrypted": True}
+            if getattr(exc, "path", ""):
+                body["path"] = exc.path
+            return self.send_json(body, status=400)
         return self.send_error_json(500, msg)
 
     def send_input_error(self, exc, prefix=""):

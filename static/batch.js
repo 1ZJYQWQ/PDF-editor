@@ -6,6 +6,7 @@ let hooks = {
   goToPage: () => {},
   flashBoxes: () => {},
   applyStagePreview: null,
+  askPassword: null,
 };
 
 export function initBatchUI(h) {
@@ -406,13 +407,36 @@ async function runSplit() {
   btn.disabled = true;
   btn.textContent = t('拆分中…');
   try {
-    const r = await fetch('/api/split', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: src, per, name: state.fileName }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(errText(d) || t('拆分失败 ({status})', { status: r.status }));
+    let r = null;
+    let d = null;
+    for (let tries = 0; ; tries++) {
+      r = await fetch('/api/split', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: src, per, name: state.fileName }),
+      });
+      d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) break;
+
+      if (d.needPassword && tries < 3) {
+        if (typeof hooks.askPassword !== 'function') {
+          throw new Error(errText(d) || t('这份文档有口令保护'));
+        }
+        const pwd = await hooks.askPassword(
+          t('「{name}」有口令保护，请输入密码', { name: state.fileName || '' }));
+        if (pwd === null) { btn.textContent = t('拆分整篇'); return; }
+        if (!pwd) { toast(t('口令不能为空'), 1600); continue; }
+        const u = await fetch('/api/unlock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: src, password: pwd }),
+        });
+        const ud = await u.json().catch(() => ({}));
+        if (!u.ok || !ud.ok) toast(t('口令不正确，请重试'), 2000);
+        continue;
+      }
+      throw new Error(errText(d) || t('拆分失败 ({status})', { status: r.status }));
+    }
 
     const pop = $('rangePop');
     let box = pop.querySelector('.split-list');

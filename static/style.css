@@ -992,8 +992,7 @@ body.edit-mode .toast {
 @media (max-width: 760px) {
   .sidebar { position: absolute; top: var(--toolbar-h); bottom: 0; left: 0; z-index: 25; box-shadow: var(--shadow-lg); }
   .sidebar.collapsed { margin-left: 0; transform: translateX(-100%); }
-  .search-input { width: 120px; }
-  .search-input:focus { width: 150px; }
+
   .btn .lbl { display: none; }
 }
 
@@ -2461,8 +2460,24 @@ body.edit-mode .viewer { padding-right: var(--drawer-w, 300px); }
 
 @media (max-width: 1360px) {
   .btn .lbl { display: none; }
-  .search-input { width: 132px; }
-  .search-input:focus { width: 168px; }
+
+  .search-input {
+    width: 34px;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .search-input::placeholder { color: transparent; }
+  .search-input:focus {
+    width: 190px;
+    padding: 0 24px 0 26px;
+    cursor: text;
+  }
+  .search-input:focus::placeholder { color: var(--text-muted); }
+
+  .search-count:empty { display: none; }
+
+  .search-wrap:not(:focus-within) .search-icon { left: 10px; }
 }
 
 .lang-btn { min-width: 34px; justify-content: center; }

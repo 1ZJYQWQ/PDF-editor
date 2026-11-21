@@ -3988,6 +3988,20 @@ async function restoreOpenTabs() {
   if (back) tabs.activate(back.id);
 }
 
+function placeSearchBox() {
+  const wrap = $('searchWrap');
+  const parts = [wrap, $('searchCount'), $('searchNav'), $('searchSep')];
+  if (!wrap || parts.some(p => !p)) return;
+  const fixed = document.querySelector('.tb-fixed');
+  const scroll = document.querySelector('.tb-scroll');
+  if (!fixed || !scroll) return;
+  const narrow = window.matchMedia('(max-width: 1360px)').matches;
+  const target = narrow ? fixed : scroll;
+  if (wrap.parentElement === target) return;
+  if (narrow) target.prepend(...parts);
+  else target.append(...parts);
+}
+
 async function init() {
 
   await initI18n();
@@ -4014,6 +4028,9 @@ async function init() {
   bindToolbar();
   bindShortcutsUI();
   window.addEventListener('resize', onResize);
+
+  placeSearchBox();
+  window.matchMedia('(max-width: 1360px)').addEventListener('change', placeSearchBox);
 
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;

@@ -31,7 +31,7 @@ def char_of(ip):
         fi = ip.fonts.get(g.font_alias)
         if not fi:
             return ""
-        return fi.to_unicode.get(g.code, "")
+        return fi.text_of([g.code])
     return f
 
 def _rev_map(fi):
@@ -41,6 +41,14 @@ def _rev_map(fi):
         for code, ch in (fi.to_unicode or {}).items():
             if ch and ch not in rev:
                 rev[ch] = code
+        if not rev and getattr(fi, "code_bytes", 1) == 1:
+            for code in range(32, 256):
+                try:
+                    ch = bytes([code]).decode("cp1252")
+                except UnicodeDecodeError:
+                    continue
+                if ch and ch not in rev:
+                    rev[ch] = code
         fi._rev = rev
     return rev
 

@@ -3163,7 +3163,9 @@ function paintFileList() {
       const f = serverFiles[parseInt(el.dataset.i, 10)];
 
       if (e.target.closest('.fi-check')) {
-        e.preventDefault();
+
+        const onInput = e.target.matches('input[type="checkbox"]');
+        if (!onInput) e.preventDefault();
         const at = mergeSel.indexOf(f.path);
         if (at >= 0) mergeSel.splice(at, 1);
         else mergeSel.push(f.path);

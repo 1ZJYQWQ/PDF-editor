@@ -278,10 +278,10 @@ class PDFDocument:
             return None
         if key in self._pending:
             dic, raw = val
-            keep_packed = PDFDocument._png_parms(dic) is not None
-            data = self._apply_filter(dic, raw, self._decryptor, ref.num, ref.gen)
+            data, decoded = self._apply_filter(
+                dic, raw, self._decryptor, ref.num, ref.gen)
             dic = dict(dic)
-            if not keep_packed:
+            if decoded:
                 dic.pop("Filter", None)
                 dic.pop("DecodeParms", None)
             dic["Length"] = len(data)
@@ -457,11 +457,10 @@ class PDFDocument:
                         self.max_obj = max(self.max_obj, num)
                         continue
 
-                    keep_packed = PDFDocument._png_parms(value) is not None
-                    sdata = self._apply_filter(value, raw, self._decryptor,
-                                               num, gen)
+                    sdata, decoded = self._apply_filter(
+                        value, raw, self._decryptor, num, gen)
                     value = dict(value)
-                    if not keep_packed:
+                    if decoded:
                         value.pop("Filter", None)
                         value.pop("DecodeParms", None)
                     value["Length"] = len(sdata)
@@ -524,14 +523,14 @@ class PDFDocument:
 
         if fname in ("FlateDecode", "Fl"):
             if PDFDocument._png_parms(value):
-                return raw
+                return raw, False
             try:
-                return inflate_stream(raw)
+                return inflate_stream(raw), True
             except ValueError:
                 raise
             except zlib.error:
-                return raw
-        return raw
+                return raw, False
+        return raw, False
 
     def _find_root(self, data):
         idx = data.rfind(b"trailer")
